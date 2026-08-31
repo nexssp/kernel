@@ -15,6 +15,12 @@ import (
 
 var ErrTypeAssertion = errors.New("critical type assertion failure")
 
+type execStateKey struct{}
+
+type execState struct {
+	fromCache bool
+}
+
 type BuiltAction[Req, Res any] struct {
 	meta *Meta
 	exec Fn[Req, Res]
@@ -41,16 +47,22 @@ func (a *BuiltAction[Req, Res]) GetMeta() *Meta {
 	cp.RequiredFeatures = slices.Clone(a.meta.RequiredFeatures)
 	return &cp
 }
+
 func (a *BuiltAction[Req, Res]) GetBindings() []Binding {
 	return append([]Binding(nil), a.bindings...)
 }
+
 func (a *BuiltAction[Req, Res]) GetAnyHooks() []AnyHook {
 	return append([]AnyHook(nil), a.anyHooksSnapshot()...)
 }
+
 func (a *BuiltAction[Req, Res]) Describe() *Meta {
 	return a.GetMeta()
 }
-func (a *BuiltAction[Req, Res]) History() *History[Req, Res] { return a.history }
+
+func (a *BuiltAction[Req, Res]) History() *History[Req, Res] {
+	return a.history
+}
 
 func (a *BuiltAction[Req, Res]) anyHooksSnapshot() []AnyHook {
 	set := a.anyHooks.Load()
@@ -60,10 +72,33 @@ func (a *BuiltAction[Req, Res]) anyHooksSnapshot() []AnyHook {
 	return set.hooks
 }
 
+func hasOnExecutedHook[Req, Res any](hooks []Hook[Req, Res], anyHooks []AnyHook) bool {
+	for i := range hooks {
+		if hooks[i].OnExecuted != nil {
+			return true
+		}
+	}
+	for i := range anyHooks {
+		if anyHooks[i].OnExecuted != nil {
+			return true
+		}
+	}
+	return false
+}
+
 func (a *BuiltAction[Req, Res]) Do(ctx context.Context, req Req) (res Res, err error) {
 	var anyHooksRan, typedHooksRan int
-	finalCtx := ctx
+
 	anyHooks := a.anyHooksSnapshot()
+
+	needExecState := hasOnExecutedHook(a.hooks, anyHooks)
+
+	var state *execState
+	finalCtx := ctx
+	if needExecState {
+		state = &execState{}
+		finalCtx = context.WithValue(ctx, execStateKey{}, state)
+	}
 
 	defer func() {
 		if r := recover(); r != nil {
@@ -80,62 +115,66 @@ func (a *BuiltAction[Req, Res]) Do(ctx context.Context, req Req) (res Res, err e
 
 		for i := typedHooksRan - 1; i >= 0; i-- {
 			h := a.hooks[i]
+
+			switch {
+			case err != nil && errors.Is(err, context.Canceled):
+				if h.OnCancel != nil {
+					h := h
+					callHook(a.meta, "OnCancel", func() {
+						h.OnCancel(finalCtx, req, a.meta)
+					})
+				}
+			case err != nil:
+				if h.OnError != nil {
+					h := h
+					callHook(a.meta, "OnError", func() {
+						h.OnError(finalCtx, req, err, a.meta)
+					})
+				}
+			case h.OnExecuted != nil && state != nil && !state.fromCache:
+				h := h
+				callHook(a.meta, "OnExecuted", func() {
+					h.OnExecuted(finalCtx, req, res, nil, a.meta)
+				})
+			}
+
 			if h.After != nil {
 				h := h
 				callHook(a.meta, "After", func() {
 					h.After(finalCtx, req, res, err, a.meta)
 				})
 			}
-			if err != nil {
-				if errors.Is(err, context.Canceled) {
-					if h.OnCancel != nil {
-						h := h
-						callHook(a.meta, "OnCancel", func() {
-							h.OnCancel(finalCtx, req, a.meta)
-						})
-					}
-				} else {
-					if h.OnError != nil {
-						h := h
-						callHook(a.meta, "OnError", func() {
-							h.OnError(finalCtx, req, err, a.meta)
-						})
-					}
-				}
-			} else if h.OnExecuted != nil {
-				h := h
-				callHook(a.meta, "OnExecuted", func() {
-					h.OnExecuted(finalCtx, req, res, nil, a.meta)
-				})
-			}
 		}
 
 		for i := anyHooksRan - 1; i >= 0; i-- {
 			h := anyHooks[i]
-			if errors.Is(err, context.Canceled) {
+
+			switch {
+			case errors.Is(err, context.Canceled):
 				if h.OnCancel != nil {
 					h := h
 					callHook(a.meta, "OnCancel", func() {
 						h.OnCancel(finalCtx, any(req), a.meta)
 					})
 				}
-				continue
+			case err != nil:
+				if h.OnError != nil {
+					h := h
+					callHook(a.meta, "OnError", func() {
+						h.OnError(finalCtx, any(req), err, a.meta)
+					})
+				}
+			case h.OnExecuted != nil && state != nil && !state.fromCache:
+				h := h
+				callHook(a.meta, "OnExecuted", func() {
+					h.OnExecuted(finalCtx, any(req), any(res), nil, a.meta)
+				})
 			}
+
 			if h.After != nil {
 				h := h
 				callHook(a.meta, "After", func() {
 					h.After(finalCtx, any(req), any(res), err, a.meta)
-				})
-			}
-			if err != nil && h.OnError != nil {
-				h := h
-				callHook(a.meta, "OnError", func() {
-					h.OnError(finalCtx, any(req), err, a.meta)
-				})
-			} else if err == nil && h.OnExecuted != nil {
-				h := h
-				callHook(a.meta, "OnExecuted", func() {
-					h.OnExecuted(finalCtx, any(req), any(res), nil, a.meta)
 				})
 			}
 		}
@@ -175,6 +214,10 @@ func (a *BuiltAction[Req, Res]) Do(ctx context.Context, req Req) (res Res, err e
 }
 
 func (a *BuiltAction[Req, Res]) OnCacheHit(ctx context.Context, req Req, res Res) {
+	if s, ok := ctx.Value(execStateKey{}).(*execState); ok && s != nil {
+		s.fromCache = true
+	}
+
 	for _, h := range a.hooks {
 		if h.OnCacheHit != nil {
 			h.OnCacheHit(ctx, req, res, a.meta)
