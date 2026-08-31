@@ -2,7 +2,6 @@ package action
 
 import (
 	"context"
-	"sync"
 	"time"
 )
 
@@ -44,7 +43,15 @@ func (c IdempotencyConfig) Header() string {
 	return "Idempotency-Key"
 }
 
-// ── Store ─────────────────────────────────────────────────────────────────────
+// EffectiveLeaseTTL returns the configured lease or the documented default.
+func (c IdempotencyConfig) EffectiveLeaseTTL() time.Duration {
+	if c.LeaseTTL > 0 {
+		return c.LeaseTTL
+	}
+	return DefaultIdempotencyLeaseTTL
+}
+
+// ── Store Contracts ───────────────────────────────────────────────────────────
 
 // IdempotencyEntry is the captured response for a completed idempotent request.
 type IdempotencyEntry struct {
@@ -96,101 +103,4 @@ type IdempotencyCoordinator interface {
 	Claim(ctx context.Context, key, requestHash string, leaseTTL time.Duration) (IdempotencyClaim, error)
 	Complete(ctx context.Context, key, token string, entry IdempotencyEntry, ttl time.Duration) error
 	Release(ctx context.Context, key, token string) error
-}
-
-// EffectiveLeaseTTL returns the configured lease or the documented default.
-func (c IdempotencyConfig) EffectiveLeaseTTL() time.Duration {
-	if c.LeaseTTL > 0 {
-		return c.LeaseTTL
-	}
-	return DefaultIdempotencyLeaseTTL
-}
-
-// ── In-memory default ─────────────────────────────────────────────────────────
-
-type memEntry struct {
-	IdempotencyEntry
-	ttl time.Duration
-}
-
-type MemoryIdempotencyStore struct {
-	mu      sync.RWMutex
-	entries map[string]memEntry
-	defTTL  time.Duration
-	stopCh  chan struct{}
-
-	closeOnce sync.Once
-}
-
-// NewMemoryIdempotencyStore creates a store with background TTL eviction.
-// defTTL 0 → 24 h.
-func NewMemoryIdempotencyStore(defTTL time.Duration) *MemoryIdempotencyStore {
-	if defTTL == 0 {
-		defTTL = DefaultIdempotencyTTL
-	}
-	s := &MemoryIdempotencyStore{
-		entries: make(map[string]memEntry),
-		defTTL:  defTTL,
-		stopCh:  make(chan struct{}), // new field
-	}
-	go s.evict()
-	return s
-}
-
-// Close stops the eviction goroutine. Safe to call multiple times.
-func (s *MemoryIdempotencyStore) Close() {
-	s.closeOnce.Do(func() {
-		close(s.stopCh)
-	})
-}
-
-func (s *MemoryIdempotencyStore) Get(_ context.Context, key string) (IdempotencyEntry, bool) {
-	s.mu.RLock()
-	e, ok := s.entries[key]
-	s.mu.RUnlock()
-	if !ok {
-		return IdempotencyEntry{}, false
-	}
-	ttl := e.ttl
-	if ttl == 0 {
-		ttl = s.defTTL
-	}
-	if time.Since(e.StoredAt) > ttl {
-		// Lazy eviction to prevent unbounded map growth between janitor ticks
-		s.mu.Lock()
-		delete(s.entries, key)
-		s.mu.Unlock()
-		return IdempotencyEntry{}, false
-	}
-	return e.IdempotencyEntry, true
-}
-
-func (s *MemoryIdempotencyStore) Set(_ context.Context, key string, entry IdempotencyEntry, ttl time.Duration) {
-	s.mu.Lock()
-	s.entries[key] = memEntry{IdempotencyEntry: entry, ttl: ttl}
-	s.mu.Unlock()
-}
-
-func (s *MemoryIdempotencyStore) evict() {
-	t := time.NewTicker(time.Hour)
-	defer t.Stop()
-	for {
-		select {
-		case <-s.stopCh:
-			return // clean exit
-		case <-t.C:
-			now := time.Now()
-			s.mu.Lock()
-			for k, e := range s.entries {
-				ttl := e.ttl
-				if ttl == 0 {
-					ttl = s.defTTL
-				}
-				if now.Sub(e.StoredAt) > ttl {
-					delete(s.entries, k)
-				}
-			}
-			s.mu.Unlock()
-		}
-	}
 }
