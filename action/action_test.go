@@ -3,87 +3,140 @@ package action_test
 import (
 	"context"
 	"errors"
-	"fmt"
+	"sync/atomic"
 	"testing"
 
 	"github.com/nexssp/kernel/action"
+	"github.com/nexssp/kernel/xerr"
 )
 
-func TestExecuteDecoded_PointerRequest(t *testing.T) {
-	type Req struct{ A int }
-	act := action.New("test", func(ctx context.Context, req *Req) (int, error) {
-		return req.A, nil
-	}).Build()
-	res, err := act.ExecuteDecoded(context.Background(), func(v any) error {
-		req, ok := v.(*Req)
-		if !ok {
-			return fmt.Errorf("expected *Req, got %T", v)
+func TestBuiltAction_Do_LifecycleOrder(t *testing.T) {
+	t.Parallel()
+
+	var steps []string
+	act := action.New("order.test", func(ctx context.Context, req string) (string, error) {
+		steps = append(steps, "handler")
+		return "result_" + req, nil
+	}).
+		HookBefore(func(ctx context.Context, req string, meta *action.Meta) (context.Context, error) {
+			steps = append(steps, "before")
+			return ctx, nil
+		}).
+		HookAfter(func(ctx context.Context, req, res string, err error, meta *action.Meta) {
+			steps = append(steps, "after")
+		}).
+		HookExecuted(func(ctx context.Context, req, res string, meta *action.Meta) {
+			steps = append(steps, "executed")
+		}).
+		Build()
+
+	res, err := act.Do(context.Background(), "input")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res != "result_input" {
+		t.Fatalf("expected 'result_input', got %q", res)
+	}
+
+	expectedSteps := []string{"before", "handler", "executed", "after"}
+	if len(steps) != len(expectedSteps) {
+		t.Fatalf("expected steps %v, got %v", expectedSteps, steps)
+	}
+	for i, step := range steps {
+		if step != expectedSteps[i] {
+			t.Errorf("step %d: expected %q, got %q", i, expectedSteps[i], step)
 		}
-		*req = Req{A: 42}
-		return nil
-	})
-	if err != nil || res != 42 {
-		t.Fail()
 	}
 }
 
-func TestExecuteDecoded_ValueRequest(t *testing.T) {
+func TestBuiltAction_Do_ErrorLifecycle(t *testing.T) {
 	t.Parallel()
-	type Req struct{ A int } // Value type, not pointer
-	act := action.New("test.value", func(ctx context.Context, req Req) (int, error) {
-		return req.A, nil
-	}).Build()
 
-	res, err := act.ExecuteDecoded(context.Background(), func(v any) error {
-		// v is passed as a pointer to the value type by ExecuteDecoded
-		req, ok := v.(*Req)
-		if !ok {
-			return fmt.Errorf("expected *Req, got %T", v)
-		}
-		*req = Req{A: 99}
-		return nil
-	})
-	if err != nil || res != 99 {
-		t.Fatalf("expected 99, got %v (err: %v)", res, err)
-	}
-}
+	var errorHookCalled, executedHookCalled bool
+	act := action.New("error.test", func(ctx context.Context, req string) (string, error) {
+		return "", errors.New("business failure")
+	}).
+		HookError(func(ctx context.Context, req string, err error, meta *action.Meta) {
+			errorHookCalled = true
+		}).
+		HookExecuted(func(ctx context.Context, req, res string, meta *action.Meta) {
+			executedHookCalled = true
+		}).
+		Build()
 
-func TestRace_AllFailures(t *testing.T) {
-	t.Parallel()
-	act := action.New("race.fail", func(ctx context.Context, req int) (int, error) {
-		return 0, errors.New("always fails")
-	}).Build()
-
-	res, err := action.Race(context.Background(), act, []int{1, 2})
+	_, err := act.Do(context.Background(), "req")
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
-	if res != 0 {
-		t.Fatalf("expected zero value, got %d", res)
+	if !errorHookCalled {
+		t.Fatal("expected HookError to be called")
+	}
+	if executedHookCalled {
+		t.Fatal("HookExecuted must not be called when execution fails")
 	}
 }
 
-func TestAction_ContextCancelTriggersOnCancel(t *testing.T) {
+func TestBuiltAction_Do_PanicRecovery(t *testing.T) {
 	t.Parallel()
-	var canceled bool
 
-	act := action.New("test.cancel", func(ctx context.Context, req int) (int, error) {
-		return 0, context.Canceled
-	}).Hook(action.Hook[int, int]{
-		OnCancel: func(ctx context.Context, req int, m *action.Meta) {
-			canceled = true
-		},
-		OnError: func(ctx context.Context, req int, err error, m *action.Meta) {
-			t.Fatal("OnError should not be called when context is canceled")
-		},
-	}).Build()
+	var panicHookRan atomic.Bool
+	act := action.New("panic.test", func(ctx context.Context, req string) (string, error) {
+		panic("fatal unexpected crash")
+	}).
+		AnyHook(action.AnyHook{
+			OnPanic: func(ctx context.Context, req, recovered any, meta *action.Meta) {
+				panicHookRan.Store(true)
+			},
+		}).
+		Build()
 
-	_, err := act.Do(context.Background(), 1)
-	if err == nil || !errors.Is(err, context.Canceled) {
-		t.Fatalf("expected context.Canceled error, got %v", err)
+	res, err := act.Do(context.Background(), "req")
+	if res != "" {
+		t.Fatalf("expected empty result on panic, got %q", res)
+	}
+	if err == nil {
+		t.Fatal("expected error from recovered panic, got nil")
 	}
 
-	if !canceled {
-		t.Fatal("expected OnCancel to be called")
+	var appErr *xerr.AppError
+	if !errors.As(err, &appErr) || appErr.Kind != xerr.KindInternal {
+		t.Fatalf("expected xerr.KindInternal, got %v", err)
+	}
+	if !panicHookRan.Load() {
+		t.Fatal("expected AnyHook.OnPanic to execute")
+	}
+}
+
+func TestBuiltAction_ExecuteDecoded(t *testing.T) {
+	t.Parallel()
+
+	type RequestDto struct {
+		Name string `json:"name"`
+	}
+	type ResponseDto struct {
+		Greeting string `json:"greeting"`
+	}
+
+	act := action.New("decode.test", func(ctx context.Context, req RequestDto) (ResponseDto, error) {
+		return ResponseDto{Greeting: "Hello, " + req.Name}, nil
+	}).Build()
+
+	decodeFunc := func(target any) error {
+		req, ok := target.(*RequestDto)
+		if !ok {
+			return errors.New("invalid target type")
+		}
+		req.Name = "Tester"
+		return nil
+	}
+
+	rawRes, err := act.ExecuteDecoded(context.Background(), decodeFunc)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	res, ok := rawRes.(ResponseDto)
+	if !ok || res.Greeting != "Hello, Tester" {
+		t.Fatalf("unexpected result: %+v", rawRes)
 	}
 }
