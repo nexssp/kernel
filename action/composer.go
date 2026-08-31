@@ -161,10 +161,14 @@ func Chain[T any](
 	name string,
 	builders ...*Builder[T, T],
 ) *Builder[T, T] {
+	acts := make([]*BuiltAction[T, T], len(builders))
+	for i, b := range builders {
+		acts[i] = b.Build()
+	}
+
 	return New(name, func(ctx context.Context, req T) (T, error) {
 		cur := req
-		for _, b := range builders {
-			act := b.Build()
+		for _, act := range acts {
 			var err error
 			cur, err = act.Do(ctx, cur)
 			if err != nil {
