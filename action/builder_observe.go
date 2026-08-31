@@ -104,3 +104,20 @@ func (b *Builder[Req, Res]) Instrument(
 }
 
 type instrumentStartKey struct{}
+
+func SlowLogMiddleware[Req, Res any](threshold time.Duration, actionName string) Middleware[Req, Res] {
+	return func(next Fn[Req, Res]) Fn[Req, Res] {
+		return func(ctx context.Context, req Req) (Res, error) {
+			start := time.Now()
+			res, err := next(ctx, req)
+			if dur := time.Since(start); dur > threshold {
+				slog.WarnContext(ctx, "action_slow_execution",
+					"action", actionName,
+					"duration", dur,
+					"threshold", threshold,
+				)
+			}
+			return res, err
+		}
+	}
+}
