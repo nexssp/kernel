@@ -192,5 +192,8 @@ func (b *Builder[Req, Res]) Build() *BuiltAction[Req, Res] {
 
 func (b *Builder[Req, Res]) LogSlowWhen(d time.Duration) *Builder[Req, Res] {
 	b.meta.LogSlowThreshold = d
+	if d > 0 {
+		return b.Use(SlowLogMiddleware[Req, Res](d, b.meta.Name))
+	}
 	return b
 }
