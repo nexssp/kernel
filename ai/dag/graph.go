@@ -344,3 +344,10 @@ func (d *DAG) AsAction() *action.Builder[*State, *State] {
 		return d.Execute(ctx, state)
 	}).Tag("graph", "orchestration")
 }
+
+func (d *DAG) Name() string {
+	if d == nil {
+		return ""
+	}
+	return d.name
+}
