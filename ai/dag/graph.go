@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"slices"
 	"sort"
 	"sync"
 
@@ -142,6 +143,7 @@ type Edge struct {
 type DAG struct {
 	name   string
 	nodes  map[string]Node
+	edges  []Edge
 	layers [][]Node
 }
 
@@ -259,6 +261,7 @@ func (b *Builder) Compile() (*DAG, error) {
 	return &DAG{
 		name:   b.name,
 		nodes:  b.nodes,
+		edges:  slices.Clone(b.edges),
 		layers: layers,
 	}, nil
 }
