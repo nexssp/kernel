@@ -18,6 +18,7 @@ type RateLimiter interface {
 type ResilienceConfig struct {
 	MaxRetries    int
 	Backoff       func(attempt int) time.Duration
+	Predicate     RetryPredicate
 	Timeout       time.Duration
 	MaxConcurrent int32
 	Adaptive      *AdaptiveConfig
@@ -29,7 +30,12 @@ func (b *Builder[Req, Res]) Resilient(cfg ResilienceConfig) *Builder[Req, Res] {
 		if backoff == nil {
 			backoff = ExponentialJitter(200*time.Millisecond, 5*time.Second)
 		}
-		b = b.Retry(cfg.MaxRetries, backoff)
+
+		if cfg.Predicate != nil {
+			b = b.RetryIf(cfg.MaxRetries, backoff, cfg.Predicate)
+		} else {
+			b = b.Retry(cfg.MaxRetries, backoff)
+		}
 	}
 
 	if cfg.Timeout > 0 {

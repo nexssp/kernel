@@ -40,7 +40,7 @@ func TestOnRetry_HookFires(t *testing.T) {
 	}
 }
 
-// transientError satisfies the TransientChecker interface
+// transientError implements IsTransient; xerr.IsTransient relies on this dynamic interface.
 type transientError struct{}
 
 func (t *transientError) Error() string     { return "transient" }

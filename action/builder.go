@@ -130,11 +130,6 @@ func (b *Builder[Req, Res]) UseWithDispatcher(m DispatcherMiddleware[Req, Res]) 
 
 // ── Built-in middleware shorthands ────────────────────────────────────────────
 
-func (b *Builder[Req, Res]) Retry(maxRetry int, backoff func(attempt int) time.Duration) *Builder[Req, Res] {
-	b.meta.RetryMax = maxRetry
-	return b.UseWithDispatcher(RetryMiddleware[Req, Res](maxRetry, backoff))
-}
-
 func (b *Builder[Req, Res]) Timeout(d time.Duration) *Builder[Req, Res] {
 	b.meta.Timeout = d
 	return b.Use(TimeoutMiddleware[Req, Res](d))
