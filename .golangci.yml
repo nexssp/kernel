@@ -8,6 +8,9 @@ linters:
     - gocritic
     - prealloc
     - revive
+    - gosec
+    - noctx
+    - unconvert
   settings:
     gocritic:
       enabled-tags:
