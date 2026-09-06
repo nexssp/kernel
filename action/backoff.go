@@ -1,10 +1,21 @@
 package action
 
 import (
+	"crypto/rand"
+	"encoding/binary"
 	"math"
-	"math/rand/v2"
 	"time"
 )
+
+// secureJitterFloat returns a cryptographically secure random float in [0,1].
+func secureJitterFloat() float64 {
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return 0.5 // extremely unlikely, but prevents panic on error
+	}
+	val := binary.LittleEndian.Uint64(b[:])
+	return float64(val) / float64(math.MaxUint64)
+}
 
 // ExponentialBackoff returns a backoff that doubles each attempt, capped at max.
 // 100ms → 200ms → 400ms → 800ms … → max
@@ -29,7 +40,7 @@ func ExponentialJitter(base, maxDuration time.Duration) func(attempt int) time.D
 	return func(attempt int) time.Duration {
 		d := float64(exp(attempt))
 		// ±30% jitter
-		jitter := d * 0.3 * (rand.Float64()*2 - 1)
+		jitter := d * 0.3 * (secureJitterFloat()*2 - 1)
 		result := time.Duration(d + jitter)
 		if result < 0 {
 			return base
