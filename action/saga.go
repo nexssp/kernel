@@ -163,3 +163,12 @@ func executeSagaUndo[Req, Res any](ctx context.Context, step SagaStep[Req, Res],
 	}()
 	return step.Undo(ctx, req)
 }
+
+// AsAction converts the compiled Saga into a standard *BuiltAction, allowing
+// it to be routed over HTTP, CLI, MCP, or composed via action.Pipe / action.Parallel.
+func (s *BuiltSaga[Req, Res]) AsAction() *BuiltAction[Req, SagaResult[Res]] {
+	return New(s.name, s.Do).
+		Description(fmt.Sprintf("Distributed Saga workflow: %s (%d steps)", s.name, len(s.steps))).
+		Tag("saga", "workflow").
+		Build()
+}
