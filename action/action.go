@@ -1,7 +1,11 @@
+// Copyright 2018-2026 Marcin Polak. All rights reserved.
+// Use of this source code is governed by an Apache-2.0 license
+// that can be found in the LICENSE fil
 package action
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -343,4 +347,49 @@ func callHook(meta *Meta, hook string, fn func()) {
 		}
 	}()
 	fn()
+}
+
+// InvokeAny executes an action with an in-memory input payload.
+// If act implements Invoker (e.g. BuiltAction), it runs DoAny directly (0 allocs on matching types).
+// If act only implements Executable (e.g. custom transport action), it decodes safely.
+func InvokeAny(ctx context.Context, act any, req any) (any, error) {
+	if act == nil {
+		return nil, errors.New("action: cannot invoke nil action")
+	}
+
+	// ⚡ Fast path: action implements Invoker (BuiltAction)
+	if invoker, ok := act.(AnyDoer); ok {
+		return invoker.DoAny(ctx, req)
+	}
+
+	// Fallback for types implementing only Executable
+	if exec, ok := act.(Executable); ok {
+		return exec.ExecuteDecoded(ctx, func(target any) error {
+			if req == nil {
+				return nil
+			}
+			// Use fast Coerce instead of blind json.Marshal
+			return copyInto(target, req)
+		})
+	}
+
+	return nil, fmt.Errorf("action: type %T does not implement Invoker or Executable", act)
+}
+
+func copyInto(target any, source any) error {
+	rt := reflect.TypeOf(target)
+	if rt != nil && rt.Kind() == reflect.Pointer {
+		sourceVal := reflect.ValueOf(source)
+		targetVal := reflect.ValueOf(target)
+		if sourceVal.IsValid() && sourceVal.Type().AssignableTo(targetVal.Elem().Type()) {
+			targetVal.Elem().Set(sourceVal)
+			return nil
+		}
+	}
+	// Fallback serialization only when types completely differ
+	raw, err := json.Marshal(source)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(raw, target)
 }

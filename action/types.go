@@ -1,3 +1,6 @@
+// Copyright 2018-2026 Marcin Polak. All rights reserved.
+// Use of this source code is governed by an Apache-2.0 license
+// that can be found in the LICENSE file.
 package action
 
 import (
@@ -146,6 +149,11 @@ type Executable interface {
 	ExecuteDecoded(ctx context.Context, decode DecodeFunc) (any, error)
 }
 
+// AnyDoer is the single-method interface for in-memory untyped execution.
+type AnyDoer interface {
+	DoAny(ctx context.Context, req any) (any, error)
+}
+
 // Describable handles the COLD path — boot, discovery, routing, and CLI help.
 type Describable interface {
 	Describe() *Meta
@@ -154,6 +162,7 @@ type Describable interface {
 // AnyAction is the type-erased interface for the App and Transports to handle actions.
 type AnyAction interface {
 	Executable
+	AnyDoer
 	Describable
 	GetBindings() []Binding
 	GetAnyHooks() []AnyHook
