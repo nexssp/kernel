@@ -243,25 +243,32 @@ func (a *adaptiveState) IsOpen() bool {
 }
 
 func (a *adaptiveState) Observe(err error) {
-	if err != nil && !xerr.IsTransient(err) {
+	if err == nil {
 		a.mu.Lock()
-		defer a.mu.Unlock()
-		a.failures++
-		a.lastFailure = time.Now()
-		if a.failures >= a.cfg.FailureThreshold && !a.open {
-			a.open = true
-			a.timeout = time.Duration(float64(a.cfg.InitialTimeout) * (1 + float64(a.failures)/10))
-			slog.Warn("CircuitBreaker: OPEN", "action", a.name, "failures", a.failures)
+		if a.failures > 0 || a.open {
+			a.failures = 0
+			a.open = false
+			a.timeout = a.cfg.InitialTimeout
 		}
+		a.mu.Unlock()
 		return
 	}
-	a.mu.Lock()
-	if a.failures > 0 || a.open {
-		a.failures = 0
-		a.open = false
-		a.timeout = a.cfg.InitialTimeout
+
+	// Never trip on permanent client errors (4xx)
+	switch xerr.KindFrom(err) {
+	case xerr.KindBadRequest, xerr.KindUnauthorized, xerr.KindForbidden, xerr.KindNotFound, xerr.KindValidation:
+		return
 	}
-	a.mu.Unlock()
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.failures++
+	a.lastFailure = time.Now()
+	if a.failures >= a.cfg.FailureThreshold && !a.open {
+		a.open = true
+		a.timeout = time.Duration(float64(a.cfg.InitialTimeout) * (1 + float64(a.failures)/10))
+		slog.Warn("CircuitBreaker: OPEN", "action", a.name, "failures", a.failures)
+	}
 }
 
 func Adaptive[Req, Res any](name string, cfg AdaptiveConfig) Middleware[Req, Res] {

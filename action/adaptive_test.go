@@ -74,3 +74,26 @@ func TestAdaptive_Timeout(t *testing.T) {
 		t.Fatalf("expected DeadlineExceeded, got %v", err)
 	}
 }
+
+func TestAdaptive_DoesNotTripOnForbidden(t *testing.T) {
+	t.Parallel()
+
+	act := action.New("cb.no4xx", func(_ context.Context, _ string) (string, error) {
+		return "", xerr.Forbidden("permission denied")
+	}).Use(action.Adaptive[string, string]("cb.no4xx", action.AdaptiveConfig{
+		FailureThreshold: 1,
+		ResetTimeout:     50 * time.Millisecond,
+		InitialTimeout:   50 * time.Millisecond,
+	})).Build()
+
+	// Even after many 4xx responses, the CB must remain closed.
+	for i := 0; i < 10; i++ {
+		_, err := act.Do(context.Background(), "req")
+		if err == nil {
+			t.Fatal("expected Forbidden error, got nil")
+		}
+		if xerr.KindFrom(err) != xerr.KindForbidden {
+			t.Fatalf("expected Forbidden, got %v", err)
+		}
+	}
+}
