@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/nexssp/kernel/action"
 	"github.com/nexssp/kernel/observe"
@@ -49,5 +50,24 @@ func TestHook_CancellationDoesNotBecomeError(t *testing.T) {
 	}
 	if errors.Is(events[0].Error, context.Canceled) {
 		t.Fatal("cancellation event should not duplicate the error field")
+	}
+}
+
+func TestHook_CapturesActionDuration(t *testing.T) {
+	sink := &eventCollector{}
+	act := action.New("slow.action", func(context.Context, string) (string, error) {
+		time.Sleep(10 * time.Millisecond) // Ensure the OS clock advances beyond tick granularity
+		return "ok", nil
+	}).AnyHook(observe.Hook(sink)).Build()
+
+	if _, err := act.Do(context.Background(), "request"); err != nil {
+		t.Fatal(err)
+	}
+	events := sink.snapshot()
+	if len(events) != 1 {
+		t.Fatalf("got %d events, want 1", len(events))
+	}
+	if events[0].Duration <= 0 {
+		t.Fatalf("got duration %s, want positive duration", events[0].Duration)
 	}
 }

@@ -30,6 +30,7 @@ func (s *SlogSink) Emit(ctx context.Context, event Event) {
 	s.logger.Log(ctx, level, "nexss action",
 		"event", event.Kind,
 		"action", event.Action,
+		"duration", event.Duration,
 		"execution_id", event.ExecutionID,
 		"trace_id", event.TraceID,
 		"span_id", event.SpanID,

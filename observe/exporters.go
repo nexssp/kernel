@@ -79,6 +79,7 @@ func (s *JSONLSink) Emit(_ context.Context, event Event) {
 	}
 	record := jsonRecord{
 		Time:         event.Time.UTC(),
+		Duration:     event.Duration.String(),
 		Kind:         event.Kind,
 		Action:       event.Action,
 		ExecutionID:  event.ExecutionID,
@@ -101,6 +102,7 @@ func (s *JSONLSink) Emit(_ context.Context, event Event) {
 
 type jsonRecord struct {
 	Time         time.Time `json:"time"`
+	Duration     string    `json:"duration,omitempty"`
 	Kind         string    `json:"kind"`
 	Action       string    `json:"action"`
 	ExecutionID  string    `json:"execution_id,omitempty"`
