@@ -9,18 +9,25 @@ permissions:
 
 jobs:
   test:
+    name: Go ${{ matrix.go-version }}
     runs-on: ubuntu-latest
+
     strategy:
+      fail-fast: false
       matrix:
-        go-version: ['1.25']
+        go-version: ["1.25.x"]
+
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
         with:
           go-version: ${{ matrix.go-version }}
           cache: true
 
-      - name: Verify Formatting
+      - name: Verify formatting
         run: test -z "$(gofmt -l .)"
 
       - name: Run golangci-lint
@@ -29,11 +36,14 @@ jobs:
           version: v2.13.2
           args: --timeout=5m
 
-      - name: Run Unit Tests
+      - name: Run go vet
+        run: go vet ./...
+
+      - name: Run unit tests
         run: go test ./...
 
-      - name: Run Tests with Race Detector
+      - name: Run tests with race detector
         run: go test -race ./...
 
-      - name: Run Benchmarks
-        run: go test -run='^$' -bench=. -benchmem ./action/...
+      - name: Run benchmarks
+        run: go test ./... -run '^$' -bench=. -benchmem -count=1
