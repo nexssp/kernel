@@ -128,7 +128,7 @@ func (a *BuiltAction[Req, Res]) Do(ctx context.Context, req Req) (res Res, err e
 				if h.OnPanic != nil {
 					h := h
 					callHook(a.meta, "OnPanic", func() {
-						h.OnPanic(ctx, any(req), r, a.meta)
+						h.OnPanic(finalCtx, any(req), r, a.meta)
 					})
 				}
 			}
