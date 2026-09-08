@@ -2,6 +2,7 @@ package dag
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -14,6 +15,10 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+// ErrSuspended signals that a node has paused execution (e.g. awaiting human approval).
+// Returning this error preserves partial state so it can be saved to persistent storage.
+var ErrSuspended = errors.New("graph: execution suspended for human intervention")
+
 // Value holds a key-value output produced by a node.
 type Value struct {
 	Key string
@@ -24,8 +29,6 @@ type Value struct {
 func OutputKey(nodeID string) string { return "tasks." + nodeID + ".output" }
 
 // GetNodeOutput reads a node result using the allocation-free direct type path.
-// A missing or mismatched value returns a structured error; durable replay
-// adapters should decode serialized values before calling this helper.
 func GetNodeOutput[T any](state *State, nodeID string) (T, error) {
 	var zero T
 	if state == nil {
@@ -43,7 +46,6 @@ func GetNodeOutput[T any](state *State, nodeID string) (T, error) {
 }
 
 // State is an immutable-by-convention view of graph state.
-// Reads are 100% lock-free because data is never mutated while being read.
 type State struct {
 	data map[string]any
 }
@@ -183,8 +185,6 @@ func (b *Builder) AddNode(id string, _ string, act action.AnyAction) *Builder {
 		b.compileErr = xerr.BadRequest(fmt.Sprintf("graph: action %q does not implement Executable", id))
 		return b
 	}
-	// The second parameter is retained for source compatibility, but output
-	// storage is always namespaced to prevent parallel fan-out collisions.
 	b.nodes[id] = Node{ID: id, OutputKey: OutputKey(id), Action: ex}
 	return b
 }
@@ -272,6 +272,7 @@ func (b *Builder) Compile() (*DAG, error) {
 }
 
 // Execute runs DAG layers sequentially, executing nodes in each layer concurrently.
+// Supports HIL resumption: nodes whose output key is already present in initialState are skipped.
 func (d *DAG) Execute(ctx context.Context, initialState *State) (*State, error) {
 	currentState := initialState.Clone()
 
@@ -282,6 +283,15 @@ func (d *DAG) Execute(ctx context.Context, initialState *State) (*State, error) 
 		for i, node := range layer {
 			idx := i
 			n := node
+
+			// ⚡ HIL RESUME: If node was already computed in a previous run, skip invocation
+			if existingVal, ok := currentState.Get(n.OutputKey); ok {
+				layerResults[idx] = Value{
+					Key: n.OutputKey,
+					Val: existingVal,
+				}
+				continue
+			}
 
 			g.Go(func() error {
 				nCtx := &NodeContext{
@@ -304,14 +314,16 @@ func (d *DAG) Execute(ctx context.Context, initialState *State) (*State, error) 
 				var outVal any
 				var err error
 				if nested, ok := n.Action.(*action.BuiltAction[*State, *State]); ok {
-					// A compiled graph is itself a typed action. Passing the
-					// current immutable snapshot enables direct graph nesting.
 					outVal, err = nested.Do(layerCtx, currentState)
 				} else {
 					outVal, err = n.Action.ExecuteDecoded(layerCtx, decoder)
 				}
 
 				if err != nil {
+					// Preserve ErrSuspended cleanly without turning it into a fatal internal error
+					if errors.Is(err, ErrSuspended) {
+						return err
+					}
 					return xerr.Internal(fmt.Sprintf("graph execution failed at node %q (layer %d)", n.ID, layerIdx), err)
 				}
 
@@ -324,6 +336,16 @@ func (d *DAG) Execute(ctx context.Context, initialState *State) (*State, error) 
 		}
 
 		if err := g.Wait(); err != nil {
+			// ⚡ HIL SUSPENSION: Preserve partial state so it can be saved to persistent storage
+			if errors.Is(err, ErrSuspended) {
+				for _, res := range layerResults {
+					if res.Key != "" && res.Val != nil {
+						currentState.data[res.Key] = res.Val
+					}
+				}
+				return currentState, err
+			}
+
 			currentState.Release()
 			return nil, err
 		}
