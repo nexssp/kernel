@@ -90,9 +90,12 @@ var scopePool = sync.Pool{New: func() any { return &RequestScope{} }}
 func NewScope(parent context.Context) (context.Context, *RequestScope, func()) {
 	s := scopePool.Get().(*RequestScope)
 	ctx := context.WithValue(parent, scopeKeyT{}, s)
+	var once sync.Once
 	return ctx, s, func() {
-		s.Reset()
-		scopePool.Put(s)
+		once.Do(func() {
+			s.Reset()
+			scopePool.Put(s)
+		})
 	}
 }
 

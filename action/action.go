@@ -34,10 +34,27 @@ type BuiltAction[Req, Res any] struct {
 	anyHooksMu sync.Mutex
 	bindings   []Binding
 	history    *History[Req, Res]
+	cleanups   []func()
+	closeOnce  sync.Once
 }
 
 type anyHookSet struct {
 	hooks []AnyHook
+}
+
+// Close releases resources owned by the action, such as internally-created
+// cache janitors. It is safe to call multiple times.
+func (a *BuiltAction[Req, Res]) Close() {
+	if a == nil {
+		return
+	}
+	a.closeOnce.Do(func() {
+		for _, cleanup := range a.cleanups {
+			if cleanup != nil {
+				cleanup()
+			}
+		}
+	})
 }
 
 func (a *BuiltAction[Req, Res]) GetMeta() *Meta {

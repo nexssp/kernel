@@ -53,7 +53,9 @@ import (
 func (b *Builder[Req, Res]) Cache(ttl time.Duration, keyFn func(Req) string, layers ...CacheLayer[Res]) *Builder[Req, Res] {
 	b.meta.CacheTTL = ttl
 	if len(layers) == 0 {
-		layers = []CacheLayer[Res]{newDefaultMemoryKV[Res](ttl)}
+		cache := newDefaultMemoryKV[Res](ttl)
+		layers = []CacheLayer[Res]{cache}
+		b.cleanups = append(b.cleanups, cache.Stop)
 	}
 	return b.UseWithDispatcher(CacheMiddleware(CacheConfig[Req, Res]{
 		KeyFunc: keyFn,

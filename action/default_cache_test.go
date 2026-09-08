@@ -270,3 +270,27 @@ func TestDefaultMemoryKV_HighConcurrency(t *testing.T) {
 	// Clean sweep post-concurrency to verify map memory is coherent
 	cache.evictExpired()
 }
+
+func TestDefaultMemoryKV_ShortTTLJanitorEvictsWithoutRead(t *testing.T) {
+	t.Parallel()
+	cache := newDefaultMemoryKV[string](20 * time.Millisecond)
+	t.Cleanup(cache.Stop)
+	if err := cache.Set(context.Background(), "stale", "value", 20*time.Millisecond); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, 500*time.Millisecond, func() bool {
+		cache.mu.RLock()
+		_, ok := cache.data["stale"]
+		cache.mu.RUnlock()
+		return !ok
+	})
+}
+
+func TestBuiltAction_CloseIsIdempotent(t *testing.T) {
+	t.Parallel()
+	act := New("close.cache", func(context.Context, string) (string, error) {
+		return "ok", nil
+	}).Cache(time.Hour, func(req string) string { return req }).Build()
+	act.Close()
+	act.Close()
+}

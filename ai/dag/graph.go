@@ -56,7 +56,11 @@ var statePool = sync.Pool{
 
 // AcquireState retrieves a State instance from the memory pool.
 func AcquireState() *State {
-	return statePool.Get().(*State)
+	s := statePool.Get().(*State)
+	if s.data == nil {
+		s.data = make(map[string]any, 16)
+	}
+	return s
 }
 
 // Release clears references and returns the State to the pool.
@@ -65,6 +69,7 @@ func (s *State) Release() {
 		return
 	}
 	clear(s.data)
+	s.data = nil
 	statePool.Put(s)
 }
 

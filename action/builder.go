@@ -21,6 +21,7 @@ type Builder[Req, Res any] struct {
 	anyHooks    []AnyHook
 	bindings    []Binding
 	history     *History[Req, Res]
+	cleanups    []func()
 }
 
 // New creates an action builder.
@@ -163,6 +164,7 @@ func (b *Builder[Req, Res]) Build() *BuiltAction[Req, Res] {
 		hooks:    append([]Hook[Req, Res](nil), b.hooks...),
 		bindings: append([]Binding(nil), b.bindings...),
 		history:  b.history,
+		cleanups: append([]func(){}, b.cleanups...),
 	}
 	act.anyHooks.Store(&anyHookSet{hooks: append([]AnyHook(nil), b.anyHooks...)})
 
