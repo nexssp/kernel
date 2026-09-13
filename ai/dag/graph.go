@@ -131,8 +131,16 @@ func (s *State) Data() map[string]any {
 
 // ── Node & Execution Types ───────────────────────────────────────────────────
 
+// NodeContext provides execution context to a DAG node.
 type NodeContext struct {
-	Input *State // Read-Only, Frozen, Zero-Lock
+	// Input is the read-only, frozen state from preceding layers.
+	//
+	// ⚠️ WARNING: Because DAG state utilizes sync.Pool for memory efficiency,
+	// you MUST NOT read from Input after your node's handler function returns.
+	// Spawning detached goroutines that access Input beyond the lifecycle of
+	// this function will result in use-after-free panics or silent data corruption
+	// when the state is recycled and reused by subsequent graph executions.
+	Input *State
 	Key   string // Designated output key for this node
 }
 

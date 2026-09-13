@@ -41,4 +41,9 @@ func TestStateMachine(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected conflict error on invalid transition, got nil")
 	}
+
+	// 🛡️ ROBUST FIX: Assert that the entity state was rolled back and not silently mutated
+	if o2.State != "shipped" {
+		t.Fatalf("entity state was mutated despite invalid transition: expected 'shipped', got %q", o2.State)
+	}
 }

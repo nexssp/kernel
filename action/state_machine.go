@@ -45,11 +45,7 @@ func (sm *StateMachineBuilder[Req, Res]) Build() *BuiltAction[Req, Res] {
 	// Inject the state-guard middleware
 	b.Use(func(next Fn[Req, Res]) Fn[Req, Res] {
 		return func(ctx context.Context, req Req) (Res, error) {
-			currentState := req.GetState()
-
-			// If we need to know the *target* state, we either infer it from the action
-			// or the handler applies it. The guard ensures that if the state *was* changed
-			// by the handler, it was a legal move.
+			originalState := req.GetState()
 
 			// We run the handler first to see the mutated state
 			res, err := next(ctx, req)
@@ -58,19 +54,21 @@ func (sm *StateMachineBuilder[Req, Res]) Build() *BuiltAction[Req, Res] {
 			}
 
 			newState := req.GetState()
-			if currentState == newState {
+			if originalState == newState {
 				return res, nil // No transition occurred
 			}
 
-			allowed, exists := sm.transitions[currentState]
-			if !exists {
-				return res, xerr.Conflict(fmt.Sprintf("invalid transition from '%s'", currentState))
-			}
+			allowed, exists := sm.transitions[originalState]
+			if !exists || !slices.Contains(allowed, newState) {
+				// 🛡️ ROBUST FIX: Roll back the mutation the handler already applied so an
+				// invalid transition never leaves the entity changed just
+				// because we're reporting an error about it.
+				req.SetState(originalState)
 
-			valid := slices.Contains(allowed, newState)
-
-			if !valid {
-				return res, xerr.Conflict(fmt.Sprintf("invalid transition: '%s' -> '%s'", currentState, newState))
+				if !exists {
+					return res, xerr.Conflict(fmt.Sprintf("invalid transition from '%s'", originalState))
+				}
+				return res, xerr.Conflict(fmt.Sprintf("invalid transition: '%s' -> '%s'", originalState, newState))
 			}
 
 			return res, nil
