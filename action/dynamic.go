@@ -4,30 +4,32 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 )
 
 // Dynamic lifts any AnyAction into a *Builder[any, any].
-// It allows composer.Pipe, composer.Parallel, and composer.Branch to orchestrate
-// dynamic actions directly via InvokeAny.
+// It preserves all metadata, bindings, and hooks from the wrapped action.
 func Dynamic(act AnyAction) *Builder[any, any] {
 	if act == nil {
 		panic("action.Dynamic: action cannot be nil")
 	}
 
-	desc := act.Describe()
-	name := desc.Name
-	if name == "" {
-		name = "dynamic"
-	}
-
-	b := New(name, func(ctx context.Context, req any) (any, error) {
+	b := New(act.Describe().Name, func(ctx context.Context, req any) (any, error) {
 		return InvokeAny(ctx, act, req)
-	}).
-		Description(desc.Description)
+	})
 
-	for _, t := range desc.Tags {
-		b.Tag(t)
+	if desc := act.Describe(); desc != nil {
+		b.meta = *desc
+		b.meta.Tags = slices.Clone(desc.Tags)
+		b.meta.RequiredRoles = slices.Clone(desc.RequiredRoles)
+		b.meta.RequiredPermissions = slices.Clone(desc.RequiredPermissions)
+		b.meta.RequiredFeatures = slices.Clone(desc.RequiredFeatures)
 	}
+
+	// Preserve bindings and hooks
+	b.bindings = append(b.bindings, act.GetBindings()...)
+	b.anyHooks = append(b.anyHooks, act.GetAnyHooks()...)
+
 	return b
 }
 
