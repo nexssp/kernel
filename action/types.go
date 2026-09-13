@@ -107,12 +107,10 @@ type ActionScope string
 const (
 	// ScopePublic is the browser/client business contract. It is the zero-value
 	// behavior so normal client actions remain concise.
-	ScopePublic ActionScope = "public"
-	// ScopeInternal is a trusted service-to-service or runner contract. It is
-	// included only in explicitly requested trusted SDK generation.
+	ScopePublic ActionScope = ""
+	// ScopeInternal is a trusted service-to-service or runner contract.
 	ScopeInternal ActionScope = "internal"
-	// ScopeSystem is a framework or operational contract. It is excluded from
-	// public and trusted business contracts.
+	// ScopeSystem is a framework or operational contract.
 	ScopeSystem ActionScope = "system"
 )
 
@@ -124,7 +122,7 @@ func (m *Meta) IsInternal() bool { return m != nil && m.Scope == ScopeInternal }
 
 // IsPublic reports whether the action is part of the public business contract.
 // The zero value is public for concise ordinary client actions.
-func (m *Meta) IsPublic() bool { return m != nil && (m.Scope == "" || m.Scope == ScopePublic) }
+func (m *Meta) IsPublic() bool { return m != nil && m.Scope == ScopePublic }
 
 func (a *BuiltAction[Req, Res]) String() string {
 	return a.meta.String()
