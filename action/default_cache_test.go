@@ -9,7 +9,16 @@ import (
 	"time"
 )
 
-// helper to avoid flaky time.Sleep in CI/CD pipelines
+// eventually polls condition until it returns true or timeout elapses.
+//
+// IMPORTANT: timeout should be generous (seconds, not hundreds of
+// milliseconds) for anything that depends on a background goroutine (like the
+// cache janitor) being scheduled. This helper already returns as soon as the
+// condition is true, so a large timeout costs nothing on a healthy machine —
+// it only matters when the test process is under heavy scheduler contention
+// from other parallel tests (goroutine-storm tests elsewhere in this
+// package can easily starve the janitor tick for tens or hundreds of
+// milliseconds).
 func eventually(t *testing.T, timeout time.Duration, condition func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
@@ -94,6 +103,12 @@ func TestDefaultMemoryKV_ContextCancellation(t *testing.T) {
 	}
 }
 
+// TestDefaultMemoryKV_Expiration_Deterministic previously polled for up to
+// 200ms. Under contention from other goroutine-heavy tests in this package,
+// both the janitor goroutine and this test's own polling goroutine can be
+// starved past that window. 200ms was a timing assumption dressed up as a
+// correctness check; 3s is still fast on the happy path (eventually returns
+// immediately once true) and removes the false failures.
 func TestDefaultMemoryKV_Expiration_Deterministic(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -110,7 +125,7 @@ func TestDefaultMemoryKV_Expiration_Deterministic(t *testing.T) {
 	}
 
 	// Deterministic polling (never flaky on slow CI)
-	eventually(t, 200*time.Millisecond, func() bool {
+	eventually(t, 3*time.Second, func() bool {
 		_, found, _ := cache.Get(ctx, "expiring_key")
 		return !found
 	})
@@ -135,7 +150,7 @@ func TestDefaultMemoryKV_CustomTTLExpiration(t *testing.T) {
 
 	_ = cache.Set(ctx, "short_lived", "data", 15*time.Millisecond)
 
-	eventually(t, 200*time.Millisecond, func() bool {
+	eventually(t, 3*time.Second, func() bool {
 		_, found, _ := cache.Get(ctx, "short_lived")
 		return !found
 	})
@@ -271,6 +286,11 @@ func TestDefaultMemoryKV_HighConcurrency(t *testing.T) {
 	cache.evictExpired()
 }
 
+// TestDefaultMemoryKV_ShortTTLJanitorEvictsWithoutRead previously used a
+// 500ms deadline for a background-only eviction (no Get() call to trigger
+// lazy eviction — this must come from the janitor goroutine alone). Same
+// contention concern as TestDefaultMemoryKV_Expiration_Deterministic above:
+// widened to 3s.
 func TestDefaultMemoryKV_ShortTTLJanitorEvictsWithoutRead(t *testing.T) {
 	t.Parallel()
 	cache := newDefaultMemoryKV[string](20 * time.Millisecond)
@@ -278,7 +298,7 @@ func TestDefaultMemoryKV_ShortTTLJanitorEvictsWithoutRead(t *testing.T) {
 	if err := cache.Set(context.Background(), "stale", "value", 20*time.Millisecond); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, 500*time.Millisecond, func() bool {
+	eventually(t, 3*time.Second, func() bool {
 		cache.mu.RLock()
 		_, ok := cache.data["stale"]
 		cache.mu.RUnlock()

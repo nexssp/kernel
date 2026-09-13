@@ -119,8 +119,22 @@ func TestProxy_ExecuteDecoded_ZeroAlloc(t *testing.T) {
 	}
 }
 
+// TestProxy_HighThroughput_Contention exercises Proxy.Swap racing against many
+// concurrent Proxy.DoAny readers.
+//
+// This test intentionally does NOT run with t.Parallel(). It spins up
+// runtime.GOMAXPROCS(0)*2 reader goroutines plus one writer, and previously
+// used a bare 50ms time.Sleep as a stand-in for "the goroutines have started
+// and done some work." Under load from other parallel tests in this package,
+// that assumption doesn't hold and the goroutines can occasionally not get
+// scheduled at all within the window, producing a false
+// "zero operations processed" failure.
+//
+// Fix: wait for an explicit signal — every reader completing at least one
+// successful DoAny call — before starting the timed contention window, and
+// widen that window. This removes the dependency on scheduler timing for
+// correctness while still exercising the actual race between Swap and DoAny.
 func TestProxy_HighThroughput_Contention(t *testing.T) {
-	t.Parallel()
 	ctx := context.Background()
 
 	act1 := action.New("fast.1", func(_ context.Context, in int) (int, error) {
@@ -140,6 +154,14 @@ func TestProxy_HighThroughput_Contention(t *testing.T) {
 	var readCount atomic.Uint64
 	var wg sync.WaitGroup
 
+	readers := runtime.GOMAXPROCS(0) * 2
+
+	// firstOpDone tracks, per-reader, whether it has completed at least one
+	// successful DoAny call. We block on this before timing the contention
+	// window so the test can never observe "zero reads" just because the
+	// scheduler was slow to start goroutines.
+	firstOpDone := make([]atomic.Bool, readers)
+
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -156,10 +178,9 @@ func TestProxy_HighThroughput_Contention(t *testing.T) {
 		}
 	}()
 
-	readers := runtime.GOMAXPROCS(0) * 2
 	for i := 0; i < readers; i++ {
 		wg.Add(1)
-		go func() {
+		go func(idx int) {
 			defer wg.Done()
 			for running.Load() {
 				res, err := p.DoAny(ctx, 10)
@@ -173,11 +194,39 @@ func TestProxy_HighThroughput_Contention(t *testing.T) {
 					return
 				}
 				readCount.Add(1)
+				firstOpDone[idx].Store(true)
 			}
-		}()
+		}(i)
 	}
 
-	time.Sleep(50 * time.Millisecond)
+	// Wait for every reader to have completed at least one op before timing
+	// the contention window. This is a correctness precondition for the test,
+	// not a timing assumption, so it gets a generous timeout.
+	waitDeadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(waitDeadline) {
+		allStarted := true
+		for i := range firstOpDone {
+			if !firstOpDone[i].Load() {
+				allStarted = false
+				break
+			}
+		}
+		if allStarted {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	for i := range firstOpDone {
+		if !firstOpDone[i].Load() {
+			running.Store(false)
+			wg.Wait()
+			t.Fatalf("reader %d never completed a successful operation before timeout", i)
+		}
+	}
+
+	// All readers and the writer are confirmed running; now give them a
+	// meaningful window to actually contend with each other.
+	time.Sleep(200 * time.Millisecond)
 	running.Store(false)
 	wg.Wait()
 
