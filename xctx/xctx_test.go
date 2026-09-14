@@ -3,7 +3,6 @@ package xctx_test
 import (
 	"context"
 	"testing"
-	"time"
 
 	"github.com/nexssp/kernel/xctx"
 )
@@ -95,28 +94,30 @@ func TestFromClaims(t *testing.T) {
 
 func TestCloneForAsync(t *testing.T) {
 	t.Parallel()
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+
+	parentCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	ctx, scope, release := xctx.NewScope(ctx)
+	ctx, scope, release := xctx.NewScope(parentCtx)
 	scope.UserID = "usr_async"
 	scope.Roles = []string{"admin"}
 
 	asyncCtx := xctx.CloneForAsync(ctx)
 	release() // Release parent scope back to pool immediately
 
-	// Parent context times out
-	time.Sleep(15 * time.Millisecond)
+	// Cancel parent AFTER clone
+	cancel()
+
 	if ctx.Err() == nil {
-		t.Fatal("expected parent context to be canceled")
+		t.Fatal("expected parent context to be canceled after cancel()")
 	}
 
-	// Async context remains uncancelled and retains cloned data safely
 	if asyncCtx.Err() != nil {
-		t.Fatal("expected async context to remain active without cancellation")
+		t.Fatalf("expected async context to remain uncancelled, got %v", asyncCtx.Err())
 	}
-	if xctx.UserIDFrom(asyncCtx) != "usr_async" {
-		t.Fatalf("expected UserID 'usr_async' in async context, got %q", xctx.UserIDFrom(asyncCtx))
+
+	if got := xctx.UserIDFrom(asyncCtx); got != "usr_async" {
+		t.Fatalf("expected cloned scope to retain UserID, got %q", got)
 	}
 }
 
