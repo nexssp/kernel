@@ -34,6 +34,10 @@ func (k Key[T]) With(ctx context.Context, val T) context.Context {
 }
 
 func (k Key[T]) From(ctx context.Context) (T, bool) {
+	if ctx == nil {
+		var zero T
+		return zero, false
+	}
 	v, ok := ctx.Value(k).(T)
 	return v, ok
 }
@@ -100,6 +104,9 @@ func NewScope(parent context.Context) (context.Context, *RequestScope, func()) {
 }
 
 func ScopeFrom(ctx context.Context) *RequestScope {
+	if ctx == nil {
+		return nil
+	}
 	s, _ := ctx.Value(scopeKeyT{}).(*RequestScope)
 	return s
 }
