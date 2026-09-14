@@ -169,3 +169,132 @@ func TestEventPublisher(t *testing.T) {
 		t.Fatalf("expected subject 'order.created', got %q", pub.lastSubject)
 	}
 }
+
+func TestZeroAlloc_SettersWithScope(t *testing.T) {
+	ctx, _, release := xctx.NewScope(context.Background())
+	defer release()
+
+	roles := []string{"admin", "editor"}
+	features := []string{"beta", "ai"}
+	perms := []string{"read", "write"}
+
+	// Pre-warm the scope so internal slices grow to required capacity
+	ctx = xctx.WithRoles(ctx, roles)
+	ctx = xctx.WithFeatures(ctx, features)
+	ctx = xctx.WithPermissions(ctx, perms)
+
+	allocs := testing.AllocsPerRun(1000, func() {
+		// Mutating an existing RequestScope must not trigger context.WithValue
+		// and MUST be 100% zero-alloc
+		ctx = xctx.WithUserID(ctx, "user-123")
+		ctx = xctx.WithTenantID(ctx, "tenant-456")
+		ctx = xctx.WithRequestID(ctx, "req-789")
+		ctx = xctx.WithTraceID(ctx, "trace-abc")
+		ctx = xctx.WithEndpoint(ctx, "/api")
+		ctx = xctx.WithClientIP(ctx, "127.0.0.1")
+
+		// Assigning slices should reuse pre-warmed capacity
+		ctx = xctx.WithRoles(ctx, roles)
+		ctx = xctx.WithFeatures(ctx, features)
+		ctx = xctx.WithPermissions(ctx, perms)
+	})
+
+	if allocs != 0 {
+		t.Fatalf("CRITICAL: expected exactly 0 allocations when mutating scope, got %.2f", allocs)
+	}
+}
+
+func TestNilContext_Safety(t *testing.T) {
+	t.Parallel()
+	// None of these should panic. They must fallback cleanly.
+	var ctx context.Context = nil
+
+	ctx = xctx.WithUserID(ctx, "safe_fallback")
+	if xctx.UserIDFrom(ctx) != "safe_fallback" {
+		t.Fatal("expected lazy fallback scope to retain UserID")
+	}
+
+	ctx2, scope, release := xctx.NewScope(nil) //nolint:staticcheck // nil context edge case
+	defer release()
+	if ctx2 == nil || scope == nil {
+		t.Fatal("NewScope(nil) failed to fallback to context.Background()")
+	}
+
+	clone := xctx.CloneForAsync(nil) //nolint:staticcheck // nil context edge case
+	if clone == nil {
+		t.Fatal("CloneForAsync(nil) failed to return a valid context")
+	}
+
+	if _, ok := xctx.NewKey[int]("nil.test").From(nil); ok { //nolint:staticcheck // nil context edge case
+		t.Fatal("Key.From(nil) should safely return false")
+	}
+}
+
+func TestSliceOwnershipAndMutation(t *testing.T) {
+	t.Parallel()
+	ctx, _, release := xctx.NewScope(context.Background())
+	defer release()
+
+	callerRoles := []string{"admin", "editor"}
+	ctx = xctx.WithRoles(ctx, callerRoles)
+
+	// Caller maliciously or accidentally mutates the slice
+	callerRoles[0] = "hacker"
+
+	// Ensure context was protected by defensive copy
+	if !xctx.HasRole(ctx, "admin") {
+		t.Fatal("context lost 'admin' role after caller mutation")
+	}
+	if xctx.HasRole(ctx, "hacker") {
+		t.Fatal("context state was corrupted by caller slice mutation")
+	}
+}
+
+func TestWithRoles_Resetting(t *testing.T) {
+	t.Parallel()
+	ctx, scope, release := xctx.NewScope(context.Background())
+	defer release()
+
+	ctx = xctx.WithRoles(ctx, []string{"operator"})
+	if scope.Role != "operator" || !xctx.HasRole(ctx, "operator") {
+		t.Fatal("failed to set initial role")
+	}
+
+	// Clearing roles should clear both the slice and the primary Role field
+	ctx = xctx.WithRoles(ctx, nil)
+	if scope.Role != "" {
+		t.Fatalf("expected primary role to be cleared, got %q", scope.Role)
+	}
+	if xctx.HasRole(ctx, "operator") {
+		t.Fatal("HasRole returned true after roles were cleared")
+	}
+}
+
+func TestTypedKey(t *testing.T) {
+	t.Parallel()
+	key := xctx.NewKey[int]("test.int")
+
+	ctx := key.With(context.Background(), 42)
+
+	val, ok := key.From(ctx)
+	if !ok || val != 42 {
+		t.Fatalf("expected 42, got %v", val)
+	}
+
+	if val := key.MustFrom(ctx); val != 42 {
+		t.Fatalf("MustFrom expected 42, got %v", val)
+	}
+}
+
+func TestTypedKey_MustFromPanic(t *testing.T) {
+	t.Parallel()
+	key := xctx.NewKey[string]("test.missing")
+
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("expected MustFrom to panic on missing key")
+		}
+	}()
+
+	_ = key.MustFrom(context.Background())
+}
