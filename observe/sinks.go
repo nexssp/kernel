@@ -4,6 +4,8 @@ import (
 	"context"
 	"log/slog"
 	"sync"
+
+	"github.com/nexssp/kernel/ringbuf"
 )
 
 // SlogSink writes structured lifecycle events to a standard-library slog.Logger.
@@ -42,14 +44,8 @@ func (s *SlogSink) Emit(ctx context.Context, event Event) {
 	)
 }
 
-// MemorySink stores recent events up to Capacity in a thread-safe ring buffer.
-// Intended for unit tests, local debugging, and CLI diagnostic inspection.
 type MemorySink struct {
-	mu       sync.Mutex
-	events   []Event
-	capacity int
-	head     int // Tracks the next write position
-	size     int // Tracks current total items stored
+	events *ringbuf.Buffer[Event]
 }
 
 func NewMemorySink(capacity int) *MemorySink {
@@ -57,57 +53,22 @@ func NewMemorySink(capacity int) *MemorySink {
 		capacity = 100 // Safe default
 	}
 	return &MemorySink{
-		events:   make([]Event, capacity), // Pre-allocate fixed size
-		capacity: capacity,
+		events: ringbuf.NewBuffer[Event](capacity),
 	}
 }
 
 func (s *MemorySink) Emit(_ context.Context, event Event) {
-	if s == nil || s.capacity == 0 {
+	if s == nil || s.events == nil {
 		return
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	// Overwrite the slot at head without shifting any memory
-	s.events[s.head] = event
-
-	// Advance head pointer circularly
-	s.head = (s.head + 1) % s.capacity
-
-	if s.size < s.capacity {
-		s.size++
-	}
+	s.events.Push(event)
 }
 
-// Events returns a snapshot copy in oldest-to-newest order.
 func (s *MemorySink) Events() []Event {
-	if s == nil {
+	if s == nil || s.events == nil {
 		return nil
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	// If no events have been recorded, return an empty slice
-	if s.size == 0 {
-		return []Event{}
-	}
-
-	result := make([]Event, s.size)
-
-	// Case 1: Buffer has not wrapped around yet (it's a normal sequential slice)
-	if s.size < s.capacity {
-		copy(result, s.events[:s.size])
-		return result
-	}
-
-	// Case 2: Buffer has wrapped around. The oldest item is right at the 'head' cursor.
-	// Copy from 'head' to the end of the internal array
-	copied := copy(result, s.events[s.head:])
-	// Copy the remainder from the beginning of the array up to 'head'
-	copy(result[copied:], s.events[:s.head])
-
-	return result
+	return s.events.Snapshot()
 }
 
 // MetricKey uniquely identifies a lifecycle event counter.
