@@ -26,9 +26,8 @@ import (
 //
 //	hist := paymentAct.History() // nil if RecordHistory was not called
 func (b *Builder[Req, Res]) RecordHistory(capacity int) *Builder[Req, Res] {
-	hist := NewHistory[Req, Res](capacity)
-	b.history = hist // stored on builder, transferred to BuiltAction at Build()
-	return b.Use(HistoryMiddleware(hist))
+	b, _ = b.WithHistory(capacity)
+	return b
 }
 
 // LogCalls injects a structured log entry for every call using the provided logger.

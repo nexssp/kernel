@@ -147,7 +147,8 @@ func (b *Builder[Req, Res]) ConcurrencyLimit(limit int32) *Builder[Req, Res] {
 func (b *Builder[Req, Res]) WithHistory(capacity int) (*Builder[Req, Res], *History[Req, Res]) {
 	hist := NewHistory[Req, Res](capacity)
 	b.history = hist
-	return b.Use(HistoryMiddleware(hist)), hist
+	b.Use(HistoryMiddleware(hist))
+	return b, hist
 }
 
 // ── Build ─────────────────────────────────────────────────────────────────────

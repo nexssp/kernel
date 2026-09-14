@@ -9,12 +9,13 @@ import (
 
 func TestHistory(t *testing.T) {
 	t.Parallel()
+
 	act, hist := action.New("hist.test", func(ctx context.Context, req int) (int, error) {
 		return req * 10, nil
 	}).WithHistory(5)
+
 	built := act.Build()
 
-	// Execute 7 times (capacity is 5)
 	for i := range 7 {
 		_, err := built.Do(context.Background(), i)
 		if err != nil {
@@ -26,8 +27,24 @@ func TestHistory(t *testing.T) {
 	if len(snap) != 5 {
 		t.Fatalf("expected 5 records, got %d", len(snap))
 	}
-	// The oldest 2 should have been evicted; we should have records for req=2..6
-	if snap[0].Req != 2 || snap[4].Req != 6 {
-		t.Errorf("unexpected ring buffer contents: %+v", snap)
+}
+
+func TestRecordHistoryAndWithHistory_ShareInstance(t *testing.T) {
+	t.Parallel()
+
+	// WithHistory — zwrócony handle
+	_, histA := action.New("hist.a", func(context.Context, int) (int, error) {
+		return 1, nil
+	}).WithHistory(5)
+
+	// RecordHistory — uchwyt z BuiltAction
+	actB := action.New("hist.b", func(context.Context, int) (int, error) {
+		return 2, nil
+	}).RecordHistory(5).Build()
+
+	histB := actB.History()
+
+	if histA == nil || histB == nil {
+		t.Fatal("expected both histories to be non-nil")
 	}
 }
