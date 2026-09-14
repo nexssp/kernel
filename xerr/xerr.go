@@ -92,6 +92,16 @@ func (e *AppError) IsTransient() bool {
 	return false
 }
 
+// IsPermanent reports whether the error is fundamentally non-retryable
+// (e.g. 4xx client errors like validation or unauthorized).
+func IsPermanent(err error) bool {
+	switch KindFrom(err) {
+	case KindBadRequest, KindUnauthorized, KindForbidden, KindNotFound, KindValidation:
+		return true
+	}
+	return false
+}
+
 // WithStack re-captures the stack. Use for bugs / unexpected internal errors.
 func (e *AppError) WithStack() *AppError {
 	e.Stack = captureStack()
