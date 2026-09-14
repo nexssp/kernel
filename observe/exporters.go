@@ -1,10 +1,12 @@
 package observe
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -153,19 +155,15 @@ func sortedMetricKeys(values map[MetricKey]uint64) []MetricKey {
 	for key := range values {
 		keys = append(keys, key)
 	}
-	for i := 1; i < len(keys); i++ {
-		for j := i; j > 0 && metricKeyLess(keys[j], keys[j-1]); j-- {
-			keys[j], keys[j-1] = keys[j-1], keys[j]
-		}
-	}
+	slices.SortFunc(keys, compareMetricKeys)
 	return keys
 }
 
-func metricKeyLess(left, right MetricKey) bool {
-	if left.Action == right.Action {
-		return left.Kind < right.Kind
+func compareMetricKeys(a, b MetricKey) int {
+	if c := cmp.Compare(a.Action, b.Action); c != 0 {
+		return c
 	}
-	return left.Action < right.Action
+	return cmp.Compare(a.Kind, b.Kind)
 }
 
 var (
