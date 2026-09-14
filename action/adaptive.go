@@ -94,8 +94,7 @@ func (a *adaptiveState) Observe(err error) {
 	}
 
 	// Never trip circuit breaker on permanent client errors (4xx)
-	switch xerr.KindFrom(err) {
-	case xerr.KindBadRequest, xerr.KindUnauthorized, xerr.KindForbidden, xerr.KindNotFound, xerr.KindValidation:
+	if xerr.IsPermanent(err) {
 		return
 	}
 
