@@ -124,11 +124,9 @@ func Unauthorized(msg string, cause ...error) *AppError {
 	return &AppError{Kind: KindUnauthorized, Message: msg, Cause: first(cause)}
 }
 
+// Deprecated: use Unavailable instead.
 func ServiceUnavailable(msg string, cause ...error) *AppError {
-	if msg == "" {
-		msg = "service unavailable"
-	}
-	return &AppError{Kind: KindUnavailable, Message: msg, Cause: first(cause)}
+	return Unavailable(msg, cause...)
 }
 
 func Forbidden(msg string, cause ...error) *AppError {
