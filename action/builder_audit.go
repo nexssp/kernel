@@ -17,11 +17,9 @@ func (b *Builder[Req, Res]) Audited(logger AuditLogger, category string, details
 		if logger == nil {
 			return
 		}
-		details := ""
+		details := fmt.Sprintf("Action %s executed successfully", meta.Name)
 		if detailsFn != nil {
 			details = detailsFn(req, res)
-		} else {
-			details = fmt.Sprintf("Action %s executed successfully", meta.Name)
 		}
 
 		logger.Log(ctx, category, meta.Name, details)

@@ -6,11 +6,17 @@ linters:
     - bodyclose
     - contextcheck
     - gocritic
+    - govet
+    - staticcheck
     - prealloc
     - revive
     - gosec
     - noctx
     - unconvert
+    - rowserrcheck
+    - sqlclosecheck
+    - unconvert
+    - wastedassign
   settings:
     gocritic:
       enabled-tags:
