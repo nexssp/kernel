@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -255,18 +254,15 @@ func TestCache_Singleflight_ContextCancellation(t *testing.T) {
 	store := newMockStore()
 
 	started := make(chan struct{})
+	var startOnce sync.Once
 	block := make(chan struct{})
-	caller2CheckingCache := make(chan struct{})
-	var getCalls atomic.Int32
-
-	store.onGet = func(key string) {
-		if getCalls.Add(1) == 2 {
-			close(caller2CheckingCache)
-		}
-	}
+	caller2Joined := make(chan struct{})
+	var caller2JoinedOnce sync.Once
 
 	act := action.New("cache.concurrent_cancel", func(ctx context.Context, req string) (string, error) {
-		close(started)
+		startOnce.Do(func() {
+			close(started)
+		})
 		select {
 		case <-ctx.Done():
 			return "", ctx.Err()
@@ -275,6 +271,13 @@ func TestCache_Singleflight_ContextCancellation(t *testing.T) {
 		}
 	}).
 		Cache(10*time.Minute, func(r string) string { return r }, store).
+		Hook(action.Hook[string, string]{
+			OnCoalesced: func(ctx context.Context, req string, meta *action.Meta) {
+				caller2JoinedOnce.Do(func() {
+					close(caller2Joined)
+				})
+			},
+		}).
 		Build()
 
 	ctx1, cancel1 := context.WithCancel(context.Background())
@@ -290,19 +293,21 @@ func TestCache_Singleflight_ContextCancellation(t *testing.T) {
 		res1, err1 = act.Do(ctx1, "shared_key")
 	}()
 
-	<-started
+	<-started // Wait for caller 1 to start flight and block
 
 	go func() {
 		defer wg.Done()
 		res2, err2 = act.Do(ctx2, "shared_key")
 	}()
 
-	<-caller2CheckingCache
-	for i := 0; i < 5; i++ {
-		runtime.Gosched()
+	// Deterministic synchronization: wait until caller 2 is confirmed coalesced on the flight
+	select {
+	case <-caller2Joined:
+	case <-time.After(200 * time.Millisecond):
+		// Fallback for fast execution
 	}
 
-	cancel1()
+	cancel1() // Cancel caller 1; caller 2 must remain unaffected
 
 	close(block)
 	wg.Wait()
