@@ -3,6 +3,8 @@ package xerr_test
 import (
 	"context"
 	"errors"
+	"net"
+	"strings"
 	"testing"
 
 	"github.com/nexssp/kernel/xerr"
@@ -109,5 +111,18 @@ func TestFrom(t *testing.T) {
 	appErr2 := xerr.From(appErr)
 	if appErr2 != appErr {
 		t.Error("From on AppError should return itself without wrapping")
+	}
+}
+
+func TestMapTransportError_DNS(t *testing.T) {
+	t.Parallel()
+	dnsErr := &net.DNSError{Err: "no such host", Name: "example.invalid", IsNotFound: true}
+	got := xerr.MapTransportError(dnsErr)
+	if xerr.KindFrom(got) != xerr.KindUnavailable {
+		t.Fatalf("want Unavailable, got %s", xerr.KindFrom(got))
+	}
+	var ae *xerr.AppError
+	if !errors.As(got, &ae) || !strings.Contains(ae.Message, "DNS") {
+		t.Fatalf("expected DNS-specific message, got %q", got.Error())
 	}
 }
