@@ -70,16 +70,17 @@ func FromPublic(response ErrorResponse) (*AppError, bool) {
 	}, true
 }
 
-func isKnownKind(kind Kind) bool {
-	switch kind {
-	case KindBadRequest, KindUnauthorized, KindForbidden, KindNotFound,
-		KindConflict, KindValidation, KindTooManyRequests, KindTimeout,
-		KindUnavailable, KindInternal, KindMethodNotAllowed, KindRateLimit,
-		KindCanceled, KindDatabase, KindShutdown, KindCircuitBreaker:
-		return true
-	default:
-		return false
+var knownKinds = func() map[Kind]struct{} {
+	m := make(map[Kind]struct{}, len(AllKinds()))
+	for _, k := range AllKinds() {
+		m[k] = struct{}{}
 	}
+	return m
+}()
+
+func isKnownKind(kind Kind) bool {
+	_, ok := knownKinds[kind]
+	return ok
 }
 
 // IsTransient reports whether the error may succeed on retry.
