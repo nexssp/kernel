@@ -11,8 +11,6 @@ const maxTraceEvents = 128
 
 type scopeKeyT struct{}
 
-// Key is a typed context key for domain-specific attachments (e.g., databases, tokens).
-// Do not use for cross-cutting request metadata; use RequestScope instead.
 type Key[T any] struct {
 	name string
 }
@@ -45,28 +43,30 @@ func (k Key[T]) MustFrom(ctx context.Context) T {
 	return v
 }
 
-// RequestScope holds all cross-cutting data for a single request.
-// It acts as a mutable blackboard to achieve zero-allocation context enrichment.
 type RequestScope struct {
 	RequestID   string
+	ExecutionID string
+	TraceID     string
+	SpanID      string
 	Endpoint    string
 	UserID      string
 	TenantID    string
-	TraceID     string
 	Role        string
+	ClientIP    string
 	Roles       []string
 	Permissions []string
 	Features    []string
-	ClientIP    string
 	TraceEvents []string
 }
 
 func (s *RequestScope) Reset() {
 	s.RequestID = ""
+	s.ExecutionID = ""
+	s.TraceID = ""
+	s.SpanID = ""
 	s.Endpoint = ""
 	s.UserID = ""
 	s.TenantID = ""
-	s.TraceID = ""
 	s.Role = ""
 	s.ClientIP = ""
 	s.Roles = s.Roles[:0]
@@ -85,7 +85,6 @@ func AddTrace(ctx context.Context, event string) {
 		return
 	}
 	if len(s.TraceEvents) >= maxTraceEvents {
-		// drop oldest, keep the newest
 		copy(s.TraceEvents, s.TraceEvents[1:])
 		s.TraceEvents = s.TraceEvents[:maxTraceEvents-1]
 	}
@@ -94,8 +93,6 @@ func AddTrace(ctx context.Context, event string) {
 
 var scopePool = sync.Pool{New: func() any { return &RequestScope{} }}
 
-// NewScope attaches a pooled RequestScope to the context boundary.
-// Callers must invoke cleanup() to release the scope back to the pool.
 func NewScope(parent context.Context) (context.Context, *RequestScope, func()) {
 	if parent == nil {
 		parent = context.Background()
@@ -126,23 +123,18 @@ func WithScope(ctx context.Context, s *RequestScope) context.Context {
 	return context.WithValue(ctx, scopeKeyT{}, s)
 }
 
-// ensureScope provides a fallback for un-pooled boundaries to prevent panics,
-// acting as a lazy-initializer.
 func ensureScope(ctx context.Context) (context.Context, *RequestScope) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	s, _ := ctx.Value(scopeKeyT{}).(*RequestScope)
 	if s != nil {
-		// Zero allocations: scope exists, return same context
 		return ctx, s
 	}
-	// Fallback allocation (will be garbage collected)
 	s = &RequestScope{}
 	return context.WithValue(ctx, scopeKeyT{}, s), s
 }
 
-// FromClaims initializes the scope directly from decoded JWT claims.
 func FromClaims(scope *RequestScope, claims map[string]any) {
 	if scope == nil || len(claims) == 0 {
 		return
@@ -186,11 +178,27 @@ func toStringSlice(v any) []string {
 	return nil
 }
 
-// ── Setters ──────────────────────────────────────────────────────────────────
-
 func WithRequestID(ctx context.Context, id string) context.Context {
 	ctx, s := ensureScope(ctx)
 	s.RequestID = id
+	return ctx
+}
+
+func WithExecutionID(ctx context.Context, id string) context.Context {
+	ctx, s := ensureScope(ctx)
+	s.ExecutionID = id
+	return ctx
+}
+
+func WithTraceID(ctx context.Context, id string) context.Context {
+	ctx, s := ensureScope(ctx)
+	s.TraceID = id
+	return ctx
+}
+
+func WithSpanID(ctx context.Context, id string) context.Context {
+	ctx, s := ensureScope(ctx)
+	s.SpanID = id
 	return ctx
 }
 
@@ -234,23 +242,22 @@ func WithPermissions(ctx context.Context, perms []string) context.Context {
 	return ctx
 }
 
-func WithTraceID(ctx context.Context, id string) context.Context {
-	ctx, s := ensureScope(ctx)
-	s.TraceID = id
-	return ctx
-}
-
 func WithClientIP(ctx context.Context, ip string) context.Context {
 	ctx, s := ensureScope(ctx)
 	s.ClientIP = ip
 	return ctx
 }
 
-// ── Getters ──────────────────────────────────────────────────────────────────
-
 func RequestIDFrom(ctx context.Context) string {
 	if s := ScopeFrom(ctx); s != nil {
 		return s.RequestID
+	}
+	return ""
+}
+
+func ExecutionIDFrom(ctx context.Context) string {
+	if s := ScopeFrom(ctx); s != nil {
+		return s.ExecutionID
 	}
 	return ""
 }
@@ -283,6 +290,13 @@ func TraceIDFrom(ctx context.Context) string {
 	return ""
 }
 
+func SpanIDFrom(ctx context.Context) string {
+	if s := ScopeFrom(ctx); s != nil {
+		return s.SpanID
+	}
+	return ""
+}
+
 func ClientIPFrom(ctx context.Context) string {
 	if s := ScopeFrom(ctx); s != nil {
 		return s.ClientIP
@@ -303,8 +317,6 @@ func PermissionsFrom(ctx context.Context) []string {
 	}
 	return nil
 }
-
-// ── Guards ───────────────────────────────────────────────────────────────────
 
 func HasRole(ctx context.Context, required string) bool {
 	if s := ScopeFrom(ctx); s != nil {
@@ -352,8 +364,6 @@ func HasFeature(ctx context.Context, feature string) bool {
 	return false
 }
 
-// ── Detachment ───────────────────────────────────────────────────────────────
-
 func CloneForAsync(ctx context.Context) context.Context {
 	if ctx == nil {
 		return context.Background()
@@ -364,13 +374,15 @@ func CloneForAsync(ctx context.Context) context.Context {
 	}
 
 	clone := &RequestScope{
-		RequestID: s.RequestID,
-		Endpoint:  s.Endpoint,
-		UserID:    s.UserID,
-		TenantID:  s.TenantID,
-		TraceID:   s.TraceID,
-		Role:      s.Role,
-		ClientIP:  s.ClientIP,
+		RequestID:   s.RequestID,
+		ExecutionID: s.ExecutionID,
+		TraceID:     s.TraceID,
+		SpanID:      s.SpanID,
+		Endpoint:    s.Endpoint,
+		UserID:      s.UserID,
+		TenantID:    s.TenantID,
+		Role:        s.Role,
+		ClientIP:    s.ClientIP,
 	}
 
 	if s.Roles != nil {

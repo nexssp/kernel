@@ -1,37 +1,28 @@
 package action
 
-import "context"
+import (
+	"context"
 
-type traceContextKey struct{}
+	"github.com/nexssp/kernel/xctx"
+)
 
-type traceContext struct {
-	traceID string
-	spanID  string
-}
-
-// WithTraceContext attaches optional distributed-trace identifiers to ctx.
-// The transport or tracing adapter owns ID generation and propagation.
 func WithTraceContext(ctx context.Context, traceID, spanID string) context.Context {
 	if traceID == "" && spanID == "" {
 		return ctx
 	}
-	return context.WithValue(ctx, traceContextKey{}, traceContext{traceID: traceID, spanID: spanID})
+	if traceID != "" {
+		ctx = xctx.WithTraceID(ctx, traceID)
+	}
+	if spanID != "" {
+		ctx = xctx.WithSpanID(ctx, spanID)
+	}
+	return ctx
 }
 
-// TraceIDFrom returns the optional distributed trace ID from ctx.
 func TraceIDFrom(ctx context.Context) string {
-	if ctx == nil {
-		return ""
-	}
-	value, _ := ctx.Value(traceContextKey{}).(traceContext)
-	return value.traceID
+	return xctx.TraceIDFrom(ctx)
 }
 
-// SpanIDFrom returns the optional current span ID from ctx.
 func SpanIDFrom(ctx context.Context) string {
-	if ctx == nil {
-		return ""
-	}
-	value, _ := ctx.Value(traceContextKey{}).(traceContext)
-	return value.spanID
+	return xctx.SpanIDFrom(ctx)
 }
