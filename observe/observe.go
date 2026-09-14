@@ -1,4 +1,3 @@
-// Package observe provides optional, vendor-neutral action lifecycle observation for Nexss Kernel.
 package observe
 
 import (
@@ -6,9 +5,9 @@ import (
 	"time"
 
 	"github.com/nexssp/kernel/action"
+	"github.com/nexssp/kernel/xctx"
 )
 
-// Lifecycle kind constants.
 const (
 	KindExecuted     = "executed"
 	KindError        = "error"
@@ -21,15 +20,17 @@ const (
 	KindDeduplicated = "deduplicated"
 )
 
-// Event is a structured observation emitted during an action execution lifecycle.
 type Event struct {
 	Time        time.Time
 	Duration    time.Duration
 	Kind        string
 	Action      string
+	RequestID   string
 	ExecutionID string
 	TraceID     string
 	SpanID      string
+	TenantID    string
+	UserID      string
 	Request     any
 	Response    any
 	Error       error
@@ -39,13 +40,25 @@ type Event struct {
 
 type observationStartKey struct{}
 
-// Sink receives lifecycle events. Implementations must be safe for concurrent use.
 type Sink interface {
 	Emit(context.Context, Event)
 }
 
-// Hook constructs an action.AnyHook that forwards selected lifecycle events to sink.
-// Passing a nil sink returns an empty action.AnyHook{}, ensuring zero overhead when disabled.
+func baseEvent(ctx context.Context, kind string, meta *action.Meta) Event {
+	return Event{
+		Time:        time.Now(),
+		Duration:    durationSince(ctx),
+		Kind:        kind,
+		Action:      actionName(meta),
+		RequestID:   xctx.RequestIDFrom(ctx),
+		ExecutionID: xctx.ExecutionIDFrom(ctx),
+		TraceID:     xctx.TraceIDFrom(ctx),
+		SpanID:      xctx.SpanIDFrom(ctx),
+		TenantID:    xctx.TenantIDFrom(ctx),
+		UserID:      xctx.UserIDFrom(ctx),
+	}
+}
+
 func Hook(sink Sink) action.AnyHook {
 	if sink == nil {
 		return action.AnyHook{}
@@ -55,31 +68,55 @@ func Hook(sink Sink) action.AnyHook {
 			return context.WithValue(ctx, observationStartKey{}, time.Now()), nil
 		},
 		OnExecuted: func(ctx context.Context, req, res any, _ error, meta *action.Meta) {
-			sink.Emit(ctx, Event{Time: time.Now(), Duration: durationSince(ctx), Kind: KindExecuted, Action: actionName(meta), ExecutionID: action.ExecutionIDFrom(ctx), TraceID: action.TraceIDFrom(ctx), SpanID: action.SpanIDFrom(ctx), Request: req, Response: res})
+			ev := baseEvent(ctx, KindExecuted, meta)
+			ev.Request = req
+			ev.Response = res
+			sink.Emit(ctx, ev)
 		},
 		OnError: func(ctx context.Context, req any, err error, meta *action.Meta) {
-			sink.Emit(ctx, Event{Time: time.Now(), Duration: durationSince(ctx), Kind: KindError, Action: actionName(meta), ExecutionID: action.ExecutionIDFrom(ctx), TraceID: action.TraceIDFrom(ctx), SpanID: action.SpanIDFrom(ctx), Request: req, Error: err})
+			ev := baseEvent(ctx, KindError, meta)
+			ev.Request = req
+			ev.Error = err
+			sink.Emit(ctx, ev)
 		},
 		OnRetry: func(ctx context.Context, req any, attempt int, err error, meta *action.Meta) {
-			sink.Emit(ctx, Event{Time: time.Now(), Duration: durationSince(ctx), Kind: KindRetry, Action: actionName(meta), ExecutionID: action.ExecutionIDFrom(ctx), TraceID: action.TraceIDFrom(ctx), SpanID: action.SpanIDFrom(ctx), Request: req, Error: err, Attempt: attempt})
+			ev := baseEvent(ctx, KindRetry, meta)
+			ev.Request = req
+			ev.Error = err
+			ev.Attempt = attempt
+			sink.Emit(ctx, ev)
 		},
 		OnCacheHit: func(ctx context.Context, req, res any, meta *action.Meta) {
-			sink.Emit(ctx, Event{Time: time.Now(), Duration: durationSince(ctx), Kind: KindCacheHit, Action: actionName(meta), ExecutionID: action.ExecutionIDFrom(ctx), TraceID: action.TraceIDFrom(ctx), SpanID: action.SpanIDFrom(ctx), Request: req, Response: res})
+			ev := baseEvent(ctx, KindCacheHit, meta)
+			ev.Request = req
+			ev.Response = res
+			sink.Emit(ctx, ev)
 		},
 		OnCacheMiss: func(ctx context.Context, req any, meta *action.Meta) {
-			sink.Emit(ctx, Event{Time: time.Now(), Duration: durationSince(ctx), Kind: KindCacheMiss, Action: actionName(meta), ExecutionID: action.ExecutionIDFrom(ctx), TraceID: action.TraceIDFrom(ctx), SpanID: action.SpanIDFrom(ctx), Request: req})
+			ev := baseEvent(ctx, KindCacheMiss, meta)
+			ev.Request = req
+			sink.Emit(ctx, ev)
 		},
 		OnCancel: func(ctx context.Context, req any, meta *action.Meta) {
-			sink.Emit(ctx, Event{Time: time.Now(), Duration: durationSince(ctx), Kind: KindCanceled, Action: actionName(meta), ExecutionID: action.ExecutionIDFrom(ctx), TraceID: action.TraceIDFrom(ctx), SpanID: action.SpanIDFrom(ctx), Request: req})
+			ev := baseEvent(ctx, KindCanceled, meta)
+			ev.Request = req
+			sink.Emit(ctx, ev)
 		},
 		OnPanic: func(ctx context.Context, req, recovered any, meta *action.Meta) {
-			sink.Emit(ctx, Event{Time: time.Now(), Duration: durationSince(ctx), Kind: KindPanic, Action: actionName(meta), ExecutionID: action.ExecutionIDFrom(ctx), TraceID: action.TraceIDFrom(ctx), SpanID: action.SpanIDFrom(ctx), Request: req, Recovered: recovered})
+			ev := baseEvent(ctx, KindPanic, meta)
+			ev.Request = req
+			ev.Recovered = recovered
+			sink.Emit(ctx, ev)
 		},
 		OnCoalesced: func(ctx context.Context, req any, meta *action.Meta) {
-			sink.Emit(ctx, Event{Time: time.Now(), Duration: durationSince(ctx), Kind: KindCoalesced, Action: actionName(meta), ExecutionID: action.ExecutionIDFrom(ctx), TraceID: action.TraceIDFrom(ctx), SpanID: action.SpanIDFrom(ctx), Request: req})
+			ev := baseEvent(ctx, KindCoalesced, meta)
+			ev.Request = req
+			sink.Emit(ctx, ev)
 		},
 		OnDeduplicated: func(ctx context.Context, req any, meta *action.Meta) {
-			sink.Emit(ctx, Event{Time: time.Now(), Duration: durationSince(ctx), Kind: KindDeduplicated, Action: actionName(meta), ExecutionID: action.ExecutionIDFrom(ctx), TraceID: action.TraceIDFrom(ctx), SpanID: action.SpanIDFrom(ctx), Request: req})
+			ev := baseEvent(ctx, KindDeduplicated, meta)
+			ev.Request = req
+			sink.Emit(ctx, ev)
 		},
 	}
 }

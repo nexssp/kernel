@@ -19,6 +19,7 @@ import (
 
 	"github.com/nexssp/kernel/action"
 	"github.com/nexssp/kernel/observe"
+	"github.com/nexssp/kernel/xctx"
 	"github.com/nexssp/kernel/xerr"
 )
 
@@ -33,8 +34,8 @@ func (s *fanoutSink) Emit(ctx context.Context, event observe.Event) {
 }
 
 func main() {
-	ctx := action.WithTraceContext(
-		action.WithExecutionID(context.Background(), "exec-example-0001"),
+	ctx := xctx.WithTraceContext(
+		xctx.WithExecutionID(context.Background(), "exec-example-0001"),
 		"trace-4bf92f3577b34da6a3ce929d0e0e4736",
 		"span-00f067aa0ba902b7",
 	)
@@ -56,7 +57,6 @@ func main() {
 	}}
 	hook := observe.Hook(observationSink)
 
-	// 1. Retry and successful execution.
 	var attempts atomic.Int32
 	payment := action.New("payment.process", func(_ context.Context, amount float64) (string, error) {
 		if amount <= 0 {
@@ -70,13 +70,11 @@ func main() {
 	defer payment.Close()
 	_, _ = payment.Do(ctx, 99.95)
 
-	// 2. Ordinary action error.
 	failed := action.New("payment.validate", func(context.Context, string) (string, error) {
 		return "", xerr.Validation("card number is invalid")
 	}).AnyHook(hook).Build()
 	_, _ = failed.Do(ctx, "bad-card")
 
-	// 3. Cache miss, execution, cache hit, and another miss.
 	findUser := action.New("user.find", func(_ context.Context, id string) (string, error) {
 		return "User_" + id, nil
 	}).Cache(time.Minute, func(id string) string { return id }).AnyHook(hook).Build()
@@ -85,7 +83,6 @@ func main() {
 		_, _ = findUser.Do(ctx, id)
 	}
 
-	// 4. Cancellation.
 	cancelAction := action.New("request.cancel", func(ctx context.Context, _ string) (string, error) {
 		return "", ctx.Err()
 	}).AnyHook(hook).Build()
@@ -93,14 +90,11 @@ func main() {
 	cancel()
 	_, _ = cancelAction.Do(cancelCtx, "canceled-request")
 
-	// 5. Panic recovery. The action emits both panic and final error events.
 	panicAction := action.New("worker.panic", func(context.Context, string) (string, error) {
 		panic("simulated worker panic")
 	}).AnyHook(hook).Build()
 	_, _ = panicAction.Do(ctx, "panic-request")
 
-	// 6. Concurrent deduplication. Exactly one handler runs; the waiter emits
-	// deduplicated.
 	dedupEntered := make(chan struct{})
 	dedupRelease := make(chan struct{})
 	dedupSecondSeen := make(chan struct{})
@@ -126,7 +120,6 @@ func main() {
 	close(dedupRelease)
 	dedupWG.Wait()
 
-	// 7. Concurrent coalescing. The shared waiter emits coalesced.
 	coalesceEntered := make(chan struct{})
 	coalesceRelease := make(chan struct{})
 	coalesceSecondSeen := make(chan struct{})

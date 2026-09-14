@@ -13,12 +13,10 @@ import (
 	"time"
 )
 
-// PrometheusSink aggregates lifecycle counters and formats text exposition output.
 type PrometheusSink struct {
 	metrics *MetricsSink
 }
 
-// NewPrometheusSink creates a Prometheus text exporter sink.
 func NewPrometheusSink() *PrometheusSink {
 	return &PrometheusSink{metrics: NewMetricsSink()}
 }
@@ -30,7 +28,6 @@ func (s *PrometheusSink) Emit(ctx context.Context, event Event) {
 	s.metrics.Emit(ctx, event)
 }
 
-// Snapshot returns a copy of current metric counters.
 func (s *PrometheusSink) Snapshot() map[MetricKey]uint64 {
 	if s == nil || s.metrics == nil {
 		return nil
@@ -38,7 +35,6 @@ func (s *PrometheusSink) Snapshot() map[MetricKey]uint64 {
 	return s.metrics.Snapshot()
 }
 
-// WritePrometheus writes deterministic Prometheus text exposition lines to w.
 func (s *PrometheusSink) WritePrometheus(w io.Writer) error {
 	if s == nil || w == nil {
 		return fmt.Errorf("observe: prometheus sink and writer are required")
@@ -60,14 +56,12 @@ func (s *PrometheusSink) WritePrometheus(w io.Writer) error {
 	return nil
 }
 
-// JSONLSink emits bounded structured lifecycle records to w.
 type JSONLSink struct {
 	mu       sync.Mutex
 	writer   io.Writer
 	maxBytes int
 }
 
-// NewJSONLSink creates a synchronized JSONL sink. Non-positive maxBytes defaults to 4096.
 func NewJSONLSink(writer io.Writer, maxBytes int) *JSONLSink {
 	if maxBytes <= 0 {
 		maxBytes = 4096
@@ -84,9 +78,12 @@ func (s *JSONLSink) Emit(_ context.Context, event Event) {
 		Duration:     event.Duration.String(),
 		Kind:         event.Kind,
 		Action:       event.Action,
+		RequestID:    event.RequestID,
 		ExecutionID:  event.ExecutionID,
 		TraceID:      event.TraceID,
 		SpanID:       event.SpanID,
+		TenantID:     event.TenantID,
+		UserID:       event.UserID,
 		Attempt:      event.Attempt,
 		RequestType:  safeType(event.Request),
 		ResponseType: safeType(event.Response),
@@ -107,9 +104,12 @@ type jsonRecord struct {
 	Duration     string    `json:"duration,omitempty"`
 	Kind         string    `json:"kind"`
 	Action       string    `json:"action"`
+	RequestID    string    `json:"request_id,omitempty"`
 	ExecutionID  string    `json:"execution_id,omitempty"`
 	TraceID      string    `json:"trace_id,omitempty"`
 	SpanID       string    `json:"span_id,omitempty"`
+	TenantID     string    `json:"tenant_id,omitempty"`
+	UserID       string    `json:"user_id,omitempty"`
 	Attempt      int       `json:"attempt,omitempty"`
 	RequestType  string    `json:"request_type,omitempty"`
 	ResponseType string    `json:"response_type,omitempty"`

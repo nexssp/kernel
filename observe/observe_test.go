@@ -8,6 +8,7 @@ import (
 
 	"github.com/nexssp/kernel/action"
 	"github.com/nexssp/kernel/observe"
+	"github.com/nexssp/kernel/xctx"
 )
 
 type eventCollector struct {
@@ -89,5 +90,76 @@ func TestHook_MissingMetaUsesEmptyAction(t *testing.T) {
 	events := collector.snapshot()
 	if len(events) != 1 || events[0].Action != "" {
 		t.Fatalf("expected one event with empty action, got %+v", events)
+	}
+}
+
+func TestEventPropagation(t *testing.T) {
+	memSink := observe.NewMemorySink(10)
+	hook := observe.Hook(memSink)
+
+	act := action.New("test.action", func(ctx context.Context, req string) (string, error) {
+		return "ok:" + req, nil
+	}).AnyHook(hook).Build()
+
+	ctx, _, cleanup := xctx.NewScope(context.Background())
+	defer cleanup()
+
+	ctx = xctx.WithRequestID(ctx, "req-100")
+	ctx = xctx.WithExecutionID(ctx, "exec-200")
+	ctx = xctx.WithTraceID(ctx, "trace-300")
+	ctx = xctx.WithSpanID(ctx, "span-400")
+	ctx = xctx.WithTenantID(ctx, "tenant-500")
+	ctx = xctx.WithUserID(ctx, "user-600")
+
+	res, err := act.Do(ctx, "hello")
+	if err != nil || res != "ok:hello" {
+		t.Fatalf("action failed: %v", err)
+	}
+
+	events := memSink.Events()
+	if len(events) == 0 {
+		t.Fatal("expected at least 1 observation event")
+	}
+
+	ev := events[len(events)-1]
+	if ev.RequestID != "req-100" {
+		t.Errorf("want req-100, got %q", ev.RequestID)
+	}
+	if ev.ExecutionID != "exec-200" {
+		t.Errorf("want exec-200, got %q", ev.ExecutionID)
+	}
+	if ev.TraceID != "trace-300" {
+		t.Errorf("want trace-300, got %q", ev.TraceID)
+	}
+	if ev.SpanID != "span-400" {
+		t.Errorf("want span-400, got %q", ev.SpanID)
+	}
+	if ev.TenantID != "tenant-500" {
+		t.Errorf("want tenant-500, got %q", ev.TenantID)
+	}
+	if ev.UserID != "user-600" {
+		t.Errorf("want user-600, got %q", ev.UserID)
+	}
+}
+
+func BenchmarkObserveHook(b *testing.B) {
+	memSink := observe.NewMemorySink(b.N)
+	hook := observe.Hook(memSink)
+
+	act := action.New("bench.action", func(ctx context.Context, req int) (int, error) {
+		return req * 2, nil
+	}).AnyHook(hook).Build()
+
+	ctx, _, cleanup := xctx.NewScope(context.Background())
+	defer cleanup()
+
+	ctx = xctx.WithExecutionID(ctx, "exec-bench")
+	ctx = xctx.WithTraceID(ctx, "trace-bench")
+
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		_, _ = act.Do(ctx, i)
 	}
 }

@@ -299,3 +299,59 @@ func TestTypedKey_MustFromPanic(t *testing.T) {
 
 	_ = key.MustFrom(context.Background())
 }
+
+func TestRequestScopeAllFields(t *testing.T) {
+	ctx, scope, cleanup := xctx.NewScope(context.Background())
+	defer cleanup()
+
+	ctx = xctx.WithRequestID(ctx, "r1")
+	ctx = xctx.WithExecutionID(ctx, "e1")
+	ctx = xctx.WithTraceID(ctx, "t1")
+	ctx = xctx.WithSpanID(ctx, "s1")
+	ctx = xctx.WithTenantID(ctx, "ten1")
+	ctx = xctx.WithUserID(ctx, "u1")
+
+	if xctx.RequestIDFrom(ctx) != "r1" || scope.RequestID != "r1" {
+		t.Fail()
+	}
+	if xctx.ExecutionIDFrom(ctx) != "e1" || scope.ExecutionID != "e1" {
+		t.Fail()
+	}
+	if xctx.TraceIDFrom(ctx) != "t1" || scope.TraceID != "t1" {
+		t.Fail()
+	}
+	if xctx.SpanIDFrom(ctx) != "s1" || scope.SpanID != "s1" {
+		t.Fail()
+	}
+	if xctx.TenantIDFrom(ctx) != "ten1" || scope.TenantID != "ten1" {
+		t.Fail()
+	}
+	if xctx.UserIDFrom(ctx) != "u1" || scope.UserID != "u1" {
+		t.Fail()
+	}
+
+	// Test async cloning
+	asyncCtx := xctx.CloneForAsync(ctx)
+	if xctx.ExecutionIDFrom(asyncCtx) != "e1" {
+		t.Errorf("expected execution ID preserved across async boundary")
+	}
+	if xctx.SpanIDFrom(asyncCtx) != "s1" {
+		t.Errorf("expected span ID preserved across async boundary")
+	}
+}
+
+func BenchmarkScopeReads(b *testing.B) {
+	ctx, _, cleanup := xctx.NewScope(context.Background())
+	defer cleanup()
+
+	ctx = xctx.WithExecutionID(ctx, "exec-benchmark")
+	ctx = xctx.WithTraceID(ctx, "trace-benchmark")
+
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		_ = xctx.ExecutionIDFrom(ctx)
+		_ = xctx.TraceIDFrom(ctx)
+	}
+}

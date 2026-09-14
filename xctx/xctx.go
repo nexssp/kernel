@@ -179,26 +179,52 @@ func toStringSlice(v any) []string {
 }
 
 func WithRequestID(ctx context.Context, id string) context.Context {
+	if id == "" {
+		return ctx
+	}
 	ctx, s := ensureScope(ctx)
 	s.RequestID = id
 	return ctx
 }
 
 func WithExecutionID(ctx context.Context, id string) context.Context {
+	if id == "" {
+		return ctx
+	}
 	ctx, s := ensureScope(ctx)
 	s.ExecutionID = id
 	return ctx
 }
 
 func WithTraceID(ctx context.Context, id string) context.Context {
+	if id == "" {
+		return ctx
+	}
 	ctx, s := ensureScope(ctx)
 	s.TraceID = id
 	return ctx
 }
 
 func WithSpanID(ctx context.Context, id string) context.Context {
+	if id == "" {
+		return ctx
+	}
 	ctx, s := ensureScope(ctx)
 	s.SpanID = id
+	return ctx
+}
+
+func WithTraceContext(ctx context.Context, traceID, spanID string) context.Context {
+	if traceID == "" && spanID == "" {
+		return ctx
+	}
+	ctx, s := ensureScope(ctx)
+	if traceID != "" {
+		s.TraceID = traceID
+	}
+	if spanID != "" {
+		s.SpanID = spanID
+	}
 	return ctx
 }
 
