@@ -4,8 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"slices"
 )
+
+var DefaultTextFields = []string{"content", "text", "output", "result", "message"}
 
 // Dynamic lifts any AnyAction into a *Builder[any, any].
 // It preserves all metadata, bindings, and hooks from the wrapped action.
@@ -33,60 +36,86 @@ func Dynamic(act AnyAction) *Builder[any, any] {
 	return b
 }
 
-// Coerce converts input into T using fast-path type assertions before falling back to JSON.
+// Coerce converts input into T.
 func Coerce[T any](input any) (T, error) {
-	var zero T
-	if input == nil {
-		return zero, nil
+	var target T
+	err := Assign(&target, input)
+	return target, err
+}
+
+// Assign writes 'source' into the pointer 'target' using zero-allocation fast paths
+// before falling back to JSON serialization. 'target' MUST be a non-nil pointer.
+func Assign(target any, source any) error {
+	if source == nil || target == nil {
+		return nil
 	}
 
-	// 1. Direct type match (Fastest: 1 CPU cycle, 0 allocs)
-	if val, ok := input.(T); ok {
-		return val, nil
+	targetVal := reflect.ValueOf(target)
+	if targetVal.Kind() != reflect.Pointer || targetVal.IsNil() {
+		return fmt.Errorf("coerce: target must be a non-nil pointer, got %T", target)
+	}
+
+	sourceVal := reflect.ValueOf(source)
+
+	// 1. O(1) Fast path: Direct assignability
+	if sourceVal.Type().AssignableTo(targetVal.Elem().Type()) {
+		targetVal.Elem().Set(sourceVal)
+		return nil
+	}
+	if sourceVal.Kind() == reflect.Pointer && !sourceVal.IsNil() && sourceVal.Elem().Type().AssignableTo(targetVal.Elem().Type()) {
+		targetVal.Elem().Set(sourceVal.Elem())
+		return nil
 	}
 
 	// 2. String conversion fast-paths (common in AI prompts/pipes)
-	var target T
-	switch any(target).(type) {
-	case string:
-		switch v := input.(type) {
-		case fmt.Stringer:
-			return any(v.String()).(T), nil
-		case []byte:
-			return any(string(v)).(T), nil
-		case error:
-			return any(v.Error()).(T), nil
-		}
-	case []byte:
-		switch v := input.(type) {
+	if targetVal.Elem().Kind() == reflect.String {
+		switch v := source.(type) {
 		case string:
-			return any([]byte(v)).(T), nil
+			targetVal.Elem().SetString(v)
+			return nil
 		case fmt.Stringer:
-			return any([]byte(v.String())).(T), nil
+			targetVal.Elem().SetString(v.String())
+			return nil
+		case []byte:
+			targetVal.Elem().SetString(string(v))
+			return nil
+		case error:
+			targetVal.Elem().SetString(v.Error())
+			return nil
 		}
-	}
 
-	// 3. Map extraction: If target is string and input is a map containing common text keys
-	if m, ok := input.(map[string]any); ok {
-		if _, targetIsString := any(target).(string); targetIsString {
-			for _, key := range []string{"content", "text", "output", "result", "message"} {
+		// Map text-key extraction fallback
+		if m, ok := source.(map[string]any); ok {
+			for _, key := range DefaultTextFields {
 				if val, found := m[key]; found {
 					if s, isStr := val.(string); isStr {
-						return any(s).(T), nil
+						targetVal.Elem().SetString(s)
+						return nil
 					}
 				}
 			}
 		}
 	}
 
-	// 4. Fallback structural conversion only when bridging completely different structs
-	data, err := json.Marshal(input)
+	// 3. Byte slice fast-paths
+	if targetVal.Elem().Type() == reflect.TypeOf([]byte{}) {
+		switch v := source.(type) {
+		case string:
+			targetVal.Elem().SetBytes([]byte(v))
+			return nil
+		case fmt.Stringer:
+			targetVal.Elem().SetBytes([]byte(v.String()))
+			return nil
+		}
+	}
+
+	// 4. Fallback structural conversion
+	data, err := json.Marshal(source)
 	if err != nil {
-		return zero, fmt.Errorf("coerce: marshal %T: %w", input, err)
+		return fmt.Errorf("coerce: marshal %T: %w", source, err)
 	}
-	var res T
-	if err := json.Unmarshal(data, &res); err != nil {
-		return zero, fmt.Errorf("coerce: unmarshal into %T: %w", zero, err)
+	if err := json.Unmarshal(data, target); err != nil {
+		return fmt.Errorf("coerce: unmarshal into %T: %w", target, err)
 	}
-	return res, nil
+	return nil
 }
