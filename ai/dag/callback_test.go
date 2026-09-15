@@ -197,6 +197,26 @@ func TestLayerCallback_ConsumedByOutermostOnly(t *testing.T) {
 	}
 }
 
+func TestSuspend_MatchesErrSuspendedAndCarriesPayload(t *testing.T) {
+	err := Suspend("awaiting approval", map[string]any{"amount": 12000})
+
+	if !errors.Is(err, ErrSuspended) {
+		t.Fatal("errors.Is(err, ErrSuspended) must be true")
+	}
+
+	var se *SuspendError
+	if !errors.As(err, &se) {
+		t.Fatal("errors.As must resolve to *SuspendError")
+	}
+	if se.Reason != "awaiting approval" {
+		t.Fatalf("Reason = %q", se.Reason)
+	}
+	payload, ok := se.Payload.(map[string]any)
+	if !ok || payload["amount"] != 12000 {
+		t.Fatalf("Payload lost: %+v", se.Payload)
+	}
+}
+
 func TestLayerCallback_PrePopulatedStateSkipsNode(t *testing.T) {
 	g := mustGraph(t, func(b *Builder) *Builder {
 		return b.

@@ -19,6 +19,21 @@ import (
 // Returning this error preserves partial state so it can be saved to persistent storage.
 var ErrSuspended = errors.New("graph: execution suspended for human intervention")
 
+// SuspendError carries the reason and payload for a graceful pause.
+// Reason is human-readable; Payload is what the approver needs to see.
+type SuspendError struct {
+	Reason  string
+	Payload any
+}
+
+func (e *SuspendError) Error() string        { return "graph suspended: " + e.Reason }
+func (e *SuspendError) Is(target error) bool { return target == ErrSuspended || target == e }
+
+// Suspend pauses DAG execution gracefully. The returned error matches ErrSuspended.
+func Suspend(reason string, payload any) error {
+	return &SuspendError{Reason: reason, Payload: payload}
+}
+
 // ExecutionError reports that a layer stopped before every node in it
 // succeeded. State carries the partial result: every node whose output
 // is present already ran, so a caller that persists State and later
