@@ -79,6 +79,11 @@ func GetNodeOutput[T any](state *State, nodeID string) (T, error) {
 	}
 	typed, ok := value.(T)
 	if !ok {
+		// Resume from checkpoint: values arrive as JSON-decoded maps.
+		coerced, err := action.Coerce[T](value)
+		if err == nil {
+			return coerced, nil
+		}
 		return zero, xerr.Validation(fmt.Sprintf("graph: node %q output has type %T, expected %T", nodeID, value, zero))
 	}
 	return typed, nil
