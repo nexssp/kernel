@@ -1,4 +1,3 @@
-// path: nexssp/kernel/action/builder_dsl.go
 package action
 
 import (

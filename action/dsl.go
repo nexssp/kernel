@@ -1,4 +1,3 @@
-// path: nexssp/kernel/action/dsl.go
 package action
 
 import "time"
