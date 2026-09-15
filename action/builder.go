@@ -191,6 +191,14 @@ func (b *Builder[Req, Res]) Build() *BuiltAction[Req, Res] {
 	return act
 }
 
+// Example attaches a real, runnable request payload to the action.
+// testkit, the flow inspector, and LLM tool specs use it to build
+// smoke tests, CLI hints, and function-call examples without guessing.
+func (b *Builder[Req, Res]) Example(v Req) *Builder[Req, Res] {
+	b.meta.Example = v
+	return b
+}
+
 func (b *Builder[Req, Res]) LogSlowWhen(d time.Duration) *Builder[Req, Res] {
 	b.meta.LogSlowThreshold = d
 	if d > 0 {

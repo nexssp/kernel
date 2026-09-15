@@ -13,6 +13,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/nexssp/kernel/xctx"
 	"github.com/nexssp/kernel/xerr"
 )
 
@@ -115,9 +116,17 @@ func (a *BuiltAction[Req, Res]) Do(ctx context.Context, req Req) (res Res, err e
 
 	var state *execState
 	finalCtx := ctx
+
+	// Pin the top-level execution ID the first time an action runs
+	// under it. Subsequent sub-actions see the same root regardless
+	// of how many ExecutionID changes happen below.
+	if s := xctx.ScopeFrom(finalCtx); s != nil && s.ExecutionID != "" && s.RootExecutionID == "" {
+		finalCtx = xctx.WithRootExecutionID(finalCtx, s.ExecutionID)
+	}
+
 	if needExecState {
 		state = &execState{}
-		finalCtx = context.WithValue(ctx, execStateKey{}, state)
+		finalCtx = context.WithValue(finalCtx, execStateKey{}, state)
 	}
 
 	defer func() {

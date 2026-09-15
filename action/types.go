@@ -84,6 +84,7 @@ type Meta struct {
 	Idempotency      IdempotencyConfig `json:"idempotency"`
 	SuccessStatus    int               `json:"success_status,omitempty"`
 	LogSlowThreshold time.Duration     `json:"log_slow_threshold,omitempty"`
+	Example          any               `json:"example,omitempty"`
 
 	RequiredRoles       []string `json:"required_roles,omitempty"`
 	RequiredPermissions []string `json:"required_permissions,omitempty"`

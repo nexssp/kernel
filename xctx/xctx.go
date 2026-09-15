@@ -44,24 +44,26 @@ func (k Key[T]) MustFrom(ctx context.Context) T {
 }
 
 type RequestScope struct {
-	RequestID   string
-	ExecutionID string
-	TraceID     string
-	SpanID      string
-	Endpoint    string
-	UserID      string
-	TenantID    string
-	Role        string
-	ClientIP    string
-	Roles       []string
-	Permissions []string
-	Features    []string
-	TraceEvents []string
+	RequestID       string
+	ExecutionID     string
+	RootExecutionID string
+	TraceID         string
+	SpanID          string
+	Endpoint        string
+	UserID          string
+	TenantID        string
+	Role            string
+	ClientIP        string
+	Roles           []string
+	Permissions     []string
+	Features        []string
+	TraceEvents     []string
 }
 
 func (s *RequestScope) Reset() {
 	s.RequestID = ""
 	s.ExecutionID = ""
+	s.RootExecutionID = ""
 	s.TraceID = ""
 	s.SpanID = ""
 	s.Endpoint = ""
@@ -288,6 +290,28 @@ func ExecutionIDFrom(ctx context.Context) string {
 	return ""
 }
 
+// WithRootExecutionID records the top-level execution this context
+// ultimately belongs to. Sub-actions may set their own ExecutionID,
+// but the root stays stable so cost attribution and tracing can group
+// every event by the run that started it.
+func WithRootExecutionID(ctx context.Context, id string) context.Context {
+	if id == "" {
+		return ctx
+	}
+	ctx, s := ensureScope(ctx)
+	s.RootExecutionID = id
+	return ctx
+}
+
+// RootExecutionIDFrom returns the top-level execution ID set by
+// WithRootExecutionID, or "" when none was set.
+func RootExecutionIDFrom(ctx context.Context) string {
+	if s := ScopeFrom(ctx); s != nil {
+		return s.RootExecutionID
+	}
+	return ""
+}
+
 func TenantIDFrom(ctx context.Context) string {
 	if s := ScopeFrom(ctx); s != nil {
 		return s.TenantID
@@ -400,15 +424,16 @@ func CloneForAsync(ctx context.Context) context.Context {
 	}
 
 	clone := &RequestScope{
-		RequestID:   s.RequestID,
-		ExecutionID: s.ExecutionID,
-		TraceID:     s.TraceID,
-		SpanID:      s.SpanID,
-		Endpoint:    s.Endpoint,
-		UserID:      s.UserID,
-		TenantID:    s.TenantID,
-		Role:        s.Role,
-		ClientIP:    s.ClientIP,
+		RequestID:       s.RequestID,
+		ExecutionID:     s.ExecutionID,
+		RootExecutionID: s.RootExecutionID,
+		TraceID:         s.TraceID,
+		SpanID:          s.SpanID,
+		Endpoint:        s.Endpoint,
+		UserID:          s.UserID,
+		TenantID:        s.TenantID,
+		Role:            s.Role,
+		ClientIP:        s.ClientIP,
 	}
 
 	if s.Roles != nil {

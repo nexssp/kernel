@@ -19,6 +19,30 @@ import (
 // Returning this error preserves partial state so it can be saved to persistent storage.
 var ErrSuspended = errors.New("graph: execution suspended for human intervention")
 
+// ExecutionError reports that a layer stopped before every node in it
+// succeeded. State carries the partial result: every node whose output
+// is present already ran, so a caller that persists State and later
+// re-executes with it will re-run only the missing nodes.
+//
+// The caller owns State and must call Release on it, exactly as with a
+// successful return.
+type ExecutionError struct {
+	Layer      int
+	FailedNode string
+	Cause      error
+	State      *State
+	Completed  []string
+}
+
+func (e *ExecutionError) Error() string {
+	if e.FailedNode == "" {
+		return fmt.Sprintf("graph execution failed at layer %d: %v", e.Layer, e.Cause)
+	}
+	return fmt.Sprintf("graph execution failed at node %q (layer %d): %v", e.FailedNode, e.Layer, e.Cause)
+}
+
+func (e *ExecutionError) Unwrap() error { return e.Cause }
+
 // Value holds a key-value output produced by a node.
 type Value struct {
 	Key string
@@ -128,8 +152,6 @@ func (s *State) Data() map[string]any {
 	maps.Copy(out, s.data)
 	return out
 }
-
-// ── Node & Execution Types ───────────────────────────────────────────────────
 
 // NodeContext provides execution context to a DAG node.
 type NodeContext struct {
@@ -281,8 +303,24 @@ func (b *Builder) Compile() (*DAG, error) {
 
 // Execute runs DAG layers sequentially, executing nodes in each layer concurrently.
 // Supports HIL resumption: nodes whose output key is already present in initialState are skipped.
+//
+// A LayerCallback may be attached to ctx with WithLayerCallback; when
+// present it is invoked after each layer with the state that already
+// includes that layer's outputs. A callback error aborts execution and
+// is returned wrapped in *ExecutionError, unless the callback returned
+// ErrSuspended, in which case the sentinel is preserved.
+//
+// On any error the returned state is non-nil and owns every node
+// output produced so far. The caller must Release it.
+//
+// The callback is consumed by the outermost DAG that sees it, so
+// nested DAGs never fire it twice.
 func (d *DAG) Execute(ctx context.Context, initialState *State) (*State, error) {
 	currentState := initialState.Clone()
+	onLayer := LayerCallbackFromCtx(ctx)
+	if onLayer != nil {
+		ctx = markCallbackConsumed(ctx)
+	}
 
 	for layerIdx, layer := range d.layers {
 		g, layerCtx := errgroup.WithContext(ctx)
@@ -292,7 +330,7 @@ func (d *DAG) Execute(ctx context.Context, initialState *State) (*State, error) 
 			idx := i
 			n := node
 
-			// ⚡ HIL RESUME: If node was already computed in a previous run, skip invocation
+			// HIL RESUME: If node was already computed in a previous run, skip invocation
 			if existingVal, ok := currentState.Get(n.OutputKey); ok {
 				layerResults[idx] = Value{
 					Key: n.OutputKey,
@@ -323,6 +361,11 @@ func (d *DAG) Execute(ctx context.Context, initialState *State) (*State, error) 
 				var err error
 				if nested, ok := n.Action.(*action.BuiltAction[*State, *State]); ok {
 					outVal, err = nested.Do(layerCtx, currentState)
+					if err != nil {
+						if st, isState := outVal.(*State); isState && st != nil {
+							st.Release()
+						}
+					}
 				} else {
 					outVal, err = n.Action.ExecuteDecoded(layerCtx, decoder)
 				}
@@ -332,7 +375,11 @@ func (d *DAG) Execute(ctx context.Context, initialState *State) (*State, error) 
 					if errors.Is(err, ErrSuspended) {
 						return err
 					}
-					return xerr.Internal(fmt.Sprintf("graph execution failed at node %q (layer %d)", n.ID, layerIdx), err)
+					return &ExecutionError{
+						Layer:      layerIdx,
+						FailedNode: n.ID,
+						Cause:      err,
+					}
 				}
 
 				layerResults[idx] = Value{
@@ -344,18 +391,27 @@ func (d *DAG) Execute(ctx context.Context, initialState *State) (*State, error) 
 		}
 
 		if err := g.Wait(); err != nil {
-			// ⚡ HIL SUSPENSION: Preserve partial state so it can be saved to persistent storage
-			if errors.Is(err, ErrSuspended) {
-				for _, res := range layerResults {
-					if res.Key != "" && res.Val != nil {
-						currentState.data[res.Key] = res.Val
-					}
+			// HIL SUSPENSION: Preserve partial state so it can be saved to persistent storage
+			for _, res := range layerResults {
+				if res.Key != "" && res.Val != nil {
+					currentState.data[res.Key] = res.Val
 				}
+			}
+			if errors.Is(err, ErrSuspended) {
 				return currentState, err
 			}
 
-			currentState.Release()
-			return nil, err
+			var execErr *ExecutionError
+			if errors.As(err, &execErr) {
+				execErr.State = currentState
+				for i, res := range layerResults {
+					if res.Key != "" && res.Val != nil {
+						execErr.Completed = append(execErr.Completed, layer[i].ID)
+					}
+				}
+				return currentState, execErr
+			}
+			return currentState, err
 		}
 
 		nextState := currentState.Clone()
@@ -368,6 +424,20 @@ func (d *DAG) Execute(ctx context.Context, initialState *State) (*State, error) 
 		}
 
 		currentState = nextState
+
+		if onLayer != nil {
+			if cbErr := onLayer(ctx, layerIdx, currentState); cbErr != nil {
+				if errors.Is(cbErr, ErrSuspended) {
+					return currentState, cbErr
+				}
+				return currentState, &ExecutionError{
+					Layer:      layerIdx,
+					FailedNode: "",
+					Cause:      cbErr,
+					State:      currentState,
+				}
+			}
+		}
 	}
 
 	return currentState, nil

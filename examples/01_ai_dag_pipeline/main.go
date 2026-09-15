@@ -71,10 +71,12 @@ func main() {
 	defer initialState.Release()
 
 	finalState, err := graph.Execute(ctx, initialState)
+	if finalState != nil {
+		defer finalState.Release()
+	}
 	if err != nil {
 		panic(err)
 	}
-	defer finalState.Release()
 
 	// 6. Read typed output
 	result, err := dag.GetNodeOutput[string](finalState, "ai_node")

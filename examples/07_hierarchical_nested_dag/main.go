@@ -51,10 +51,12 @@ func main() {
 	defer state.Release()
 
 	finalState, err := masterDAG.Execute(ctx, state)
+	if finalState != nil {
+		defer finalState.Release()
+	}
 	if err != nil {
 		panic(err)
 	}
-	defer finalState.Release()
 
 	report, _ := dag.GetNodeOutput[string](finalState, "audit_node")
 	fmt.Println("🚀 Nested DAG Execution Result:")
