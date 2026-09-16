@@ -9,11 +9,6 @@ import (
 	"time"
 )
 
-type Plugin interface {
-	HookProvider
-	ActionProvider
-}
-
 type HookProvider interface {
 	GetAnyHooks() []AnyHook
 }
@@ -21,11 +16,6 @@ type HookProvider interface {
 // ActionProvider exposes the registered actions of an application.
 type ActionProvider interface {
 	Actions() []AnyAction
-}
-
-// Bootstrapper allows plugins/actions to hook into the boot lifecycle.
-type Bootstrapper interface {
-	OnBoot(app ActionProvider) error
 }
 
 type Fn[Req, Res any] func(context.Context, Req) (Res, error)
