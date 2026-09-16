@@ -5,22 +5,13 @@ import (
 	"sort"
 )
 
-// NewRegistry composes the given libraries into an immutable Registry.
-//
-// Rules:
-//  1. Every action registers under its Describe().Name.
-//  2. Nil actions are skipped; unnamed actions are rejected.
-//  3. Duplicates within one library are rejected.
-//  4. Duplicates across libraries are rejected unless the later library
-//     lists the name in Overrides.
-//  5. Hooks from every library apply, in library order, to every
-//     surviving action before return.
-//  6. A canonical name always wins over an alias; an earlier library
-//     wins over a later one for the same alias short name.
-//
-// Callers must not share the same AnyAction across two registries built
-// with different hooks: AddAnyHook mutates the action, so hooks would
-// accumulate across calls.
+// hookClaimer is implemented by *BuiltAction. It lets NewRegistry detect
+// that a caller is trying to apply library hooks to an action that already
+// received them in a previous registry, which would silently duplicate them.
+type hookClaimer interface {
+	claimRegistryHooks() bool
+}
+
 func NewRegistry(libs ...Library) (*Registry, error) {
 	if len(libs) == 0 {
 		return &Registry{byName: make(map[string]AnyAction)}, nil
@@ -82,6 +73,35 @@ func NewRegistry(libs ...Library) (*Registry, error) {
 		}
 	}
 
+	// Claim registry hooks once per action, before applying any. This prevents
+	// silently doubling hooks when the same action instance is passed to a
+	// second NewRegistry call — a documented but previously unenforced contract.
+	hasHooks := false
+	for i := range libs {
+		if len(libs[i].Hooks) > 0 {
+			hasHooks = true
+			break
+		}
+	}
+
+	if hasHooks {
+		for _, c := range winners {
+			claimer, ok := c.action.(hookClaimer)
+			if !ok {
+				// Custom AnyAction implementations are not tracked; they remain
+				// reusable across registries as before.
+				continue
+			}
+			if !claimer.claimRegistryHooks() {
+				return nil, fmt.Errorf(
+					"action: %q already received hooks from a previous NewRegistry call; "+
+						"build a fresh action for the second registry",
+					c.action.Describe().Name,
+				)
+			}
+		}
+	}
+
 	for i := range libs {
 		if len(libs[i].Hooks) == 0 {
 			continue
@@ -124,4 +144,12 @@ func NewRegistry(libs ...Library) (*Registry, error) {
 	})
 
 	return &Registry{byName: byName, actions: actions}, nil
+}
+
+func MustNewRegistry(libs ...Library) *Registry {
+	reg, err := NewRegistry(libs...)
+	if err != nil {
+		panic(err)
+	}
+	return reg
 }

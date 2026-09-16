@@ -36,6 +36,11 @@ type BuiltAction[Req, Res any] struct {
 	history    *History[Req, Res]
 	cleanups   []func()
 	closeOnce  sync.Once
+
+	// Set once NewRegistry applies library hooks. A second NewRegistry call
+	// that tries to apply hooks to the same instance fails loudly instead of
+	// silently doubling them.
+	registryHooksClaimed atomic.Bool
 }
 
 type anyHookSet struct {
@@ -55,6 +60,12 @@ func (a *BuiltAction[Req, Res]) Close() {
 			}
 		}
 	})
+}
+
+// claimRegistryHooks atomically claims the right to receive registry-level
+// hooks. Returns true on the first call, false on every subsequent call.
+func (a *BuiltAction[Req, Res]) claimRegistryHooks() bool {
+	return a.registryHooksClaimed.CompareAndSwap(false, true)
 }
 
 func (a *BuiltAction[Req, Res]) GetMeta() *Meta {
@@ -389,7 +400,7 @@ func InvokeAny(ctx context.Context, act any, req any) (any, error) {
 			if req == nil {
 				return nil
 			}
-			return Assign(target, req) // Zastąpiono stare, powolne `copyInto`!
+			return Assign(target, req)
 		})
 	}
 
