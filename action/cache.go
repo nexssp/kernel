@@ -36,120 +36,156 @@ func CacheMiddleware[Req, Res any](cfg CacheConfig[Req, Res]) DispatcherMiddlewa
 			if key == "" {
 				return next(ctx, req)
 			}
-
 			if err := ctx.Err(); err != nil {
 				var zero Res
 				return zero, err
 			}
 
-			// 1. Try layers L1 -> LN in order
-			for i, layer := range cfg.Layers {
-				if layer == nil {
-					continue
-				}
-
-				val, hit, err := layer.Get(ctx, key)
-				if err != nil {
-					slog.WarnContext(ctx, "cache_layer_get_failed",
-						"key", key, "layer_index", i, "error", err)
-					continue
-				}
-
-				if hit {
-					hooks.OnCacheHit(ctx, req, val)
-
-					// Backfill all faster layers (0 to i-1)
-					if i > 0 {
-						for j := range i {
-							if cfg.Layers[j] == nil {
-								continue
-							}
-							if fillErr := cfg.Layers[j].Set(ctx, key, val, cfg.TTL); fillErr != nil {
-								slog.WarnContext(ctx, "cache_backfill_failed",
-									"key", key, "layer_index", j, "error", fillErr)
-							}
-						}
-					}
-					return val, nil
-				}
+			if val, hit := tryLayers(ctx, cfg, key, hooks, req); hit {
+				return val, nil
 			}
 
-			// 2. Singleflight execution with a context owned by the flight,
-			//    independent of any individual caller's cancellation.
-			baseCtx := context.WithoutCancel(ctx)
-			var executedByThisCaller bool
+			return flightExecute(ctx, &sf, cfg, key, req, next, hooks)
+		}
+	}
+}
 
-			ch := sf.DoChan(key, func() (result any, execErr error) {
-				executedByThisCaller = true
+func tryLayers[Req, Res any](
+	ctx context.Context,
+	cfg CacheConfig[Req, Res],
+	key string,
+	hooks HookDispatcher[Req, Res],
+	req Req,
+) (Res, bool) {
+	for i, layer := range cfg.Layers {
+		if layer == nil {
+			continue
+		}
+		val, hit, err := layer.Get(ctx, key)
+		if err != nil {
+			slog.WarnContext(ctx, "cache_layer_get_failed",
+				"key", key, "layer_index", i, "error", err)
+			continue
+		}
+		if !hit {
+			continue
+		}
+		hooks.OnCacheHit(ctx, req, val)
+		backfillFasterLayers(ctx, cfg, key, val, i)
+		return val, true
+	}
+	var zero Res
+	return zero, false
+}
 
-				flightTimeout := cfg.Timeout
-				if flightTimeout <= 0 {
-					flightTimeout = 2 * time.Minute
-				}
+func backfillFasterLayers[Req, Res any](
+	ctx context.Context,
+	cfg CacheConfig[Req, Res],
+	key string,
+	val Res,
+	upTo int,
+) {
+	for j := range upTo {
+		if cfg.Layers[j] == nil {
+			continue
+		}
+		if err := cfg.Layers[j].Set(ctx, key, val, cfg.TTL); err != nil {
+			slog.WarnContext(ctx, "cache_backfill_failed",
+				"key", key, "layer_index", j, "error", err)
+		}
+	}
+}
 
-				execCtx, execCancel := context.WithTimeout(baseCtx, flightTimeout)
-				defer execCancel()
+func flightExecute[Req, Res any](
+	ctx context.Context,
+	sf *singleflight.Group,
+	cfg CacheConfig[Req, Res],
+	key string,
+	req Req,
+	next Fn[Req, Res],
+	hooks HookDispatcher[Req, Res],
+) (Res, error) {
+	baseCtx := context.WithoutCancel(ctx)
+	var executedByThisCaller bool
 
-				defer func() {
-					if r := recover(); r != nil {
-						execErr = xerr.PanicRecovery(r)
-						result = nil
-					}
-				}()
+	ch := sf.DoChan(key, func() (any, error) {
+		executedByThisCaller = true
+		return runFlight(baseCtx, cfg, key, req, next, hooks)
+	})
 
-				hooks.OnCacheMiss(execCtx, req)
+	select {
+	case <-ctx.Done():
+		var zero Res
+		return zero, ctx.Err()
+	case result := <-ch:
+		if err := ctx.Err(); err != nil {
+			var zero Res
+			return zero, err
+		}
+		if result.Shared && !executedByThisCaller {
+			hooks.OnCoalesced(ctx, req)
+		}
+		if result.Err != nil {
+			var zero Res
+			return zero, result.Err
+		}
+		if result.Val == nil {
+			var zero Res
+			return zero, nil
+		}
+		res, ok := result.Val.(Res)
+		if !ok {
+			var zero Res
+			return zero, fmt.Errorf("cache: unexpected stored type %T", result.Val)
+		}
+		return res, nil
+	}
+}
 
-				res, err := next(execCtx, req)
-				if err == nil {
-					for idx, layer := range cfg.Layers {
-						if layer == nil {
-							continue
-						}
-						if writeErr := layer.Set(execCtx, key, res, cfg.TTL); writeErr != nil {
-							slog.WarnContext(execCtx, "cache_write_through_failed",
-								"key", key, "layer_index", idx, "error", writeErr)
-						}
-					}
-				}
-				return res, err
-			})
+func runFlight[Req, Res any](
+	baseCtx context.Context,
+	cfg CacheConfig[Req, Res],
+	key string,
+	req Req,
+	next Fn[Req, Res],
+	hooks HookDispatcher[Req, Res],
+) (result any, execErr error) {
+	timeout := cfg.Timeout
+	if timeout <= 0 {
+		timeout = 2 * time.Minute
+	}
+	execCtx, cancel := context.WithTimeout(baseCtx, timeout)
+	defer cancel()
 
-			// 3. Wait for result.
-			select {
-			case <-ctx.Done():
-				var zero Res
-				return zero, ctx.Err()
+	defer func() {
+		if r := recover(); r != nil {
+			execErr = xerr.PanicRecovery(r)
+			result = nil
+		}
+	}()
 
-			case result := <-ch:
-				// Required: even if the flight completed, the caller must still
-				// observe its own cancellation if its context was canceled.
-				if err := ctx.Err(); err != nil {
-					var zero Res
-					return zero, err
-				}
+	hooks.OnCacheMiss(execCtx, req)
+	res, err := next(execCtx, req)
+	if err != nil {
+		return res, err
+	}
+	writeThroughAllLayers(execCtx, cfg, key, res)
+	return res, nil
+}
 
-				// Only notify joining waiters.
-				if result.Shared && !executedByThisCaller {
-					hooks.OnCoalesced(ctx, req)
-				}
-
-				if result.Err != nil {
-					var zero Res
-					return zero, result.Err
-				}
-
-				if result.Val == nil {
-					var zero Res
-					return zero, nil
-				}
-
-				res, ok := result.Val.(Res)
-				if !ok {
-					var zero Res
-					return zero, fmt.Errorf("cache: unexpected stored type %T", result.Val)
-				}
-				return res, nil
-			}
+func writeThroughAllLayers[Req, Res any](
+	ctx context.Context,
+	cfg CacheConfig[Req, Res],
+	key string,
+	res Res,
+) {
+	for i, layer := range cfg.Layers {
+		if layer == nil {
+			continue
+		}
+		if err := layer.Set(ctx, key, res, cfg.TTL); err != nil {
+			slog.WarnContext(ctx, "cache_write_through_failed",
+				"key", key, "layer_index", i, "error", err)
 		}
 	}
 }
