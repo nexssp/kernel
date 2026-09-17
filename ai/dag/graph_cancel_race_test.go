@@ -14,7 +14,7 @@ func TestDAG_ContextCancellation_WaitgroupSafety(t *testing.T) {
 	t.Parallel()
 
 	// Węzeł 1: Opóźniony. Uruchamia się, ale celowo śpi, by sprowokować wyścig.
-	slowNode := action.New("slow_node", func(ctx context.Context, nCtx *dag.NodeContext) (string, error) {
+	slowNode := action.New("slow_node", func(_ context.Context, nCtx *dag.NodeContext) (string, error) {
 		// Śpimy ignorując na chwilę kontekst, aby sprawdzić odporność struktury
 		time.Sleep(100 * time.Millisecond)
 
@@ -27,7 +27,7 @@ func TestDAG_ContextCancellation_WaitgroupSafety(t *testing.T) {
 	}).Build()
 
 	// Węzeł 2: Natychmiastowo rzuca błąd
-	fastFailNode := action.New("fail_node", func(ctx context.Context, nCtx *dag.NodeContext) (string, error) {
+	fastFailNode := action.New("fail_node", func(_ context.Context, nCtx *dag.NodeContext) (string, error) {
 		return "", errors.New("natychmiastowy błąd")
 	}).Build()
 

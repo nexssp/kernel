@@ -181,7 +181,7 @@ func TestMixedHooks_Order(t *testing.T) {
 			},
 		}).
 		AnyHook(action.AnyHook{
-			Before: func(ctx context.Context, _ any, m *action.Meta) (context.Context, error) {
+			Before: func(ctx context.Context, _ any, _ *action.Meta) (context.Context, error) {
 				execution.WriteString("AB2;")
 				return ctx, nil
 			},

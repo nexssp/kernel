@@ -211,7 +211,7 @@ func TestZeroAlloc_SettersWithScope(t *testing.T) {
 func TestNilContext_Safety(t *testing.T) {
 	t.Parallel()
 	// None of these should panic. They must fallback cleanly.
-	var ctx context.Context = nil
+	var ctx context.Context
 
 	ctx = xctx.WithUserID(ctx, "safe_fallback")
 	if xctx.UserIDFrom(ctx) != "safe_fallback" {

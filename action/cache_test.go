@@ -259,7 +259,7 @@ func TestCache_Singleflight_ContextCancellation(t *testing.T) {
 	caller2Joined := make(chan struct{})
 	var caller2JoinedOnce sync.Once
 
-	act := action.New("cache.concurrent_cancel", func(ctx context.Context, req string) (string, error) {
+	act := action.New("cache.concurrent_cancel", func(ctx context.Context, _ string) (string, error) {
 		startOnce.Do(func() {
 			close(started)
 		})

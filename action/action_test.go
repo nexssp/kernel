@@ -18,7 +18,7 @@ func TestBuiltAction_Do_LifecycleOrder(t *testing.T) {
 		steps = append(steps, "handler")
 		return "result_" + req, nil
 	}).
-		HookBefore(func(ctx context.Context, req string, meta *action.Meta) (context.Context, error) {
+		HookBefore(func(ctx context.Context, _ string, meta *action.Meta) (context.Context, error) {
 			steps = append(steps, "before")
 			return ctx, nil
 		}).

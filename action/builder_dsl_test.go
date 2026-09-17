@@ -171,7 +171,7 @@ func TestWithDSL_Hooks(t *testing.T) {
 	var called atomic.Bool
 
 	hook := action.AnyHook{
-		Before: func(ctx context.Context, _ any, meta *action.Meta) (context.Context, error) {
+		Before: func(ctx context.Context, _ any, _ *action.Meta) (context.Context, error) {
 			called.Store(true)
 			return ctx, nil
 		},

@@ -146,7 +146,7 @@ func BenchmarkObserveHook(b *testing.B) {
 	memSink := observe.NewMemorySink(b.N)
 	hook := observe.Hook(memSink)
 
-	act := action.New("bench.action", func(ctx context.Context, req int) (int, error) {
+	act := action.New("bench.action", func(_ context.Context, req int) (int, error) {
 		return req * 2, nil
 	}).AnyHook(hook).Build()
 
