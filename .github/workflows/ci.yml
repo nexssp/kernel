@@ -13,4 +13,4 @@ concurrency:
 
 jobs:
   test:
-    uses: nexssp/.github/.github/workflows/go-ci.yml@main
+    uses: nexssp/.github/.github/workflows/go-ci.yml@v1
