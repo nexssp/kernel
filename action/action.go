@@ -119,128 +119,30 @@ func hasOnExecutedHook[Req, Res any](hooks []Hook[Req, Res], anyHooks []AnyHook)
 }
 
 func (a *BuiltAction[Req, Res]) Do(ctx context.Context, req Req) (res Res, err error) {
-	var anyHooksRan, typedHooksRan int
-
 	anyHooks := a.anyHooksSnapshot()
-
 	needExecState := hasOnExecutedHook(a.hooks, anyHooks)
 
 	var state *execState
-	finalCtx := ctx
+	finalCtx := setupExecutionContext(ctx, &state, needExecState)
 
-	// Pin the top-level execution ID the first time an action runs
-	// under it. Subsequent sub-actions see the same root regardless
-	// of how many ExecutionID changes happen below.
-	if s := xctx.ScopeFrom(finalCtx); s != nil && s.ExecutionID != "" && s.RootExecutionID == "" {
-		finalCtx = xctx.WithRootExecutionID(finalCtx, s.ExecutionID)
-	}
+	var anyHooksRan, typedHooksRan int
+	var perr error
 
-	if needExecState {
-		state = &execState{}
-		finalCtx = context.WithValue(finalCtx, execStateKey{}, state)
-	}
-
+	// Deferred: panic, then unwinding hooks in reverse.
 	defer func() {
 		if r := recover(); r != nil {
 			err = xerr.PanicRecovery(r)
-			for _, h := range anyHooks {
-				if h.OnPanic != nil {
-					h := h
-					callHook(a.meta, "OnPanic", func() {
-						h.OnPanic(finalCtx, any(req), r, a.meta)
-					})
-				}
-			}
+			firePanicHooks(finalCtx, anyHooks, req, r, a.meta)
 		}
-
-		for i := typedHooksRan - 1; i >= 0; i-- {
-			h := a.hooks[i]
-
-			switch {
-			case err != nil && errors.Is(err, context.Canceled):
-				if h.OnCancel != nil {
-					h := h
-					callHook(a.meta, "OnCancel", func() {
-						h.OnCancel(finalCtx, req, a.meta)
-					})
-				}
-			case err != nil:
-				if h.OnError != nil {
-					h := h
-					callHook(a.meta, "OnError", func() {
-						h.OnError(finalCtx, req, err, a.meta)
-					})
-				}
-			case h.OnExecuted != nil && state != nil && !state.fromCache:
-				h := h
-				callHook(a.meta, "OnExecuted", func() {
-					h.OnExecuted(finalCtx, req, res, nil, a.meta)
-				})
-			}
-
-			if h.After != nil {
-				h := h
-				callHook(a.meta, "After", func() {
-					h.After(finalCtx, req, res, err, a.meta)
-				})
-			}
-		}
-
-		for i := anyHooksRan - 1; i >= 0; i-- {
-			h := anyHooks[i]
-
-			switch {
-			case errors.Is(err, context.Canceled):
-				if h.OnCancel != nil {
-					h := h
-					callHook(a.meta, "OnCancel", func() {
-						h.OnCancel(finalCtx, any(req), a.meta)
-					})
-				}
-			case err != nil:
-				if h.OnError != nil {
-					h := h
-					callHook(a.meta, "OnError", func() {
-						h.OnError(finalCtx, any(req), err, a.meta)
-					})
-				}
-			case h.OnExecuted != nil && state != nil && !state.fromCache:
-				h := h
-				callHook(a.meta, "OnExecuted", func() {
-					h.OnExecuted(finalCtx, any(req), any(res), nil, a.meta)
-				})
-			}
-
-			if h.After != nil {
-				h := h
-				callHook(a.meta, "After", func() {
-					h.After(finalCtx, any(req), any(res), err, a.meta)
-				})
-			}
-		}
+		fireExitHooks(finalCtx, a.hooks, anyHooks, req, res, err, state,
+			typedHooksRan, anyHooksRan, a.meta)
 	}()
 
-	var perr error
-	for _, h := range anyHooks {
-		if h.Before != nil {
-			//nolint:fatcontext // intentional: hook chain must propagate context to next hook and to exec
-			finalCtx, perr = h.Before(finalCtx, any(req), a.meta)
-			if perr != nil {
-				return res, fmt.Errorf("action %s before-hook failed: %w", a.meta.Name, perr)
-			}
-		}
-		anyHooksRan++
+	if finalCtx, anyHooksRan, perr = runAnyBeforeHooks(finalCtx, anyHooks, req, a.meta); perr != nil {
+		return res, fmt.Errorf("action %s before-hook failed: %w", a.meta.Name, perr)
 	}
-
-	for _, h := range a.hooks {
-		if h.Before != nil {
-			//nolint:fatcontext // intentional: hook chain must propagate context to next hook and to exec
-			finalCtx, perr = h.Before(finalCtx, req, a.meta)
-			if perr != nil {
-				return res, fmt.Errorf("action %s before-hook failed: %w", a.meta.Name, perr)
-			}
-		}
-		typedHooksRan++
+	if finalCtx, typedHooksRan, perr = runTypedBeforeHooks(finalCtx, a.hooks, req, a.meta); perr != nil {
+		return res, fmt.Errorf("action %s before-hook failed: %w", a.meta.Name, perr)
 	}
 
 	if a.exec == nil {
@@ -251,8 +153,148 @@ func (a *BuiltAction[Req, Res]) Do(ctx context.Context, req Req) (res Res, err e
 	if err != nil {
 		return res, fmt.Errorf("action %s execution failed: %w", a.meta.Name, err)
 	}
-
 	return res, nil
+}
+
+func setupExecutionContext(ctx context.Context, state **execState, needExecState bool) context.Context {
+	finalCtx := ctx
+	if s := xctx.ScopeFrom(finalCtx); s != nil && s.ExecutionID != "" && s.RootExecutionID == "" {
+		finalCtx = xctx.WithRootExecutionID(finalCtx, s.ExecutionID)
+	}
+	if needExecState {
+		*state = &execState{}
+		finalCtx = context.WithValue(finalCtx, execStateKey{}, *state)
+	}
+	return finalCtx
+}
+
+func runAnyBeforeHooks[Req any](
+	ctx context.Context,
+	anyHooks []AnyHook,
+	req Req,
+	meta *Meta,
+) (context.Context, int, error) {
+	for i, h := range anyHooks {
+		if h.Before == nil {
+			continue
+		}
+		var err error
+		//nolint:fatcontext // intentional: hook chain must propagate context to next hook and to exec
+		ctx, err = h.Before(ctx, any(req), meta)
+		if err != nil {
+			return ctx, i, err
+		}
+	}
+	return ctx, len(anyHooks), nil
+}
+
+func runTypedBeforeHooks[Req, Res any](
+	ctx context.Context,
+	hooks []Hook[Req, Res],
+	req Req,
+	meta *Meta,
+) (context.Context, int, error) {
+	for i, h := range hooks {
+		if h.Before == nil {
+			continue
+		}
+		var err error
+		//nolint:fatcontext // intentional: hook chain must propagate context to next hook and to exec
+		ctx, err = h.Before(ctx, req, meta)
+		if err != nil {
+			return ctx, i, err
+		}
+	}
+	return ctx, len(hooks), nil
+}
+
+func firePanicHooks[Req any](
+	ctx context.Context,
+	anyHooks []AnyHook,
+	req Req,
+	recovered any,
+	meta *Meta,
+) {
+	for _, h := range anyHooks {
+		if h.OnPanic == nil {
+			continue
+		}
+		h := h
+		callHook(meta, "OnPanic", func() {
+			h.OnPanic(ctx, any(req), recovered, meta)
+		})
+	}
+}
+
+func fireExitHooks[Req, Res any](
+	ctx context.Context,
+	typedHooks []Hook[Req, Res],
+	anyHooks []AnyHook,
+	req Req,
+	res Res,
+	err error,
+	state *execState,
+	typedHooksRan, anyHooksRan int,
+	meta *Meta,
+) {
+	for i := typedHooksRan - 1; i >= 0; i-- {
+		fireTypedExitHook(ctx, typedHooks[i], req, res, err, state, meta)
+	}
+	for i := anyHooksRan - 1; i >= 0; i-- {
+		fireAnyExitHook(ctx, anyHooks[i], req, res, err, state, meta)
+	}
+}
+
+func fireTypedExitHook[Req, Res any](
+	ctx context.Context,
+	h Hook[Req, Res],
+	req Req,
+	res Res,
+	err error,
+	state *execState,
+	meta *Meta,
+) {
+	switch {
+	case err != nil && errors.Is(err, context.Canceled):
+		if h.OnCancel != nil {
+			callHook(meta, "OnCancel", func() { h.OnCancel(ctx, req, meta) })
+		}
+	case err != nil:
+		if h.OnError != nil {
+			callHook(meta, "OnError", func() { h.OnError(ctx, req, err, meta) })
+		}
+	case h.OnExecuted != nil && state != nil && !state.fromCache:
+		callHook(meta, "OnExecuted", func() { h.OnExecuted(ctx, req, res, nil, meta) })
+	}
+	if h.After != nil {
+		callHook(meta, "After", func() { h.After(ctx, req, res, err, meta) })
+	}
+}
+
+func fireAnyExitHook[Req, Res any](
+	ctx context.Context,
+	h AnyHook,
+	req Req,
+	res Res,
+	err error,
+	state *execState,
+	meta *Meta,
+) {
+	switch {
+	case errors.Is(err, context.Canceled):
+		if h.OnCancel != nil {
+			callHook(meta, "OnCancel", func() { h.OnCancel(ctx, any(req), meta) })
+		}
+	case err != nil:
+		if h.OnError != nil {
+			callHook(meta, "OnError", func() { h.OnError(ctx, any(req), err, meta) })
+		}
+	case h.OnExecuted != nil && state != nil && !state.fromCache:
+		callHook(meta, "OnExecuted", func() { h.OnExecuted(ctx, any(req), any(res), nil, meta) })
+	}
+	if h.After != nil {
+		callHook(meta, "After", func() { h.After(ctx, any(req), any(res), err, meta) })
+	}
 }
 
 func (a *BuiltAction[Req, Res]) OnCacheHit(ctx context.Context, req Req, res Res) {
