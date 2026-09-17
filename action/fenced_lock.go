@@ -49,19 +49,10 @@ func (b *Builder[Req, Res]) ExclusiveFenced(m FencedMutex, ttl time.Duration, ke
 		return func(ctx context.Context, req Req) (Res, error) {
 			var zero Res
 
-			if m == nil {
-				return zero, xerr.Internal("fenced mutex is required")
+			lockKey, err := validateFencedLock(m, ttl, b.meta.Name, keyFn(req))
+			if err != nil {
+				return zero, err
 			}
-			if ttl < minTTL {
-				return zero, xerr.BadRequest(fmt.Sprintf("fenced lock TTL must be at least %v", minTTL))
-			}
-
-			key := keyFn(req)
-			if key == "" {
-				return zero, xerr.BadRequest("fenced lock key cannot be empty")
-			}
-
-			lockKey := b.meta.Name + ":lock:" + key
 
 			lease, acquired, err := m.Acquire(ctx, lockKey, ttl)
 			if err != nil {
@@ -72,8 +63,6 @@ func (b *Builder[Req, Res]) ExclusiveFenced(m FencedMutex, ttl time.Duration, ke
 			}
 
 			execCtx, cancel := context.WithCancel(ctx)
-
-			// Inject the lease so downstream handlers can verify the fence token.
 			execCtx = context.WithValue(execCtx, leaseCtxKey{}, lease)
 
 			done := make(chan struct{})
@@ -81,112 +70,24 @@ func (b *Builder[Req, Res]) ExclusiveFenced(m FencedMutex, ttl time.Duration, ke
 			var renewWG sync.WaitGroup
 			renewWG.Add(1)
 
-			reportLoss := func(cause error) {
-				select {
-				case lost <- cause:
-				default:
-					slog.Error("fenced_lock_additional_error",
-						"action", b.meta.Name,
-						"lock", lockKey,
-						"error", cause,
-					)
-				}
-				cancel()
-			}
-
-			interval := ttl / 3
-
 			go func() {
 				defer renewWG.Done()
-				defer func() {
-					if r := recover(); r != nil {
-						reportLoss(fmt.Errorf("fenced lock renew panic: %v", r))
-					}
-				}()
-
-				ticker := time.NewTicker(interval)
-				defer ticker.Stop()
-
-				for {
-					select {
-					case <-done:
-						return
-					case <-execCtx.Done():
-						return
-					case <-ticker.C:
-					}
-
-					renewCtx, renewCancel := context.WithTimeout(execCtx, interval)
-					renewed, renewErr := m.Renew(renewCtx, lease, ttl)
-					renewCancel()
-
-					if renewErr != nil {
-						// If we're shutting down normally, this is not a lease loss.
-						select {
-						case <-done:
-							return
-						default:
-						}
-
-						if execCtx.Err() == nil {
-							reportLoss(fmt.Errorf("renew fenced lock: %w", renewErr))
-						}
-						return
-					}
-
-					if !renewed {
-						select {
-						case <-done:
-							return
-						default:
-						}
-						if execCtx.Err() != nil {
-							return
-						}
-						reportLoss(errors.New("fenced lock lease lost"))
-						return
-					}
-				}
+				runLeaseRenewer(execCtx, m, lease, ttl, done, lost, cancel, lockKey, b.meta.Name)
 			}()
 
 			var releaseOnce sync.Once
 			cleanup := func() {
 				releaseOnce.Do(func() {
-					defer func() {
-						if r := recover(); r != nil {
-							slog.Error("fenced_lock_release_panic",
-								"action", b.meta.Name,
-								"lock", lockKey,
-								"panic", r,
-							)
-						}
-					}()
-					close(done)
-					renewWG.Wait()
-
-					releaseCtx, releaseCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-					defer releaseCancel()
-
-					if _, releaseErr := m.Release(releaseCtx, lease); releaseErr != nil {
-						slog.Error("fenced_lock_release_failed",
-							"action", b.meta.Name,
-							"lock", lockKey,
-							"owner", lease.Owner,
-							"error", releaseErr,
-						)
-					}
+					stopRenewer(done, &renewWG, m, lease, lockKey, b.meta.Name, ctx)
 				})
 			}
 
-			// Panic safety: cancel first to stop the renewer, then release.
 			defer func() {
 				cancel()
 				cleanup()
 			}()
 
 			res, execErr := next(execCtx, req)
-
-			// Normal path: stop the renewer before checking for lease loss.
 			cancel()
 			cleanup()
 
@@ -195,10 +96,120 @@ func (b *Builder[Req, Res]) ExclusiveFenced(m FencedMutex, ttl time.Duration, ke
 				return zero, xerr.Unavailable("fenced distributed lock lease lost", lostErr)
 			default:
 			}
-
 			return res, execErr
 		}
 	})
+}
+
+func validateFencedLock(m FencedMutex, ttl time.Duration, actionName, key string) (string, error) {
+	if m == nil {
+		return "", xerr.Internal("fenced mutex is required")
+	}
+	if ttl < minTTL {
+		return "", xerr.BadRequest(fmt.Sprintf("fenced lock TTL must be at least %v", minTTL))
+	}
+	if key == "" {
+		return "", xerr.BadRequest("fenced lock key cannot be empty")
+	}
+	return actionName + ":lock:" + key, nil
+}
+
+func runLeaseRenewer(
+	execCtx context.Context,
+	m FencedMutex,
+	lease LockLease,
+	ttl time.Duration,
+	done chan struct{},
+	lost chan<- error,
+	cancel context.CancelFunc,
+	lockKey, actionName string,
+) {
+	reportLoss := func(cause error) {
+		select {
+		case lost <- cause:
+		default:
+			slog.Error("fenced_lock_additional_error",
+				"action", actionName, "lock", lockKey, "error", cause)
+		}
+		cancel()
+	}
+
+	defer func() {
+		if r := recover(); r != nil {
+			reportLoss(fmt.Errorf("fenced lock renew panic: %v", r))
+		}
+	}()
+
+	interval := ttl / 3
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-done:
+			return
+		case <-execCtx.Done():
+			return
+		case <-ticker.C:
+		}
+
+		renewCtx, renewCancel := context.WithTimeout(execCtx, interval)
+		renewed, renewErr := m.Renew(renewCtx, lease, ttl)
+		renewCancel()
+
+		if renewErr != nil {
+			if isShuttingDown(done) {
+				return
+			}
+			if execCtx.Err() == nil {
+				reportLoss(fmt.Errorf("renew fenced lock: %w", renewErr))
+			}
+			return
+		}
+		if !renewed {
+			if isShuttingDown(done) || execCtx.Err() != nil {
+				return
+			}
+			reportLoss(errors.New("fenced lock lease lost"))
+			return
+		}
+	}
+}
+
+func isShuttingDown(done chan struct{}) bool {
+	select {
+	case <-done:
+		return true
+	default:
+		return false
+	}
+}
+
+func stopRenewer(
+	done chan struct{},
+	wg *sync.WaitGroup,
+	m FencedMutex,
+	lease LockLease,
+	lockKey, actionName string,
+	parentCtx context.Context,
+) {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("fenced_lock_release_panic",
+				"action", actionName, "lock", lockKey, "panic", r)
+		}
+	}()
+	close(done)
+	wg.Wait()
+
+	releaseCtx, releaseCancel := context.WithTimeout(context.WithoutCancel(parentCtx), 5*time.Second)
+	defer releaseCancel()
+
+	if _, releaseErr := m.Release(releaseCtx, lease); releaseErr != nil {
+		slog.Error("fenced_lock_release_failed",
+			"action", actionName, "lock", lockKey,
+			"owner", lease.Owner, "error", releaseErr)
+	}
 }
 
 // LeaderOnlyFenced is the safe singleton-action form. It provides a renewable
