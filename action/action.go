@@ -219,7 +219,7 @@ func firePanicHooks[Req any](
 		if h.OnPanic == nil {
 			continue
 		}
-		h := h
+
 		callHook(meta, "OnPanic", func() {
 			h.OnPanic(ctx, any(req), recovered, meta)
 		})

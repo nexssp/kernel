@@ -14,7 +14,7 @@ type HookProvider interface {
 	GetAnyHooks() []AnyHook
 }
 
-// ActionProvider exposes the registered actions of an application.
+//nolint:revive // exported name kept for API stability
 type ActionProvider interface {
 	Actions() []AnyAction
 }
@@ -123,6 +123,8 @@ type Meta struct {
 // ActionScope describes the contract audience for an action. It is not an
 // authorization rule: authentication and authorization remain enforced by the
 // action's transport middleware and guards.
+//
+//nolint:revive // exported name kept for API stability
 type ActionScope string
 
 const (

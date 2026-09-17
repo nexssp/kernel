@@ -45,7 +45,7 @@ func Coerce[T any](input any) (T, error) {
 
 // Assign writes 'source' into the pointer 'target' using zero-allocation fast paths
 // before falling back to JSON serialization. 'target' MUST be a non-nil pointer.
-func Assign(target any, source any) error {
+func Assign(target, source any) error {
 	if source == nil || target == nil {
 		return nil
 	}

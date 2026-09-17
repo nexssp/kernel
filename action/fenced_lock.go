@@ -68,17 +68,14 @@ func (b *Builder[Req, Res]) ExclusiveFenced(m FencedMutex, ttl time.Duration, ke
 			done := make(chan struct{})
 			lost := make(chan error, 1)
 			var renewWG sync.WaitGroup
-			renewWG.Add(1)
-
-			go func() {
-				defer renewWG.Done()
+			renewWG.Go(func() {
 				runLeaseRenewer(execCtx, m, lease, ttl, done, lost, cancel, lockKey, b.meta.Name)
-			}()
+			})
 
 			var releaseOnce sync.Once
 			cleanup := func() {
 				releaseOnce.Do(func() {
-					stopRenewer(done, &renewWG, m, lease, lockKey, b.meta.Name, ctx)
+					stopRenewer(ctx, done, &renewWG, m, lease, lockKey, b.meta.Name)
 				})
 			}
 
@@ -186,12 +183,12 @@ func isShuttingDown(done chan struct{}) bool {
 }
 
 func stopRenewer(
+	parentCtx context.Context,
 	done chan struct{},
 	wg *sync.WaitGroup,
 	m FencedMutex,
 	lease LockLease,
 	lockKey, actionName string,
-	parentCtx context.Context,
 ) {
 	defer func() {
 		if r := recover(); r != nil {
