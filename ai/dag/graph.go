@@ -346,123 +346,135 @@ func (d *DAG) Execute(ctx context.Context, initialState *State) (*State, error) 
 	}
 
 	for layerIdx, layer := range d.layers {
-		g, layerCtx := errgroup.WithContext(ctx)
-		layerResults := make([]Value, len(layer))
-
-		for i, node := range layer {
-			idx := i
-			n := node
-
-			// HIL RESUME: If node was already computed in a previous run, skip invocation
-			if existingVal, ok := currentState.Get(n.OutputKey); ok {
-				layerResults[idx] = Value{
-					Key: n.OutputKey,
-					Val: existingVal,
-				}
-				continue
-			}
-
-			g.Go(func() error {
-				nCtx := &NodeContext{
-					Input: currentState,
-					Key:   n.OutputKey,
-				}
-
-				decoder := func(v any) error {
-					switch target := v.(type) {
-					case *NodeContext:
-						*target = *nCtx
-						return nil
-					case **NodeContext:
-						*target = nCtx
-						return nil
-					}
-					return nil
-				}
-
-				var outVal any
-				var err error
-				if nested, ok := n.Action.(*action.BuiltAction[*State, *State]); ok {
-					outVal, err = nested.Do(layerCtx, currentState)
-					if err != nil {
-						if st, isState := outVal.(*State); isState && st != nil {
-							st.Release()
-						}
-					}
-				} else {
-					outVal, err = n.Action.ExecuteDecoded(layerCtx, decoder)
-				}
-
-				if err != nil {
-					// Preserve ErrSuspended cleanly without turning it into a fatal internal error
-					if errors.Is(err, ErrSuspended) {
-						return err
-					}
-					return &ExecutionError{
-						Layer:      layerIdx,
-						FailedNode: n.ID,
-						Cause:      err,
-					}
-				}
-
-				layerResults[idx] = Value{
-					Key: n.OutputKey,
-					Val: outVal,
-				}
-				return nil
-			})
+		layerResults, err := runLayer(ctx, layer, currentState)
+		if err != nil {
+			return handleLayerError(err, currentState, layerResults, layer, layerIdx)
 		}
 
-		if err := g.Wait(); err != nil {
-			// HIL SUSPENSION: Preserve partial state so it can be saved to persistent storage
-			for _, res := range layerResults {
-				if res.Key != "" && res.Val != nil {
-					currentState.data[res.Key] = res.Val
-				}
-			}
-			if errors.Is(err, ErrSuspended) {
-				return currentState, err
-			}
-
-			if execErr, ok := errors.AsType[*ExecutionError](err); ok {
-				execErr.State = currentState
-				for i, res := range layerResults {
-					if res.Key != "" && res.Val != nil {
-						execErr.Completed = append(execErr.Completed, layer[i].ID)
-					}
-				}
-				return currentState, execErr
-			}
-			return currentState, err
-		}
-
-		nextState := currentState.Clone()
-		currentState.Release()
-
-		for _, res := range layerResults {
-			if res.Key != "" && res.Val != nil {
-				nextState.data[res.Key] = res.Val
-			}
-		}
-
-		currentState = nextState
+		currentState = mergeLayerResults(currentState, layerResults)
 
 		if onLayer != nil {
 			if cbErr := onLayer(ctx, layerIdx, currentState); cbErr != nil {
-				if errors.Is(cbErr, ErrSuspended) {
-					return currentState, cbErr
-				}
-				return currentState, &ExecutionError{
-					Layer:      layerIdx,
-					FailedNode: "",
-					Cause:      cbErr,
-					State:      currentState,
-				}
+				return handleCallbackError(cbErr, currentState, layerIdx)
 			}
 		}
 	}
 
 	return currentState, nil
+}
+
+func runLayer(ctx context.Context, layer []Node, currentState *State) ([]Value, error) {
+	g, layerCtx := errgroup.WithContext(ctx)
+	results := make([]Value, len(layer))
+
+	for i, node := range layer {
+		idx, n := i, node
+
+		if existingVal, ok := currentState.Get(n.OutputKey); ok {
+			results[idx] = Value{Key: n.OutputKey, Val: existingVal}
+			continue
+		}
+
+		g.Go(func() error {
+			return executeNode(layerCtx, n, currentState, &results[idx])
+		})
+	}
+
+	return results, g.Wait()
+}
+
+func executeNode(ctx context.Context, n Node, currentState *State, out *Value) error {
+	nCtx := &NodeContext{Input: currentState, Key: n.OutputKey}
+	decoder := nodeContextDecoder(nCtx)
+
+	var outVal any
+	var err error
+	if nested, ok := n.Action.(*action.BuiltAction[*State, *State]); ok {
+		outVal, err = nested.Do(ctx, currentState)
+		if err != nil {
+			if st, isState := outVal.(*State); isState && st != nil {
+				st.Release()
+			}
+		}
+	} else {
+		outVal, err = n.Action.ExecuteDecoded(ctx, decoder)
+	}
+
+	if err != nil {
+		if errors.Is(err, ErrSuspended) {
+			return err
+		}
+		return &ExecutionError{
+			Layer:      -1, // filled by caller
+			FailedNode: n.ID,
+			Cause:      err,
+		}
+	}
+
+	*out = Value{Key: n.OutputKey, Val: outVal}
+	return nil
+}
+
+func nodeContextDecoder(nCtx *NodeContext) action.DecodeFunc {
+	return func(v any) error {
+		switch target := v.(type) {
+		case *NodeContext:
+			*target = *nCtx
+			return nil
+		case **NodeContext:
+			*target = nCtx
+			return nil
+		}
+		return nil
+	}
+}
+
+func mergeLayerResults(currentState *State, layerResults []Value) *State {
+	nextState := currentState.Clone()
+	currentState.Release()
+
+	for _, res := range layerResults {
+		if res.Key != "" && res.Val != nil {
+			nextState.data[res.Key] = res.Val
+		}
+	}
+	return nextState
+}
+
+func handleLayerError(err error, currentState *State, layerResults []Value, layer []Node, layerIdx int) (*State, error) {
+	for _, res := range layerResults {
+		if res.Key != "" && res.Val != nil {
+			currentState.data[res.Key] = res.Val
+		}
+	}
+
+	if errors.Is(err, ErrSuspended) {
+		return currentState, err
+	}
+
+	if execErr, ok := errors.AsType[*ExecutionError](err); ok {
+		execErr.Layer = layerIdx
+		execErr.State = currentState
+		for i, res := range layerResults {
+			if res.Key != "" && res.Val != nil {
+				execErr.Completed = append(execErr.Completed, layer[i].ID)
+			}
+		}
+		return currentState, execErr
+	}
+	return currentState, err
+}
+
+func handleCallbackError(cbErr error, currentState *State, layerIdx int) (*State, error) {
+	if errors.Is(cbErr, ErrSuspended) {
+		return currentState, cbErr
+	}
+	return currentState, &ExecutionError{
+		Layer:      layerIdx,
+		FailedNode: "",
+		Cause:      cbErr,
+		State:      currentState,
+	}
 }
 
 // AsAction wraps the DAG execution as a standard Nexss Action.
