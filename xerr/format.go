@@ -65,8 +65,7 @@ func sprintDev(err error) string {
 	for current != nil {
 		indent := "│  "
 
-		var appErr *AppError
-		if errors.As(current, &appErr) {
+		if appErr, ok := errors.AsType[*AppError](current); ok {
 			if depth == 0 {
 				fmt.Fprintf(&b, "%sKind    : %s\n", indent, appErr.Kind)
 				fmt.Fprintf(&b, "%sMessage : %s\n", indent, appErr.Message)
@@ -118,12 +117,11 @@ func sprintDev(err error) string {
 
 func sprintProd(err error) string {
 	// Fast path: direct *AppError, no errors.As reflection alloc.
-	if appErr, ok := err.(*AppError); ok {
+	if appErr, ok := err.(*AppError); ok { //nolint:errorlint // deliberate: fast path; wrapped case handled below
 		return formatAppError(appErr)
 	}
 	// Wrapped: errors.As unwraps once, then format.
-	var appErr *AppError
-	if errors.As(err, &appErr) {
+	if appErr, ok := errors.AsType[*AppError](err); ok {
 		return formatAppError(appErr)
 	}
 	return err.Error() + "\n"

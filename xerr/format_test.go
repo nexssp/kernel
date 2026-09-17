@@ -24,7 +24,7 @@ func TestErrChain_Unwrap(t *testing.T) {
 	if len(chain) != 3 {
 		t.Fatalf("want 3, got %d", len(chain))
 	}
-	if chain[0] != top || chain[1] != mid || chain[2] != base {
+	if !errors.Is(chain[0], top) || !errors.Is(chain[1], mid) || !errors.Is(chain[2], base) {
 		t.Fatalf("wrong order: %v", chain)
 	}
 }
@@ -60,6 +60,26 @@ func TestSprintProd_FindsWrappedAppError(t *testing.T) {
 	want := "[not_found] user not found\n"
 	if out != want {
 		t.Fatalf("got %q, want %q", out, want)
+	}
+}
+
+func TestSprintProd_DirectAppError_AllocBudget(t *testing.T) {
+	err := &AppError{Kind: "internal", Message: "internal error"}
+
+	allocs := testing.AllocsPerRun(1000, func() {
+		_ = sprintProd(err)
+	})
+	if allocs > 1 {
+		t.Fatalf("sprintProd(*AppError) allocs = %v, want <= 1 — fast path removed?", allocs)
+	}
+}
+
+func TestSprintProd_WrappedAppError_StillFormatted(t *testing.T) {
+	inner := &AppError{Kind: "not_found", Message: "user not found"}
+	err := fmt.Errorf("handler: %w", inner)
+
+	if got, want := sprintProd(err), "[not_found] user not found\n"; got != want {
+		t.Fatalf("got %q, want %q", got, want)
 	}
 }
 
@@ -202,5 +222,14 @@ func BenchmarkTrimPath(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		_ = trimPath(p)
+	}
+}
+
+func BenchmarkSprintProd_DirectAppError(b *testing.B) {
+	err := &AppError{Kind: "internal", Message: "internal error"}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = sprintProd(err)
 	}
 }
