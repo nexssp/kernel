@@ -28,7 +28,7 @@ func FuzzJSONLRecord(f *testing.F) {
 	// timeStr, kind, action, execID, traceID, spanID, attempt
 	f.Add("", "", "", "", "", "", 0)
 
-	f.Fuzz(func(t *testing.T, timeStr, kind, action, execID, traceID, spanID string, attempt int) {
+	f.Fuzz(func(_ *testing.T, timeStr, kind, action, execID, traceID, spanID string, attempt int) {
 		// The inputs are not directly used here, but we exercise boundedError
 		// with a fixed error to ensure it never panics.
 		_ = boundedError(fakeError{}, 10)

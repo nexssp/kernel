@@ -1,6 +1,9 @@
 package action
 
-import "fmt"
+import (
+	"fmt"
+	"slices"
+)
 
 const DefaultMaxTreeDepth = 64
 
@@ -38,10 +41,8 @@ func applyTreeHookInternal(act AnyAction, visited []AnyAction, depth, maxDepth i
 		return visited, fmt.Errorf("action: tree hook max depth exceeded (%d)", maxDepth)
 	}
 
-	for i := range len(visited) {
-		if visited[i] == act {
-			return visited, nil
-		}
+	if slices.Contains(visited, act) {
+		return visited, nil
 	}
 
 	visited = append(visited, act)

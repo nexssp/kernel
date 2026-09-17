@@ -74,7 +74,7 @@ func TestBuiltAction_ToBuilder_ErrorPathAndHookPropagation(t *testing.T) {
 		return "", expectedErr
 	}).
 		Hook(action.Hook[string, string]{
-			OnError: func(_ context.Context, _ string, err error, _ *action.Meta) {
+			OnError: func(_ context.Context, _ string, _ error, _ *action.Meta) {
 				typedErrorHookRan.Store(true)
 			},
 			OnExecuted: func(_ context.Context, _, _ string, _ error, _ *action.Meta) {

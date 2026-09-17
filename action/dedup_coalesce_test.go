@@ -136,7 +136,7 @@ func TestDeduplicate_ContextBleeding(t *testing.T) {
 	handlerRelease := make(chan struct{})
 	var handlerCalls atomic.Int32
 
-	act := action.New("dedup.bleeding", func(ctx context.Context, req string) (string, error) {
+	act := action.New("dedup.bleeding", func(ctx context.Context, _ string) (string, error) {
 		handlerCalls.Add(1)
 		close(handlerEntered)
 		<-handlerRelease

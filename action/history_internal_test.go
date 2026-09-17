@@ -22,7 +22,7 @@ func TestHistoryBufferSmoke(t *testing.T) {
 }
 
 func TestBuilderWithHistoryHasMiddleware(t *testing.T) {
-	b := New("hist.middleware", func(ctx context.Context, r int) (int, error) { return r, nil })
+	b := New("hist.middleware", func(_ context.Context, r int) (int, error) { return r, nil })
 	b.WithHistory(5)
 
 	if len(b.middlewares) != 1 {
@@ -36,7 +36,7 @@ func TestBuildAppliesMiddleware(t *testing.T) {
 		middlewareCalls int
 	)
 
-	b := New("middleware.check", func(ctx context.Context, r int) (int, error) {
+	b := New("middleware.check", func(_ context.Context, r int) (int, error) {
 		originalCalls++
 		return r, nil
 	})

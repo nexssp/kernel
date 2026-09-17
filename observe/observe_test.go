@@ -97,7 +97,7 @@ func TestEventPropagation(t *testing.T) {
 	memSink := observe.NewMemorySink(10)
 	hook := observe.Hook(memSink)
 
-	act := action.New("test.action", func(ctx context.Context, req string) (string, error) {
+	act := action.New("test.action", func(_ context.Context, req string) (string, error) {
 		return "ok:" + req, nil
 	}).AnyHook(hook).Build()
 

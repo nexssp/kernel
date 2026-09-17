@@ -183,7 +183,7 @@ func TestCache_Singleflight_SingleMissNotification(t *testing.T) {
 	var missCount atomic.Int32
 	var coalesceCount atomic.Int32
 
-	act := action.New("cache.concurrent_miss", func(ctx context.Context, req string) (string, error) {
+	act := action.New("cache.concurrent_miss", func(ctx context.Context, _ string) (string, error) {
 		handlerCalls.Add(1)
 		close(started)
 		select {
