@@ -2,7 +2,7 @@ package action_test
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"testing"
 
 	"github.com/nexssp/kernel/action"
@@ -65,7 +65,7 @@ func TestTestable_ExpectErrPlainError(t *testing.T) {
 	t.Parallel()
 
 	builder := action.New("plain.err", func(ctx context.Context, req int) (int, error) {
-		return 0, fmt.Errorf("plain failure")
+		return 0, errors.New("plain failure")
 	})
 	testable := action.TestFrom(builder)
 

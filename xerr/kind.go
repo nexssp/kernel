@@ -41,8 +41,7 @@ func KindFrom(err error) Kind {
 	if err == nil {
 		return ""
 	}
-	var ae *AppError
-	if errors.As(err, &ae) {
+	if ae, ok := errors.AsType[*AppError](err); ok {
 		return ae.Kind
 	}
 	return KindInternal

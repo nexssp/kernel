@@ -2,6 +2,7 @@ package observe_test
 
 import (
 	"context"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -26,8 +27,8 @@ func (s *testSink) kinds() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	out := make([]string, 0, len(s.events))
-	for _, event := range s.events {
-		out = append(out, event.Kind)
+	for i := range s.events {
+		out = append(out, s.events[i].Kind)
 	}
 	return out
 }
@@ -113,10 +114,5 @@ func TestObserveHook_ContextCancellationIsNotError(t *testing.T) {
 }
 
 func contains(values []string, want string) bool {
-	for _, value := range values {
-		if value == want {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(values, want)
 }

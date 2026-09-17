@@ -186,18 +186,21 @@ func TestZeroAlloc_SettersWithScope(t *testing.T) {
 
 	allocs := testing.AllocsPerRun(1000, func() {
 		// Mutating an existing RequestScope must not trigger context.WithValue
-		// and MUST be 100% zero-alloc
-		ctx = xctx.WithUserID(ctx, "user-123")
-		ctx = xctx.WithTenantID(ctx, "tenant-456")
-		ctx = xctx.WithRequestID(ctx, "req-789")
-		ctx = xctx.WithTraceID(ctx, "trace-abc")
-		ctx = xctx.WithEndpoint(ctx, "/api")
-		ctx = xctx.WithClientIP(ctx, "127.0.0.1")
+		// and MUST be 100% zero-alloc.
+		c := ctx
+		c = xctx.WithUserID(c, "user-123")
+		c = xctx.WithTenantID(c, "tenant-456")
+		c = xctx.WithRequestID(c, "req-789")
+		c = xctx.WithTraceID(c, "trace-abc")
+		c = xctx.WithEndpoint(c, "/api")
+		c = xctx.WithClientIP(c, "127.0.0.1")
+		c = xctx.WithRoles(c, roles)
+		c = xctx.WithFeatures(c, features)
+		c = xctx.WithPermissions(c, perms)
 
-		// Assigning slices should reuse pre-warmed capacity
-		ctx = xctx.WithRoles(ctx, roles)
-		ctx = xctx.WithFeatures(ctx, features)
-		ctx = xctx.WithPermissions(ctx, perms)
+		if !xctx.HasPermission(c, "write") {
+			t.Fatal("expected 'write' permission to be set")
+		}
 	})
 
 	if allocs != 0 {

@@ -22,8 +22,10 @@ type memClaim struct {
 	expiresAt   time.Time
 }
 
-var _ IdempotencyStore = (*MemoryIdempotencyStore)(nil)
-var _ IdempotencyCoordinator = (*MemoryIdempotencyStore)(nil)
+var (
+	_ IdempotencyStore       = (*MemoryIdempotencyStore)(nil)
+	_ IdempotencyCoordinator = (*MemoryIdempotencyStore)(nil)
+)
 
 // MemoryIdempotencyStore provides an in-memory implementation of IdempotencyCoordinator
 // with background TTL eviction and atomic lease claims.

@@ -50,7 +50,7 @@ func (t *Testable[Req, Res]) CaptureReq(ctx context.Context, input Req) (capture
 	}
 
 	if t.builder == nil {
-		return capturedReq, res, fmt.Errorf("CaptureReq requires TestFrom with a builder")
+		return capturedReq, res, errors.New("CaptureReq requires TestFrom with a builder")
 	}
 
 	b := New[Req, Res](t.act.meta.Name, wrappedExec)
@@ -71,13 +71,12 @@ func (t *Testable[Req, Res]) ExpectErr(ctx context.Context, req Req, expected st
 	if err == nil {
 		return fmt.Errorf("expected error %q, got nil", expected)
 	}
-	var appErr *xerr.AppError
-	if errors.As(err, &appErr) {
+	if appErr, ok := errors.AsType[*xerr.AppError](err); ok {
 		if string(appErr.Kind) != expected {
 			return fmt.Errorf("expected error kind %q, got %q", expected, appErr.Kind)
 		}
 		return nil
 	}
 	// Fail the test if the error is not a categorized xerr.AppError
-	return fmt.Errorf("expected xerr.AppError kind %q, got non-app error: %v", expected, err)
+	return fmt.Errorf("expected xerr.AppError kind %q, got non-app error: %w", expected, err)
 }

@@ -18,12 +18,10 @@ func MapTransportError(err error) error {
 	if errors.Is(err, context.Canceled) {
 		return Canceled("operation canceled", err)
 	}
-	var dnsErr *net.DNSError
-	if errors.As(err, &dnsErr) {
+	if dnsErr, ok := errors.AsType[*net.DNSError](err); ok {
 		return Unavailable("DNS resolution failed", dnsErr)
 	}
-	var netErr net.Error
-	if errors.As(err, &netErr) {
+	if netErr, ok := errors.AsType[net.Error](err); ok {
 		if netErr.Timeout() {
 			return Timeout("network timeout", err)
 		}

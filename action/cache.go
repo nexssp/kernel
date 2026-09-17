@@ -60,7 +60,7 @@ func CacheMiddleware[Req, Res any](cfg CacheConfig[Req, Res]) DispatcherMiddlewa
 
 					// Backfill all faster layers (0 to i-1)
 					if i > 0 {
-						for j := 0; j < i; j++ {
+						for j := range i {
 							if cfg.Layers[j] == nil {
 								continue
 							}

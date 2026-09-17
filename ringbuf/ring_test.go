@@ -50,7 +50,7 @@ func TestRingEmptyPopReturnsFalse(t *testing.T) {
 func TestRingFullRejects(t *testing.T) {
 	r := ringbuf.New(4)
 	var s ringbuf.Slot
-	for i := 0; i < 4; i++ {
+	for i := range 4 {
 		if !r.Push(&s) {
 			t.Fatalf("push %d rejected", i)
 		}
@@ -62,14 +62,14 @@ func TestRingFullRejects(t *testing.T) {
 
 func TestRingOrderIsFIFO(t *testing.T) {
 	r := ringbuf.New(8)
-	for i := uint64(0); i < 8; i++ {
+	for i := range uint64(8) {
 		var s ringbuf.Slot
 		s.A = int64(i)
 		if !r.Push(&s) {
 			t.Fatalf("push %d rejected", i)
 		}
 	}
-	for i := int64(0); i < 8; i++ {
+	for i := range int64(8) {
 		var s ringbuf.Slot
 		if !r.Pop(&s) {
 			t.Fatalf("pop %d failed", i)
@@ -84,7 +84,7 @@ func TestRingWraparoundPreservesData(t *testing.T) {
 	r := ringbuf.New(4)
 	var s ringbuf.Slot
 	// push/pop 4× capacity to force wrap
-	for i := int64(0); i < 16; i++ {
+	for i := range int64(16) {
 		s.A = i
 		if !r.Push(&s) {
 			t.Fatalf("push %d rejected", i)
@@ -139,7 +139,7 @@ func TestRingLen(t *testing.T) {
 func TestBatchDrain_StopsAtEmpty(t *testing.T) {
 	r := ringbuf.New(8)
 	var s ringbuf.Slot
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		s.A = int64(i)
 		r.Push(&s)
 	}
@@ -148,7 +148,7 @@ func TestBatchDrain_StopsAtEmpty(t *testing.T) {
 	if n != 3 {
 		t.Fatalf("drained %d, want 3", n)
 	}
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		if buf[i].A != int64(i) {
 			t.Fatalf("buf[%d].A = %d, want %d", i, buf[i].A, i)
 		}
@@ -158,7 +158,7 @@ func TestBatchDrain_StopsAtEmpty(t *testing.T) {
 func TestBatchDrain_HonoursDstLen(t *testing.T) {
 	r := ringbuf.New(16)
 	var s ringbuf.Slot
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		r.Push(&s)
 	}
 	buf := make([]ringbuf.Slot, 4)
@@ -205,7 +205,7 @@ func TestRingBatchDrainZeroAlloc(t *testing.T) {
 	var buf [256]ringbuf.Slot
 	var s ringbuf.Slot
 	// Pre-fill so drain always has work.
-	for i := 0; i < 512; i++ {
+	for range 512 {
 		r.Push(&s)
 	}
 	allocs := testing.AllocsPerRun(1000, func() {
@@ -214,7 +214,7 @@ func TestRingBatchDrainZeroAlloc(t *testing.T) {
 			panic("expected work")
 		}
 		// refill so next iteration also has work
-		for i := 0; i < n; i++ {
+		for range n {
 			r.Push(&s)
 		}
 	})
@@ -254,24 +254,20 @@ func TestRingConcurrentMPMC(t *testing.T) {
 		stop   = make(chan struct{})
 	)
 
-	for p := 0; p < producers; p++ {
-		pWG.Add(1)
-		go func() {
-			defer pWG.Done()
+	for range producers {
+		pWG.Go(func() {
 			var s ringbuf.Slot
-			for i := 0; i < perProducer; i++ {
+			for range perProducer {
 				for !r.Push(&s) {
 					runtime.Gosched()
 				}
 				pushed.Add(1)
 			}
-		}()
+		})
 	}
 
-	for c := 0; c < consumers; c++ {
-		cWG.Add(1)
-		go func() {
-			defer cWG.Done()
+	for range consumers {
+		cWG.Go(func() {
 			var s ringbuf.Slot
 			for {
 				if r.Pop(&s) {
@@ -294,7 +290,7 @@ func TestRingConcurrentMPMC(t *testing.T) {
 				case <-time.After(consumerBackoff):
 				}
 			}
-		}()
+		})
 	}
 
 	pWG.Wait()

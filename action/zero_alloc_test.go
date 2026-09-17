@@ -163,7 +163,8 @@ func TestDoAny_PointerFastPath_ZeroAlloc(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if res.(*CodePayload).Lines != 20 {
+		typed, ok := res.(*CodePayload)
+		if !ok || typed.Lines != 20 {
 			t.Fatal("invalid output")
 		}
 	})

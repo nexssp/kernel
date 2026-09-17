@@ -37,6 +37,7 @@ func (a *StreamAction[Req, T]) Do(ctx context.Context, req Req) (iter.Seq2[T, er
 	for _, h := range a.hooks {
 		if h.Before != nil {
 			var err error
+			//nolint:fatcontext // intentional: hook chain must propagate context to subsequent hooks/generator
 			ctx, err = h.Before(ctx, req, meta)
 			if err != nil {
 				return func(yield func(T, error) bool) {

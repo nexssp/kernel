@@ -2,6 +2,7 @@ package dag_test
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/nexssp/kernel/action"
@@ -11,7 +12,11 @@ import (
 func TestNestedGraphAsNode(t *testing.T) {
 	innerStep := action.New("inner.step", func(_ context.Context, input *dag.NodeContext) (string, error) {
 		value, _ := input.Input.Get("seed")
-		return value.(string) + ":inner", nil
+		s, ok := value.(string)
+		if !ok {
+			return "", fmt.Errorf("seed is not a string: %T", value)
+		}
+		return s + ":inner", nil
 	}).Build()
 	inner, err := dag.New("inner").AddNode("step", "inner_value", innerStep).Compile()
 	if err != nil {

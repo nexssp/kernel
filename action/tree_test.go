@@ -42,20 +42,24 @@ func (m *mockFixedHookNode) GetBindings() []action.Binding                   { r
 func (m *mockFixedHookNode) ExecuteDecoded(_ context.Context, _ action.DecodeFunc) (any, error) {
 	return nil, nil
 }
+
 func (m *mockFixedHookNode) AddAnyHook(hooks ...action.AnyHook) {
-	for i := 0; i < len(hooks); i++ {
+	for i := range hooks {
 		if m.hookLen < len(m.hooks) {
 			m.hooks[m.hookLen] = hooks[i]
 			m.hookLen++
 		}
 	}
 }
+
 func (m *mockFixedHookNode) GetAnyHooks() []action.AnyHook {
 	return m.hooks[:m.hookLen]
 }
+
 func (m *mockFixedHookNode) Children() []action.AnyAction {
 	return m.children
 }
+
 func (m *mockFixedHookNode) ResetHooks() {
 	m.hookLen = 0
 }
@@ -153,7 +157,7 @@ func TestApplyTreeHook_MaxDepthExceeded(t *testing.T) {
 		return "", nil
 	}).Build()
 
-	for i := 0; i < 20; i++ {
+	for range 20 {
 		current = &mockGraphNode{
 			AnyAction: action.New("step", func(_ context.Context, _ any) (string, error) { return "", nil }).Build(),
 			children:  []action.AnyAction{current},
@@ -205,7 +209,7 @@ func BenchmarkApplyTreeHook_DeepLinearDAG(b *testing.B) {
 		return "", nil
 	}).Build()
 
-	for i := 0; i < 16; i++ {
+	for range 16 {
 		current = &mockGraphNode{
 			AnyAction: action.New("step", func(_ context.Context, _ any) (string, error) { return "", nil }).Build(),
 			children:  []action.AnyAction{current},
@@ -224,7 +228,7 @@ func BenchmarkApplyTreeHook_DeepLinearDAG(b *testing.B) {
 
 func TestApplyTreeHook_Linear_ZeroAlloc(t *testing.T) {
 	nodes := make([]mockFixedHookNode, 11)
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		nodes[i] = mockFixedHookNode{
 			name:     "step",
 			children: []action.AnyAction{&nodes[i+1]},
@@ -236,7 +240,7 @@ func TestApplyTreeHook_Linear_ZeroAlloc(t *testing.T) {
 	hookSlice := []action.AnyHook{{}}
 	opts := action.TreeHookOptions{MaxDepth: action.DefaultMaxTreeDepth}
 
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		_ = action.ApplyTreeHookOpts(root, opts, hookSlice...)
 		for j := range nodes {
 			nodes[j].ResetHooks()
@@ -271,7 +275,7 @@ func TestApplyTreeHook_DiamondDAG_ZeroAlloc(t *testing.T) {
 		d.ResetHooks()
 	}
 
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		_ = action.ApplyTreeHookOpts(root, opts, hookSlice...)
 		resetAll()
 	}

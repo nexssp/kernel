@@ -2,7 +2,7 @@ package action
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"sync/atomic"
 )
 
@@ -33,7 +33,11 @@ func (p *Proxy) Current() AnyAction {
 	if v == nil {
 		return nil
 	}
-	return v.(AnyAction)
+	act, ok := v.(AnyAction)
+	if !ok {
+		return nil
+	}
+	return act
 }
 
 // Swap atomically replaces the underlying action with a new one.
@@ -47,7 +51,7 @@ func (p *Proxy) Swap(newAction AnyAction) {
 func (p *Proxy) DoAny(ctx context.Context, req any) (any, error) {
 	act := p.Current()
 	if act == nil {
-		return nil, fmt.Errorf("action: proxy has no active action")
+		return nil, errors.New("action: proxy has no active action")
 	}
 	return act.DoAny(ctx, req)
 }
@@ -56,7 +60,7 @@ func (p *Proxy) DoAny(ctx context.Context, req any) (any, error) {
 func (p *Proxy) ExecuteDecoded(ctx context.Context, decodeFn DecodeFunc) (any, error) {
 	act := p.Current()
 	if act == nil {
-		return nil, fmt.Errorf("action: proxy has no active action")
+		return nil, errors.New("action: proxy has no active action")
 	}
 	return act.ExecuteDecoded(ctx, decodeFn)
 }

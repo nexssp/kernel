@@ -2,6 +2,7 @@ package action
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -142,7 +143,7 @@ func (b *Builder[Req, Res]) ExclusiveFenced(m FencedMutex, ttl time.Duration, ke
 						if execCtx.Err() != nil {
 							return
 						}
-						reportLoss(fmt.Errorf("fenced lock lease lost"))
+						reportLoss(errors.New("fenced lock lease lost"))
 						return
 					}
 				}

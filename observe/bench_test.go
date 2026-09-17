@@ -84,7 +84,7 @@ func BenchmarkJSONLSink_Emit(b *testing.B) {
 
 func BenchmarkPrometheusSink_Write(b *testing.B) {
 	sink := observe.NewPrometheusSink()
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		sink.Emit(context.Background(), observe.Event{Action: "bench", Kind: observe.KindExecuted})
 	}
 	b.ReportAllocs()

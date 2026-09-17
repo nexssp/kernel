@@ -78,10 +78,10 @@ func TestTypedActionConcurrentReuse(t *testing.T) {
 	ctx := context.Background()
 	var wg sync.WaitGroup
 	wg.Add(workers)
-	for worker := 0; worker < workers; worker++ {
+	for worker := range workers {
 		go func(worker int) {
 			defer wg.Done()
-			for call := 0; call < callsPerWorker; call++ {
+			for call := range callsPerWorker {
 				got, err := act.Do(ctx, worker+call)
 				if err != nil {
 					t.Errorf("worker %d: %v", worker, err)

@@ -42,7 +42,6 @@ func main() {
 		AddNode("audit_node", "audit_result", auditAction).
 		AddEdge("pricing_subgraph_node", "audit_node").
 		Compile()
-
 	if err != nil {
 		panic(err)
 	}

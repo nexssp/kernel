@@ -99,7 +99,10 @@ func NewScope(parent context.Context) (context.Context, *RequestScope, func()) {
 	if parent == nil {
 		parent = context.Background()
 	}
-	s := scopePool.Get().(*RequestScope)
+	s, ok := scopePool.Get().(*RequestScope)
+	if !ok || s == nil {
+		s = &RequestScope{}
+	}
 	ctx := context.WithValue(parent, scopeKeyT{}, s)
 	var once sync.Once
 	return ctx, s, func() {

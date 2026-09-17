@@ -98,7 +98,7 @@ func Assign(target any, source any) error {
 	}
 
 	// 3. Byte slice fast-paths
-	if targetVal.Elem().Type() == reflect.TypeOf([]byte{}) {
+	if targetVal.Elem().Type() == reflect.TypeFor[[]byte]() {
 		switch v := source.(type) {
 		case string:
 			targetVal.Elem().SetBytes([]byte(v))

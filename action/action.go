@@ -223,6 +223,7 @@ func (a *BuiltAction[Req, Res]) Do(ctx context.Context, req Req) (res Res, err e
 	var perr error
 	for _, h := range anyHooks {
 		if h.Before != nil {
+			//nolint:fatcontext // intentional: hook chain must propagate context to next hook and to exec
 			finalCtx, perr = h.Before(finalCtx, any(req), a.meta)
 			if perr != nil {
 				return res, fmt.Errorf("action %s before-hook failed: %w", a.meta.Name, perr)
@@ -233,6 +234,7 @@ func (a *BuiltAction[Req, Res]) Do(ctx context.Context, req Req) (res Res, err e
 
 	for _, h := range a.hooks {
 		if h.Before != nil {
+			//nolint:fatcontext // intentional: hook chain must propagate context to next hook and to exec
 			finalCtx, perr = h.Before(finalCtx, req, a.meta)
 			if perr != nil {
 				return res, fmt.Errorf("action %s before-hook failed: %w", a.meta.Name, perr)

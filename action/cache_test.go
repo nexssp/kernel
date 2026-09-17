@@ -220,7 +220,7 @@ func TestCache_Singleflight_SingleMissNotification(t *testing.T) {
 	<-started // Czekamy aż lider zablokuje się wewnątrz handlera
 
 	// 2. Uruchom 9 współbieżnych callerów, które uderzą w trwający flight
-	for i := 0; i < concurrentCallers-1; i++ {
+	for range concurrentCallers - 1 {
 		go func() {
 			defer wg.Done()
 			res, err := act.Do(context.Background(), "shared_key")

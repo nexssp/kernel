@@ -3,6 +3,7 @@ package action_test
 import (
 	"context"
 	"errors"
+	"net/http"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -280,7 +281,7 @@ func TestBuiltAction_ToBuilder_MultiTransportRetention(t *testing.T) {
 	b1, ok1 := bindings[0].(httpBinding)
 	b2, ok2 := bindings[1].(cliBinding)
 
-	if !ok1 || b1.Method != "POST" || b1.Path != "/api/autonomous/solve" {
+	if !ok1 || b1.Method != http.MethodPost || b1.Path != "/api/autonomous/solve" {
 		t.Errorf("first binding corrupted: %+v", bindings[0])
 	}
 	if !ok2 || b2.Command != "autonomous:solve" {
@@ -342,7 +343,7 @@ func TestBuiltAction_ApplyDSL_HappyAndBadPath(t *testing.T) {
 		t.Fatalf("CRITICAL BUG: ApplyDSL stripped route bindings! Expected 1, got %d", len(bindings))
 	}
 	hb, ok := bindings[0].(httpBinding)
-	if !ok || hb.Method != "POST" || hb.Path != "/api/autonomous/solve" {
+	if !ok || hb.Method != http.MethodPost || hb.Path != "/api/autonomous/solve" {
 		t.Fatalf("route corrupted: %+v", bindings[0])
 	}
 

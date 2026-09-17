@@ -45,8 +45,7 @@ func main() {
 			2,
 			action.ConstantBackoff(time.Millisecond),
 			func(err error) bool {
-				var se *sdkError
-				if errors.As(err, &se) {
+				if se, ok := errors.AsType[*sdkError](err); ok {
 					return se.Code >= 500
 				}
 				return false

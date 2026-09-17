@@ -89,8 +89,13 @@ func (e *AppError) IsTransient() bool {
 	switch e.Kind {
 	case KindTimeout, KindUnavailable, KindCircuitBreaker, KindRateLimit, KindTooManyRequests:
 		return true
+	case KindBadRequest, KindUnauthorized, KindForbidden, KindNotFound,
+		KindConflict, KindValidation, KindInternal, KindMethodNotAllowed,
+		KindCanceled, KindDatabase, KindShutdown:
+		return false
+	default:
+		return false
 	}
-	return false
 }
 
 // IsPermanent reports whether the error is fundamentally non-retryable
@@ -99,8 +104,13 @@ func IsPermanent(err error) bool {
 	switch KindFrom(err) {
 	case KindBadRequest, KindUnauthorized, KindForbidden, KindNotFound, KindValidation:
 		return true
+	case KindConflict, KindTooManyRequests, KindTimeout, KindUnavailable,
+		KindInternal, KindMethodNotAllowed, KindRateLimit, KindCanceled,
+		KindDatabase, KindShutdown, KindCircuitBreaker:
+		return false
+	default:
+		return false
 	}
-	return false
 }
 
 // WithStack re-captures the stack. Use for bugs / unexpected internal errors.
@@ -221,8 +231,7 @@ func From(err error) *AppError {
 	if err == nil {
 		return nil
 	}
-	var e *AppError
-	if errors.As(err, &e) {
+	if e, ok := errors.AsType[*AppError](err); ok {
 		return e
 	}
 	if errors.Is(err, context.DeadlineExceeded) {

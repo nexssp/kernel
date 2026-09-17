@@ -74,7 +74,7 @@ func TestMemorySink_DefaultCapacity(t *testing.T) {
 	t.Parallel()
 
 	s := observe.NewMemorySink(0)
-	for i := 0; i < 101; i++ {
+	for i := range 101 {
 		s.Emit(context.Background(), observe.Event{Kind: strconv.Itoa(i)})
 	}
 	got := s.Events()
@@ -102,23 +102,19 @@ func TestMemorySink_ConcurrentWriteAndRead(t *testing.T) {
 	s := observe.NewMemorySink(100)
 	ctx := context.Background()
 	var wg sync.WaitGroup
-	for i := 0; i < 20; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for j := 0; j < 100; j++ {
+	for range 20 {
+		wg.Go(func() {
+			for range 100 {
 				s.Emit(ctx, observe.Event{Kind: "event"})
 			}
-		}()
+		})
 	}
-	for i := 0; i < 5; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for j := 0; j < 100; j++ {
+	for range 5 {
+		wg.Go(func() {
+			for range 100 {
 				_ = s.Events()
 			}
-		}()
+		})
 	}
 	wg.Wait()
 	if got := len(s.Events()); got != 100 {
@@ -152,14 +148,12 @@ func TestMetricsSink_ConcurrentEmits(t *testing.T) {
 	s := observe.NewMetricsSink()
 	ctx := context.Background()
 	var wg sync.WaitGroup
-	for i := 0; i < 10; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for j := 0; j < 100; j++ {
+	for range 10 {
+		wg.Go(func() {
+			for range 100 {
 				s.Emit(ctx, observe.Event{Action: "conc", Kind: observe.KindExecuted})
 			}
-		}()
+		})
 	}
 	wg.Wait()
 	key := observe.MetricKey{Action: "conc", Kind: observe.KindExecuted}

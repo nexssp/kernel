@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"slices"
@@ -37,7 +38,7 @@ func (s *PrometheusSink) Snapshot() map[MetricKey]uint64 {
 
 func (s *PrometheusSink) WritePrometheus(w io.Writer) error {
 	if s == nil || w == nil {
-		return fmt.Errorf("observe: prometheus sink and writer are required")
+		return errors.New("observe: prometheus sink and writer are required")
 	}
 	snapshot := s.Snapshot()
 	keys := sortedMetricKeys(snapshot)

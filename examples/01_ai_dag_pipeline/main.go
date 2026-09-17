@@ -61,7 +61,6 @@ func main() {
 		AddEdge("user_node", "ai_node").   // ai_node depends on user_node
 		AddEdge("orders_node", "ai_node"). // ai_node depends on orders_node
 		Compile()
-
 	if err != nil {
 		panic(err)
 	}

@@ -6,6 +6,7 @@ package action_test
 import (
 	"context"
 	"errors"
+	"net/http"
 	"reflect"
 	"strings"
 	"sync/atomic"
@@ -74,7 +75,7 @@ func TestDynamic_PreservesContractBindingsAndHooks(t *testing.T) {
 		t.Fatalf("expected 1 binding preserved, got %d", len(bindings))
 	}
 	r, ok := bindings[0].(dummyHTTPRoute)
-	if !ok || r.Method != "POST" || r.Path != "/api/autonomous/solve" {
+	if !ok || r.Method != http.MethodPost || r.Path != "/api/autonomous/solve" {
 		t.Fatalf("binding corrupted or modified: %+v", bindings[0])
 	}
 

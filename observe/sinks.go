@@ -3,6 +3,7 @@ package observe
 import (
 	"context"
 	"log/slog"
+	"maps"
 	"sync"
 
 	"github.com/nexssp/kernel/ringbuf"
@@ -108,9 +109,7 @@ func (s *MetricsSink) Snapshot() map[MetricKey]uint64 {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	out := make(map[MetricKey]uint64, len(s.counters))
-	for key, count := range s.counters {
-		out[key] = count
-	}
+	maps.Copy(out, s.counters)
 	return out
 }
 

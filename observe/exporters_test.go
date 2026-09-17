@@ -97,14 +97,12 @@ func TestJSONLSink_ConcurrentWrites(t *testing.T) {
 	var buf bytes.Buffer
 	sink := observe.NewJSONLSink(&buf, 100)
 	var wg sync.WaitGroup
-	for i := 0; i < 20; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for j := 0; j < 10; j++ {
+	for range 20 {
+		wg.Go(func() {
+			for range 10 {
 				sink.Emit(context.Background(), observe.Event{Kind: "event", Action: "concurrent"})
 			}
-		}()
+		})
 	}
 	wg.Wait()
 	if lines := strings.Count(buf.String(), "\n"); lines != 200 {

@@ -95,10 +95,7 @@ func (c *defaultMemoryKV[V]) Delete(ctx context.Context, k string) error {
 }
 
 func (c *defaultMemoryKV[V]) janitor() {
-	tickInterval := c.ttl / 2
-	if tickInterval < 10*time.Millisecond {
-		tickInterval = 10 * time.Millisecond
-	}
+	tickInterval := max(c.ttl/2, 10*time.Millisecond)
 
 	ticker := time.NewTicker(tickInterval)
 	defer ticker.Stop()

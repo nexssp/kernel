@@ -57,7 +57,7 @@ func applyTreeHookInternal(act AnyAction, visited []AnyAction, depth, maxDepth i
 
 	if comp, ok := act.(Composite); ok {
 		children := comp.Children()
-		for i := 0; i < len(children); i++ {
+		for i := range children {
 			var err error
 			visited, err = applyTreeHookInternal(children[i], visited, depth+1, maxDepth, hooks)
 			if err != nil {

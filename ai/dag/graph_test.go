@@ -185,7 +185,7 @@ func TestDAG_DeterministicLayerOrder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer out.Release()
+	out.Release()
 }
 
 func TestDAG_StateDataIsSnapshot(t *testing.T) {

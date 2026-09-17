@@ -9,7 +9,7 @@ import (
 
 func TestHistoryBufferSmoke(t *testing.T) {
 	buf := ringbuf.NewBuffer[int](5)
-	for i := 0; i < 7; i++ {
+	for i := range 7 {
 		buf.Push(i)
 	}
 	got := buf.Snapshot()

@@ -83,8 +83,7 @@ func TestRateLimit(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected rate limit error, got nil")
 	}
-	var appErr *xerr.AppError
-	if !errors.As(err, &appErr) {
+	if _, ok := errors.AsType[*xerr.AppError](err); !ok {
 		t.Fatalf("expected rate limit error, got %v", err)
 	}
 }

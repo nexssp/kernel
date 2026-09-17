@@ -106,7 +106,7 @@ func TestProxy_ExecuteDecoded_ZeroAlloc(t *testing.T) {
 
 	p := action.NewProxy(act)
 
-	for i := 0; i < 50; i++ {
+	for range 50 {
 		_, _ = p.ExecuteDecoded(ctx, benchmarkNoopDecoder)
 	}
 
@@ -162,9 +162,7 @@ func TestProxy_HighThroughput_Contention(t *testing.T) {
 	// scheduler was slow to start goroutines.
 	firstOpDone := make([]atomic.Bool, readers)
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		flip := false
 		for running.Load() {
 			if flip {
@@ -176,9 +174,9 @@ func TestProxy_HighThroughput_Contention(t *testing.T) {
 			writeCount.Add(1)
 			runtime.Gosched()
 		}
-	}()
+	})
 
-	for i := 0; i < readers; i++ {
+	for i := range readers {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()
@@ -188,7 +186,11 @@ func TestProxy_HighThroughput_Contention(t *testing.T) {
 					t.Errorf("read failed during concurrent swap: %v", err)
 					return
 				}
-				v := res.(int)
+				v, ok := res.(int)
+				if !ok {
+					t.Errorf("expected int, got %T", res)
+					return
+				}
 				if v != 11 && v != 12 {
 					t.Errorf("corrupt read state: %d", v)
 					return
@@ -259,7 +261,7 @@ func TestProxy_DoAny_ZeroAlloc(t *testing.T) {
 
 	p := action.NewProxy(act)
 
-	for i := 0; i < 100; i++ {
+	for range 100 {
 		_, _ = p.DoAny(ctx, 42)
 	}
 
@@ -278,7 +280,7 @@ func TestProxy_Swap_ZeroAlloc(t *testing.T) {
 
 	p := action.NewProxy(act1)
 
-	for i := 0; i < 100; i++ {
+	for range 100 {
 		p.Swap(act2)
 		p.Swap(act1)
 	}

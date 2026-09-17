@@ -102,7 +102,10 @@ var statePool = sync.Pool{
 
 // AcquireState retrieves a State instance from the memory pool.
 func AcquireState() *State {
-	s := statePool.Get().(*State)
+	s, ok := statePool.Get().(*State)
+	if !ok || s == nil {
+		s = &State{}
+	}
 	if s.data == nil {
 		s.data = make(map[string]any, 16)
 	}
@@ -421,8 +424,7 @@ func (d *DAG) Execute(ctx context.Context, initialState *State) (*State, error) 
 				return currentState, err
 			}
 
-			var execErr *ExecutionError
-			if errors.As(err, &execErr) {
+			if execErr, ok := errors.AsType[*ExecutionError](err); ok {
 				execErr.State = currentState
 				for i, res := range layerResults {
 					if res.Key != "" && res.Val != nil {

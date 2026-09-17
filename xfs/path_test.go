@@ -340,7 +340,7 @@ func FuzzRel(f *testing.F) {
 			}
 		}
 		// Reserved device names and trailing dots must not survive.
-		for _, seg := range strings.Split(clean, "/") {
+		for seg := range strings.SplitSeq(clean, "/") {
 			if strings.HasSuffix(seg, ".") {
 				t.Fatalf("Rel(%q) returned trailing dot in %q", p, seg)
 			}

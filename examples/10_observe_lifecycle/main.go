@@ -111,11 +111,9 @@ func main() {
 		return id
 	}).AnyHook(hook).Build()
 	var dedupWG sync.WaitGroup
-	dedupWG.Add(1)
-	go func() { defer dedupWG.Done(); _, _ = dedup.Do(ctx, "sku-123") }()
+	dedupWG.Go(func() { ; _, _ = dedup.Do(ctx, "sku-123") })
 	<-dedupEntered
-	dedupWG.Add(1)
-	go func() { defer dedupWG.Done(); _, _ = dedup.Do(ctx, "sku-123") }()
+	dedupWG.Go(func() { ; _, _ = dedup.Do(ctx, "sku-123") })
 	<-dedupSecondSeen
 	close(dedupRelease)
 	dedupWG.Wait()
@@ -137,11 +135,9 @@ func main() {
 		return sku
 	}).AnyHook(hook).Build()
 	var coalesceWG sync.WaitGroup
-	coalesceWG.Add(1)
-	go func() { defer coalesceWG.Done(); _, _ = coalesced.Do(ctx, "sku-123") }()
+	coalesceWG.Go(func() { ; _, _ = coalesced.Do(ctx, "sku-123") })
 	<-coalesceEntered
-	coalesceWG.Add(1)
-	go func() { defer coalesceWG.Done(); _, _ = coalesced.Do(ctx, "sku-123") }()
+	coalesceWG.Go(func() { ; _, _ = coalesced.Do(ctx, "sku-123") })
 	<-coalesceSecondSeen
 	close(coalesceRelease)
 	coalesceWG.Wait()

@@ -214,7 +214,7 @@ func TestOnBuild_FilteredHookNeverRunsInDo(t *testing.T) {
 		return n, nil
 	}).AnyHook(hook).Build()
 
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		if _, err := act.Do(context.Background(), i); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}

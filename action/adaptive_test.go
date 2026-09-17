@@ -87,7 +87,7 @@ func TestAdaptive_DoesNotTripOnForbidden(t *testing.T) {
 	})).Build()
 
 	// Even after many 4xx responses, the CB must remain closed.
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		_, err := act.Do(context.Background(), "req")
 		if err == nil {
 			t.Fatal("expected Forbidden error, got nil")
