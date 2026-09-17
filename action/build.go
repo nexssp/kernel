@@ -17,6 +17,31 @@ func NewRegistry(libs ...Library) (*Registry, error) {
 		return &Registry{byName: make(map[string]AnyAction)}, nil
 	}
 
+	allowed, err := buildOverridesMap(libs)
+	if err != nil {
+		return nil, err
+	}
+
+	winners, err := collectWinners(libs, allowed)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := claimRegistryHooks(winners, libs); err != nil {
+		return nil, err
+	}
+
+	applyRegistryHooks(winners, libs)
+	byName := indexWinners(winners)
+	applyAliases(byName, libs)
+
+	return &Registry{
+		byName:  byName,
+		actions: sortedWinners(winners),
+	}, nil
+}
+
+func buildOverridesMap(libs []Library) (map[string]string, error) {
 	allowed := make(map[string]string, 16)
 	for i := range libs {
 		lib := &libs[i]
@@ -30,78 +55,89 @@ func NewRegistry(libs ...Library) (*Registry, error) {
 			allowed[name] = lib.Name
 		}
 	}
+	return allowed, nil
+}
 
-	type claim struct {
-		library string
-		action  AnyAction
-	}
+type winnerClaim struct {
+	library string
+	action  AnyAction
+}
 
-	winners := make(map[string]claim, 64)
-
+func collectWinners(libs []Library, allowed map[string]string) (map[string]winnerClaim, error) {
+	winners := make(map[string]winnerClaim, 64)
 	for i := range libs {
 		lib := &libs[i]
 		seen := make(map[string]bool, len(lib.Actions))
-
 		for _, act := range lib.Actions {
-			if act == nil {
-				continue
+			if err := collectOneAction(lib.Name, act, seen, winners, allowed); err != nil {
+				return nil, err
 			}
-			meta := act.Describe()
-			if meta == nil || meta.Name == "" {
-				return nil, fmt.Errorf(
-					"action: library %q contains an action with no name",
-					lib.Name,
-				)
-			}
-			if seen[meta.Name] {
-				return nil, fmt.Errorf(
-					"action: library %q declares %q more than once",
-					lib.Name, meta.Name,
-				)
-			}
-			seen[meta.Name] = true
-
-			if previous, duplicate := winners[meta.Name]; duplicate {
-				if allowed[meta.Name] != lib.Name {
-					return nil, fmt.Errorf(
-						"action: %q declared by both %q and %q; add %q to %s.Overrides to accept",
-						meta.Name, previous.library, lib.Name, meta.Name, lib.Name,
-					)
-				}
-			}
-			winners[meta.Name] = claim{library: lib.Name, action: act}
 		}
 	}
+	return winners, nil
+}
 
-	// Claim registry hooks once per action, before applying any. This prevents
-	// silently doubling hooks when the same action instance is passed to a
-	// second NewRegistry call — a documented but previously unenforced contract.
-	hasHooks := false
+func collectOneAction(
+	libName string,
+	act AnyAction,
+	seen map[string]bool,
+	winners map[string]winnerClaim,
+	allowed map[string]string,
+) error {
+	if act == nil {
+		return nil
+	}
+	meta := act.Describe()
+	if meta == nil || meta.Name == "" {
+		return fmt.Errorf("action: library %q contains an action with no name", libName)
+	}
+	if seen[meta.Name] {
+		return fmt.Errorf("action: library %q declares %q more than once", libName, meta.Name)
+	}
+	seen[meta.Name] = true
+
+	if previous, duplicate := winners[meta.Name]; duplicate {
+		if allowed[meta.Name] != libName {
+			return fmt.Errorf(
+				"action: %q declared by both %q and %q; add %q to %s.Overrides to accept",
+				meta.Name, previous.library, libName, meta.Name, libName,
+			)
+		}
+	}
+	winners[meta.Name] = winnerClaim{library: libName, action: act}
+	return nil
+}
+
+func claimRegistryHooks(winners map[string]winnerClaim, libs []Library) error {
+	if !anyLibraryHasHooks(libs) {
+		return nil
+	}
+	for _, c := range winners {
+		claimer, ok := c.action.(hookClaimer)
+		if !ok {
+			continue
+		}
+		if !claimer.claimRegistryHooks() {
+			return fmt.Errorf(
+				"action: %q already received hooks from a previous NewRegistry call; "+
+					"build a fresh action for the second registry",
+				c.action.Describe().Name,
+			)
+		}
+	}
+	return nil
+}
+
+func anyLibraryHasHooks(libs []Library) bool {
 	for i := range libs {
 		if len(libs[i].Hooks) > 0 {
-			hasHooks = true
-			break
+			return true
 		}
 	}
+	return false
+}
 
-	if hasHooks {
-		for _, c := range winners {
-			claimer, ok := c.action.(hookClaimer)
-			if !ok {
-				// Custom AnyAction implementations are not tracked; they remain
-				// reusable across registries as before.
-				continue
-			}
-			if !claimer.claimRegistryHooks() {
-				return nil, fmt.Errorf(
-					"action: %q already received hooks from a previous NewRegistry call; "+
-						"build a fresh action for the second registry",
-					c.action.Describe().Name,
-				)
-			}
-		}
-	}
-
+func applyRegistryHooks(winners map[string]winnerClaim, libs []Library) {
 	for i := range libs {
 		if len(libs[i].Hooks) == 0 {
 			continue
@@ -110,12 +146,17 @@ func NewRegistry(libs ...Library) (*Registry, error) {
 			c.action.AddAnyHook(libs[i].Hooks...)
 		}
 	}
+}
 
+func indexWinners(winners map[string]winnerClaim) map[string]AnyAction {
 	byName := make(map[string]AnyAction, len(winners)*2)
 	for name, c := range winners {
 		byName[name] = c.action
 	}
+	return byName
+}
 
+func applyAliases(byName map[string]AnyAction, libs []Library) {
 	for i := range libs {
 		lib := &libs[i]
 		for _, alias := range lib.Aliases {
@@ -134,7 +175,9 @@ func NewRegistry(libs ...Library) (*Registry, error) {
 			}
 		}
 	}
+}
 
+func sortedWinners(winners map[string]winnerClaim) []AnyAction {
 	actions := make([]AnyAction, 0, len(winners))
 	for _, c := range winners {
 		actions = append(actions, c.action)
@@ -142,8 +185,7 @@ func NewRegistry(libs ...Library) (*Registry, error) {
 	sort.Slice(actions, func(i, j int) bool {
 		return actions[i].Describe().Name < actions[j].Describe().Name
 	})
-
-	return &Registry{byName: byName, actions: actions}, nil
+	return actions
 }
 
 func MustNewRegistry(libs ...Library) *Registry {
