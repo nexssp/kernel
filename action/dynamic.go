@@ -57,59 +57,79 @@ func Assign(target any, source any) error {
 
 	sourceVal := reflect.ValueOf(source)
 
-	// 1. O(1) Fast path: Direct assignability
-	if sourceVal.Type().AssignableTo(targetVal.Elem().Type()) {
-		targetVal.Elem().Set(sourceVal)
+	if assignDirect(targetVal, sourceVal) {
 		return nil
 	}
-	if sourceVal.Kind() == reflect.Pointer && !sourceVal.IsNil() && sourceVal.Elem().Type().AssignableTo(targetVal.Elem().Type()) {
-		targetVal.Elem().Set(sourceVal.Elem())
+	if assignString(targetVal, source) {
+		return nil
+	}
+	if assignBytes(targetVal, source) {
 		return nil
 	}
 
-	// 2. String conversion fast-paths (common in AI prompts/pipes)
-	if targetVal.Elem().Kind() == reflect.String {
-		switch v := source.(type) {
-		case string:
-			targetVal.Elem().SetString(v)
-			return nil
-		case fmt.Stringer:
-			targetVal.Elem().SetString(v.String())
-			return nil
-		case []byte:
-			targetVal.Elem().SetString(string(v))
-			return nil
-		case error:
-			targetVal.Elem().SetString(v.Error())
-			return nil
-		}
+	return assignJSON(target, source)
+}
 
-		// Map text-key extraction fallback
-		if m, ok := source.(map[string]any); ok {
-			for _, key := range DefaultTextFields {
-				if val, found := m[key]; found {
-					if s, isStr := val.(string); isStr {
-						targetVal.Elem().SetString(s)
-						return nil
-					}
+func assignDirect(target, source reflect.Value) bool {
+	if source.Type().AssignableTo(target.Elem().Type()) {
+		target.Elem().Set(source)
+		return true
+	}
+	if source.Kind() == reflect.Pointer && !source.IsNil() &&
+		source.Elem().Type().AssignableTo(target.Elem().Type()) {
+		target.Elem().Set(source.Elem())
+		return true
+	}
+	return false
+}
+
+func assignString(target reflect.Value, source any) bool {
+	if target.Elem().Kind() != reflect.String {
+		return false
+	}
+	switch v := source.(type) {
+	case string:
+		target.Elem().SetString(v)
+		return true
+	case fmt.Stringer:
+		target.Elem().SetString(v.String())
+		return true
+	case []byte:
+		target.Elem().SetString(string(v))
+		return true
+	case error:
+		target.Elem().SetString(v.Error())
+		return true
+	}
+	if m, ok := source.(map[string]any); ok {
+		for _, key := range DefaultTextFields {
+			if val, found := m[key]; found {
+				if s, isStr := val.(string); isStr {
+					target.Elem().SetString(s)
+					return true
 				}
 			}
 		}
 	}
+	return false
+}
 
-	// 3. Byte slice fast-paths
-	if targetVal.Elem().Type() == reflect.TypeFor[[]byte]() {
-		switch v := source.(type) {
-		case string:
-			targetVal.Elem().SetBytes([]byte(v))
-			return nil
-		case fmt.Stringer:
-			targetVal.Elem().SetBytes([]byte(v.String()))
-			return nil
-		}
+func assignBytes(target reflect.Value, source any) bool {
+	if target.Elem().Type() != reflect.TypeFor[[]byte]() {
+		return false
 	}
+	switch v := source.(type) {
+	case string:
+		target.Elem().SetBytes([]byte(v))
+		return true
+	case fmt.Stringer:
+		target.Elem().SetBytes([]byte(v.String()))
+		return true
+	}
+	return false
+}
 
-	// 4. Fallback structural conversion
+func assignJSON(target, source any) error {
 	data, err := json.Marshal(source)
 	if err != nil {
 		return fmt.Errorf("coerce: marshal %T: %w", source, err)
