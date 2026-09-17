@@ -373,7 +373,7 @@ func BenchmarkRegistry_Get_Canonical(b *testing.B) {
 
 	b.ReportAllocs()
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		_, _ = reg.Get("bench.op")
 	}
 }
@@ -388,7 +388,7 @@ func BenchmarkRegistry_Get_Alias(b *testing.B) {
 
 	b.ReportAllocs()
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		_, _ = reg.Get("b")
 	}
 }
@@ -399,7 +399,7 @@ func BenchmarkRegistry_Actions(b *testing.B) {
 
 	b.ReportAllocs()
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		_ = reg.Actions()
 	}
 }

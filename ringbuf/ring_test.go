@@ -322,7 +322,7 @@ func BenchmarkRingPushPop(b *testing.B) {
 	var s ringbuf.Slot
 	b.ReportAllocs()
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		r.Push(&s)
 		r.Pop(&s)
 	}
@@ -334,7 +334,7 @@ func BenchmarkRingBatchDrain(b *testing.B) {
 	var buf [64]ringbuf.Slot
 	b.ReportAllocs()
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		r.Push(&s)
 		r.BatchDrain(buf[:])
 	}

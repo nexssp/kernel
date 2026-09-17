@@ -16,7 +16,7 @@ func BenchmarkTypedActionDo(b *testing.B) {
 	ctx := context.Background()
 	b.ReportAllocs()
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for i := range b.N {
 		value, err := act.Do(ctx, i)
 		if err != nil || value != i+1 {
 			b.Fatalf("unexpected result: value=%d err=%v", value, err)
@@ -52,7 +52,7 @@ func BenchmarkActionFanOut(b *testing.B) {
 	ctx := context.Background()
 	b.ReportAllocs()
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		results := action.FanOut(ctx, act, requests, 8)
 		if len(results) != len(requests) {
 			b.Fatalf("got %d results, want %d", len(results), len(requests))

@@ -38,7 +38,7 @@ func Rel(p string) (string, error) {
 	if p == "" {
 		return "", xerr.BadRequest("path is required")
 	}
-	for i := 0; i < len(p); i++ {
+	for i := range len(p) {
 		if p[i] < 0x20 {
 			return "", xerr.BadRequest("path must not contain control characters")
 		}

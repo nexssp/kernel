@@ -48,7 +48,7 @@ var (
 
 // paddedSeq keeps each sequence counter on its own cache line, so a
 // producer touching slot i's sequence does not evict slot i+1's
-// sequence from a neighbouring core.
+// sequence from a neighboring core.
 type paddedSeq struct {
 	val atomic.Uint64
 	_   [56]byte

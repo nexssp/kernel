@@ -193,7 +193,7 @@ func BenchmarkSprintProd_AppError(b *testing.B) {
 	err := &AppError{Kind: "internal", Message: "internal error"}
 	b.ReportAllocs()
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		_ = sprintProd(err)
 	}
 }
@@ -202,7 +202,7 @@ func BenchmarkSprintProd_Plain(b *testing.B) {
 	err := errors.New("boom")
 	b.ReportAllocs()
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		_ = sprintProd(err)
 	}
 }
@@ -211,7 +211,7 @@ func BenchmarkIsUserFrame(b *testing.B) {
 	fn := "github.com/nexss/nexssp/kernel/xerr.sprintDev"
 	b.ReportAllocs()
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		_ = isUserFrame(fn)
 	}
 }
@@ -220,7 +220,7 @@ func BenchmarkTrimPath(b *testing.B) {
 	p := "/home/dev/proj/nexss/kernel/xerr/format.go"
 	b.ReportAllocs()
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		_ = trimPath(p)
 	}
 }
@@ -229,7 +229,7 @@ func BenchmarkSprintProd_DirectAppError(b *testing.B) {
 	err := &AppError{Kind: "internal", Message: "internal error"}
 	b.ReportAllocs()
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		_ = sprintProd(err)
 	}
 }

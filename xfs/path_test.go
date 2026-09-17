@@ -370,7 +370,7 @@ func BenchmarkRel_HappyPath(b *testing.B) {
 		b.Fatalf("Rel allocated %v times per call, want 0", allocs)
 	}
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		_, _ = xfs.Rel(p)
 	}
 }

@@ -12,7 +12,7 @@ import (
 type Testable[Req, Res any] struct {
 	act     *BuiltAction[Req, Res]
 	base    Fn[Req, Res]
-	builder *Builder[Req, Res] // <-- nowe pole
+	builder *Builder[Req, Res]
 }
 
 func TestFrom[Req, Res any](b *Builder[Req, Res]) *Testable[Req, Res] {

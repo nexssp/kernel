@@ -108,7 +108,7 @@ func BenchmarkDAG_ToMermaid(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		res := cdag.ToMermaid()
 		if len(res) == 0 {
 			b.Fatal("unexpected empty result")

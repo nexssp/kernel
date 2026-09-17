@@ -320,7 +320,7 @@ func BenchmarkOnBuild_Do_NoHooks(b *testing.B) {
 	ctx := context.Background()
 	b.ReportAllocs()
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		_, _ = act.Do(ctx, 42)
 	}
 }
@@ -338,7 +338,7 @@ func BenchmarkOnBuild_Do_AcceptedHook(b *testing.B) {
 	ctx := context.Background()
 	b.ReportAllocs()
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		_, _ = act.Do(ctx, 42)
 	}
 }
@@ -353,7 +353,7 @@ func BenchmarkOnBuild_Do_FilteredHook(b *testing.B) {
 	ctx := context.Background()
 	b.ReportAllocs()
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		_, _ = act.Do(ctx, 42)
 	}
 }
@@ -364,7 +364,7 @@ func BenchmarkOnBuild_Build_WithFilter(b *testing.B) {
 	}
 	b.ReportAllocs()
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		_ = action.New("bench.build", func(_ context.Context, n int) (int, error) {
 			return n, nil
 		}).AnyHook(hook).Build()

@@ -248,7 +248,7 @@ func BenchmarkProxy_DoAny_HotPath(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		_, _ = p.DoAny(ctx, 42)
 	}
 }

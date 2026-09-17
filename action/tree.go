@@ -38,7 +38,7 @@ func applyTreeHookInternal(act AnyAction, visited []AnyAction, depth, maxDepth i
 		return visited, fmt.Errorf("action: tree hook max depth exceeded (%d)", maxDepth)
 	}
 
-	for i := 0; i < len(visited); i++ {
+	for i := range len(visited) {
 		if visited[i] == act {
 			return visited, nil
 		}

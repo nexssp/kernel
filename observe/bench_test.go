@@ -34,7 +34,7 @@ func BenchmarkHook_NilSink(b *testing.B) {
 	meta := &action.Meta{Name: "bench.action"}
 	b.ReportAllocs()
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		if h.OnExecuted != nil {
 			h.OnExecuted(ctx, "req", "res", nil, meta)
 		}
@@ -47,7 +47,7 @@ func BenchmarkHook_NoopSink(b *testing.B) {
 	meta := &action.Meta{Name: "bench.action"}
 	b.ReportAllocs()
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		h.OnExecuted(ctx, "req", "res", nil, meta)
 	}
 }
@@ -57,7 +57,7 @@ func BenchmarkMetricsSink_Emit(b *testing.B) {
 	event := observe.Event{Action: "orders.create", Kind: observe.KindExecuted}
 	b.ReportAllocs()
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		sink.Emit(context.Background(), event)
 	}
 }
@@ -67,7 +67,7 @@ func BenchmarkMemorySink_Emit(b *testing.B) {
 	event := observe.Event{Action: "orders.create", Kind: observe.KindExecuted}
 	b.ReportAllocs()
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		sink.Emit(context.Background(), event)
 	}
 }
@@ -77,7 +77,7 @@ func BenchmarkJSONLSink_Emit(b *testing.B) {
 	event := observe.Event{Action: "orders.create", Kind: observe.KindExecuted}
 	b.ReportAllocs()
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		sink.Emit(context.Background(), event)
 	}
 }
@@ -89,7 +89,7 @@ func BenchmarkPrometheusSink_Write(b *testing.B) {
 	}
 	b.ReportAllocs()
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		var buf bytes.Buffer
 		if err := sink.WritePrometheus(&buf); err != nil {
 			b.Fatal(err)

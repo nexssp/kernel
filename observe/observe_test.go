@@ -159,7 +159,7 @@ func BenchmarkObserveHook(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 
-	for i := 0; i < b.N; i++ {
+	for i := range b.N {
 		_, _ = act.Do(ctx, i)
 	}
 }
