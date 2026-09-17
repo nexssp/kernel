@@ -1,6 +1,7 @@
 package xfs
 
 import (
+	"log/slog"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -69,7 +70,9 @@ func WriteFileAtomic(path string, data []byte, perm os.FileMode) error {
 	}
 
 	if d, err := os.Open(dir); err == nil {
-		_ = d.Sync()
+		if err := d.Sync(); err != nil {
+			slog.Warn("xfs_dir_fsync_failed", "dir", dir, "error", err)
+		}
 		_ = d.Close()
 	}
 	return nil

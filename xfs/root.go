@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"io/fs"
+	"log/slog"
 	"os"
 	"runtime"
 	"time"
@@ -157,16 +158,22 @@ func (r *Root) WriteFileAtomic(p string, data []byte, perm os.FileMode) error {
 
 	if _, err := f.Write(data); err != nil {
 		_ = f.Close()
-		_ = r.r.Remove(tmpName)
+		if rmErr := r.r.Remove(tmpName); rmErr != nil {
+			slog.Warn("xfs_atomic_cleanup_failed", "tmp", tmpName, "error", rmErr)
+		}
 		return xerr.Internal("atomic write: write tmp", err)
 	}
 	if err := f.Sync(); err != nil {
 		_ = f.Close()
-		_ = r.r.Remove(tmpName)
+		if rmErr := r.r.Remove(tmpName); rmErr != nil {
+			slog.Warn("xfs_atomic_cleanup_failed", "tmp", tmpName, "error", rmErr)
+		}
 		return xerr.Internal("atomic write: fsync tmp", err)
 	}
 	if err := f.Close(); err != nil {
-		_ = r.r.Remove(tmpName)
+		if rmErr := r.r.Remove(tmpName); rmErr != nil {
+			slog.Warn("xfs_atomic_cleanup_failed", "tmp", tmpName, "error", rmErr)
+		}
 		return xerr.Internal("atomic write: close tmp", err)
 	}
 
@@ -185,7 +192,9 @@ func (r *Root) WriteFileAtomic(p string, data []byte, perm os.FileMode) error {
 		}
 		time.Sleep(time.Duration(10*(i+1)) * time.Millisecond)
 	}
-	_ = r.r.Remove(tmpName)
+	if rmErr := r.r.Remove(tmpName); rmErr != nil {
+		slog.Warn("xfs_atomic_cleanup_failed", "tmp", tmpName, "error", rmErr)
+	}
 	return xerr.Internal("atomic write: rename", renameErr)
 }
 

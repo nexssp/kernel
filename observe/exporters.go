@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"slices"
 	"strconv"
 	"strings"
@@ -97,7 +98,9 @@ func (s *JSONLSink) Emit(_ context.Context, event Event) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	_, _ = s.writer.Write(append(payload, '\n'))
+	if _, err := s.writer.Write(append(payload, '\n')); err != nil {
+		slog.Warn("jsonl_sink_write_failed", "error", err)
+	}
 }
 
 type jsonRecord struct {
