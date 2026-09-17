@@ -182,6 +182,7 @@ linters:
           - goconst
           - gocyclo
           - errcheck
+          - unparam
 
       - path: _test\.go
         text: '^shadow: declaration of "err"'
