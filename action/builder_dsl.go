@@ -15,15 +15,27 @@ import (
 // see the correct default scope; hooks are applied last so they wrap the
 // fully configured action.
 func (b *Builder[Req, Res]) WithDSL(m DSLModifiers) *Builder[Req, Res] {
-	switch m.Scope {
-	case "public":
-		b = b.Public()
-	case "internal":
-		b = b.Internal()
-	case "system":
-		b = b.System()
-	}
+	b = b.applyScope(m.Scope)
+	b = b.applyAuth(m)
+	b = b.applyResilience(m)
+	b = b.applyCache(m)
+	b = b.applyMetadata(m)
+	return b
+}
 
+func (b *Builder[Req, Res]) applyScope(scope string) *Builder[Req, Res] {
+	switch scope {
+	case "public":
+		return b.Public()
+	case "internal":
+		return b.Internal()
+	case "system":
+		return b.System()
+	}
+	return b
+}
+
+func (b *Builder[Req, Res]) applyAuth(m DSLModifiers) *Builder[Req, Res] {
 	if m.RequiresAuth {
 		b = b.RequireAuth()
 	}
@@ -36,7 +48,10 @@ func (b *Builder[Req, Res]) WithDSL(m DSLModifiers) *Builder[Req, Res] {
 	for _, f := range m.Features {
 		b = b.RequireFeature(f)
 	}
+	return b
+}
 
+func (b *Builder[Req, Res]) applyResilience(m DSLModifiers) *Builder[Req, Res] {
 	if m.RateLimit > 0 {
 		b = b.RateLimit(m.RateLimit, m.Burst)
 	}
@@ -64,27 +79,32 @@ func (b *Builder[Req, Res]) WithDSL(m DSLModifiers) *Builder[Req, Res] {
 			b = b.Idempotent()
 		}
 	}
-	if m.CacheTTL > 0 {
-		keyFn := defaultCacheKeyFn[Req]
-		if m.CacheKeyFnRaw != nil {
-			if fn, ok := m.CacheKeyFnRaw.(func(Req) string); ok {
-				keyFn = fn
-			}
-		}
-		b = b.Cache(m.CacheTTL, keyFn)
-	}
+	return b
+}
 
+func (b *Builder[Req, Res]) applyCache(m DSLModifiers) *Builder[Req, Res] {
+	if m.CacheTTL <= 0 {
+		return b
+	}
+	keyFn := defaultCacheKeyFn[Req]
+	if m.CacheKeyFnRaw != nil {
+		if fn, ok := m.CacheKeyFnRaw.(func(Req) string); ok {
+			keyFn = fn
+		}
+	}
+	return b.Cache(m.CacheTTL, keyFn)
+}
+
+func (b *Builder[Req, Res]) applyMetadata(m DSLModifiers) *Builder[Req, Res] {
 	for _, t := range m.Tags {
 		b = b.Tag(t)
 	}
 	if m.SuccessStatus > 0 {
 		b = b.SuccessStatus(m.SuccessStatus)
 	}
-
 	if len(m.Hooks) > 0 {
 		b = b.AnyHook(m.Hooks...)
 	}
-
 	return b
 }
 
