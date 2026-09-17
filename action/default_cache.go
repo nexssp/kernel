@@ -31,6 +31,7 @@ func newDefaultMemoryKV[V any](ttl time.Duration) *defaultMemoryKV[V] {
 	return c
 }
 
+//nolint:gocritic // (V, bool, error) is idiomatic Go; named results add noise
 func (c *defaultMemoryKV[V]) Get(ctx context.Context, k string) (V, bool, error) {
 	var zero V
 	if err := ctx.Err(); err != nil {

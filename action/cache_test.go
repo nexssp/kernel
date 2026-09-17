@@ -25,6 +25,7 @@ func newMockStore() *mockKVStore {
 	return &mockKVStore{store: make(map[string]string)}
 }
 
+//nolint:gocritic // (V, bool, error) is idiomatic Go; named results add noise
 func (m *mockKVStore) Get(_ context.Context, key string) (string, bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
