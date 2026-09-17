@@ -131,60 +131,69 @@ func (r *Root) WriteFileAtomic(p string, data []byte, perm os.FileMode) error {
 		return err
 	}
 
-	const maxAttempts = 10
-	var (
-		tmpName string
-		f       *os.File
-	)
-	for range maxAttempts {
-		suffix, rerr := randomHex(8)
-		if rerr != nil {
-			return xerr.Internal("atomic write: random suffix", rerr)
-		}
-		tmpName = clean + "." + suffix + ".tmp"
+	tmpName, f, err := r.createUniqueTemp(clean, perm)
+	if err != nil {
+		return err
+	}
 
-		f, err = r.r.OpenFile(tmpName, os.O_WRONLY|os.O_CREATE|os.O_EXCL, perm)
+	if err := writeSyncClose(f, data); err != nil {
+		r.cleanupTemp(tmpName)
+		return err
+	}
+
+	if err := r.renameWithRetry(tmpName, clean); err != nil {
+		r.cleanupTemp(tmpName)
+		return xerr.Internal("atomic write: rename", err)
+	}
+	return nil
+}
+
+func (r *Root) createUniqueTemp(clean string, perm os.FileMode) (string, *os.File, error) {
+	const maxAttempts = 10
+	for range maxAttempts {
+		suffix, err := randomHex(8)
+		if err != nil {
+			return "", nil, xerr.Internal("atomic write: random suffix", err)
+		}
+		tmpName := clean + "." + suffix + ".tmp"
+		f, err := r.r.OpenFile(tmpName, os.O_WRONLY|os.O_CREATE|os.O_EXCL, perm)
 		if errors.Is(err, fs.ErrExist) {
 			continue
 		}
 		if err != nil {
-			return xerr.Internal("atomic write: create tmp", err)
+			return "", nil, xerr.Internal("atomic write: create tmp", err)
 		}
-		break
+		return tmpName, f, nil
 	}
-	if f == nil {
-		return xerr.Internal("atomic write: could not create unique temp after retries")
-	}
+	return "", nil, xerr.Internal("atomic write: could not create unique temp after retries")
+}
 
+func writeSyncClose(f *os.File, data []byte) error {
 	if _, err := f.Write(data); err != nil {
 		_ = f.Close()
-		if rmErr := r.r.Remove(tmpName); rmErr != nil {
-			slog.Warn("xfs_atomic_cleanup_failed", "tmp", tmpName, "error", rmErr)
-		}
 		return xerr.Internal("atomic write: write tmp", err)
 	}
 	if err := f.Sync(); err != nil {
 		_ = f.Close()
-		if rmErr := r.r.Remove(tmpName); rmErr != nil {
-			slog.Warn("xfs_atomic_cleanup_failed", "tmp", tmpName, "error", rmErr)
-		}
 		return xerr.Internal("atomic write: fsync tmp", err)
 	}
 	if err := f.Close(); err != nil {
-		if rmErr := r.r.Remove(tmpName); rmErr != nil {
-			slog.Warn("xfs_atomic_cleanup_failed", "tmp", tmpName, "error", rmErr)
-		}
 		return xerr.Internal("atomic write: close tmp", err)
 	}
+	return nil
+}
 
-	// Same Windows transient-lock protection as xfs.WriteFileAtomic.
-	// os.Root.Rename is root-relative, so we inline the retry loop
-	// rather than reuse the CWD-relative renameWithRetry.
-	const maxRenameAttempts = 5
-	var renameErr error
-	for i := range maxRenameAttempts {
-		renameErr = r.r.Rename(tmpName, clean)
-		if renameErr == nil {
+func (r *Root) cleanupTemp(tmpName string) {
+	if rmErr := r.r.Remove(tmpName); rmErr != nil {
+		slog.Warn("xfs_atomic_cleanup_failed", "tmp", tmpName, "error", rmErr)
+	}
+}
+
+func (r *Root) renameWithRetry(oldName, newName string) error {
+	const maxAttempts = 5
+	var lastErr error
+	for i := range maxAttempts {
+		if lastErr = r.r.Rename(oldName, newName); lastErr == nil {
 			return nil
 		}
 		if runtime.GOOS != "windows" {
@@ -192,10 +201,7 @@ func (r *Root) WriteFileAtomic(p string, data []byte, perm os.FileMode) error {
 		}
 		time.Sleep(time.Duration(10*(i+1)) * time.Millisecond)
 	}
-	if rmErr := r.r.Remove(tmpName); rmErr != nil {
-		slog.Warn("xfs_atomic_cleanup_failed", "tmp", tmpName, "error", rmErr)
-	}
-	return xerr.Internal("atomic write: rename", renameErr)
+	return lastErr
 }
 
 // Mkdir creates a single directory.
