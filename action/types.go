@@ -5,6 +5,7 @@ package action
 
 import (
 	"context"
+	"reflect"
 	"strings"
 	"time"
 )
@@ -35,7 +36,23 @@ type HookDispatcher[Req, Res any] interface {
 type Binding any
 
 type Hook[Req, Res any] struct {
-	OnRegister     func(meta *Meta)
+	// OnBuild runs once per action at build time. Must be pure and O(1):
+	// no I/O, no network. Return true to attach the hook to this action,
+	// false to drop it — a dropped hook never enters the hook set and
+	// pays zero cost in Do(). nil = always attach.
+	//
+	// reqType and resType are reflect.TypeFor[Req]() and
+	// reflect.TypeFor[Res](). Both are compile-time constants.
+	//
+	// Filter by reqType when the hook depends on the shape of the input
+	// (validation, input tracing). Filter by resType when it depends on
+	// the shape of the output (cost reporting via CostReporter, output
+	// validation, response tracing).
+	//
+	// For per-request decisions (feature flags, tenant policy, quota),
+	// use Before instead — those belong on the hot path where ctx is
+	// available.
+	OnBuild        func(meta *Meta, reqType, resType reflect.Type) bool
 	Before         func(ctx context.Context, req Req, meta *Meta) (context.Context, error)
 	After          func(ctx context.Context, req Req, res Res, err error, meta *Meta)
 	OnError        func(ctx context.Context, req Req, err error, meta *Meta)
@@ -51,7 +68,20 @@ type Hook[Req, Res any] struct {
 // AnyHook is used for broad plugins (metrics, tracing, auth).
 // Passing 'meta' dynamically guarantees thread-safety and zero allocations across shared instances.
 type AnyHook struct {
-	OnRegister     func(meta *Meta)
+	// OnBuild runs once per action at build time. Return true to attach
+	// the hook to this action, false to drop it — a dropped hook never
+	// enters the hook set and pays zero cost in Do().
+	//
+	// reqType and resType are reflect.TypeFor[Req]() and reflect.TypeFor[Res]().
+	//
+	// ctx comes from BuildContext / AddAnyHookContext / NewRegistryContext.
+	// Build() and AddAnyHook() and NewRegistry() supply context.Background().
+	// Build-time hooks are expected to be pure and O(1), but ctx is present
+	// so that dynamic action construction inside a request can honor
+	// cancellation and deadlines.
+	//
+	// nil = always attach.
+	OnBuild        func(meta *Meta, reqType, resType reflect.Type) bool
 	Before         func(ctx context.Context, req any, meta *Meta) (context.Context, error)
 	After          func(ctx context.Context, req any, res any, err error, meta *Meta)
 	OnError        func(ctx context.Context, req any, err error, meta *Meta)
@@ -187,7 +217,7 @@ func assertTo[T any](v any) T {
 // It uses type assertions with safe zero-value fallbacks so hooks fire reliably even when res is nil.
 func Adapt[Req, Res any](h Hook[Req, Res]) AnyHook {
 	return AnyHook{
-		OnRegister: h.OnRegister,
+		OnBuild: h.OnBuild,
 		Before: func(ctx context.Context, req any, meta *Meta) (context.Context, error) {
 			if h.Before == nil {
 				return ctx, nil

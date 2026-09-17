@@ -162,12 +162,31 @@ func (b *Builder[Req, Res]) Build() *BuiltAction[Req, Res] {
 
 	act := &BuiltAction[Req, Res]{
 		meta:     &metaCopy,
-		hooks:    append([]Hook[Req, Res](nil), b.hooks...),
 		bindings: append([]Binding(nil), b.bindings...),
 		history:  b.history,
 		cleanups: append([]func(){}, b.cleanups...),
 	}
-	act.anyHooks.Store(&anyHookSet{hooks: append([]AnyHook(nil), b.anyHooks...)})
+
+	reqType := reflect.TypeFor[Req]()
+	resType := reflect.TypeFor[Res]()
+
+	anyHooks := make([]AnyHook, 0, len(b.anyHooks))
+	for _, h := range b.anyHooks {
+		if h.OnBuild != nil && !h.OnBuild(&metaCopy, reqType, resType) {
+			continue
+		}
+		anyHooks = append(anyHooks, h)
+	}
+	act.anyHooks.Store(&anyHookSet{hooks: anyHooks})
+
+	hooks := make([]Hook[Req, Res], 0, len(b.hooks))
+	for _, h := range b.hooks {
+		if h.OnBuild != nil && !h.OnBuild(&metaCopy, reqType, resType) {
+			continue
+		}
+		hooks = append(hooks, h)
+	}
+	act.hooks = hooks
 
 	exec := b.exec
 	if exec != nil {
@@ -176,17 +195,6 @@ func (b *Builder[Req, Res]) Build() *BuiltAction[Req, Res] {
 		}
 	}
 	act.exec = exec
-
-	for _, h := range act.anyHooksSnapshot() {
-		if h.OnRegister != nil {
-			h.OnRegister(act.meta)
-		}
-	}
-	for _, h := range act.hooks {
-		if h.OnRegister != nil {
-			h.OnRegister(act.meta)
-		}
-	}
 
 	return act
 }

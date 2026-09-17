@@ -354,18 +354,27 @@ func (a *BuiltAction[Req, Res]) AddAnyHook(h ...AnyHook) {
 		return
 	}
 
+	reqType := reflect.TypeFor[Req]()
+	resType := reflect.TypeFor[Res]()
+
+	applicable := make([]AnyHook, 0, len(h))
+	for _, hook := range h {
+		if hook.OnBuild != nil && !hook.OnBuild(a.meta, reqType, resType) {
+			continue
+		}
+		applicable = append(applicable, hook)
+	}
+	if len(applicable) == 0 {
+		return
+	}
+
 	a.anyHooksMu.Lock()
 	defer a.anyHooksMu.Unlock()
 
 	current := a.anyHooksSnapshot()
-	next := make([]AnyHook, 0, len(current)+len(h))
+	next := make([]AnyHook, 0, len(current)+len(applicable))
 	next = append(next, current...)
-	for _, hook := range h {
-		if hook.OnRegister != nil {
-			hook.OnRegister(a.meta)
-		}
-		next = append(next, hook)
-	}
+	next = append(next, applicable...)
 	a.anyHooks.Store(&anyHookSet{hooks: next})
 }
 

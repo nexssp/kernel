@@ -1,6 +1,9 @@
 package action
 
-import "context"
+import (
+	"context"
+	"reflect"
+)
 
 // ── Fluent hook shortcuts ─────────────────────────────────────────────────────
 // Each method wraps a single Hook field for common use cases.
@@ -65,17 +68,30 @@ func (b *Builder[Req, Res]) HookCacheMiss(fn func(ctx context.Context, req Req, 
 	return b.Hook(Hook[Req, Res]{OnCacheMiss: fn})
 }
 
-// HookRegister runs fn once at Build() time — never on the hot path.
-// Use to pre-allocate metric labels, register with service discovery,
-// validate configuration, or build static routing tables.
+// HookBuild runs fn once per action at build time. Must be pure and O(1):
+// no I/O, no network. Return true to attach the hook, false to drop it —
+// a dropped hook pays zero cost in Do().
 //
-// Example — pre-allocate Prometheus labels:
+// reqType and resType are reflect.TypeFor[Req]() and reflect.TypeFor[Res]().
+// Use them to filter the hook to a subset of actions.
 //
-//	.HookRegister(func(meta *action.Meta) {
-//	    requestCounter.WithLabelValues(meta.Name) // pre-allocate label set
+// For per-request decisions (feature flags, tenant policy, quota), use
+// the runtime Before callback instead.
+//
+// Example — attach a cost ledger hook only to actions whose response
+// reports cost:
+//
+//	.HookBuild(func(meta *action.Meta, _, resType reflect.Type) bool {
+//	    if !resType.Implements(reflect.TypeFor[CostReporter]()) {
+//	        return false
+//	    }
+//	    ledger.Register(meta.Name)
+//	    return true
 //	})
-func (b *Builder[Req, Res]) HookRegister(fn func(meta *Meta)) *Builder[Req, Res] {
-	return b.Hook(Hook[Req, Res]{OnRegister: fn})
+func (b *Builder[Req, Res]) HookBuild(
+	fn func(meta *Meta, reqType, resType reflect.Type) bool,
+) *Builder[Req, Res] {
+	return b.Hook(Hook[Req, Res]{OnBuild: fn})
 }
 
 // ── AnyHook registration ──────────────────────────────────────────────────────
