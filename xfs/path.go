@@ -35,19 +35,8 @@ func isReservedName(name string) bool {
 
 // Rel validates a caller-supplied path and returns its cleaned form.
 func Rel(p string) (string, error) {
-	if p == "" {
-		return "", xerr.BadRequest("path is required")
-	}
-	for i := range len(p) {
-		if p[i] < 0x20 {
-			return "", xerr.BadRequest("path must not contain control characters")
-		}
-	}
-	if strings.IndexByte(p, ':') >= 0 {
-		return "", xerr.Forbidden("':' is not allowed in workspace paths")
-	}
-	if p[0] == '/' || p[0] == '\\' {
-		return "", xerr.Forbidden("absolute paths are not allowed")
+	if err := validateRawPath(p); err != nil {
+		return "", err
 	}
 
 	clean := path.Clean(strings.ReplaceAll(p, `\`, "/"))
@@ -55,28 +44,44 @@ func Rel(p string) (string, error) {
 		return "", xerr.Forbidden("path escapes workspace root")
 	}
 
-	for start := 0; start < len(clean); {
-		end := start
-		for end < len(clean) && clean[end] != '/' {
-			end++
+	for seg := range strings.SplitSeq(clean, "/") {
+		if err := validateSegment(seg); err != nil {
+			return "", err
 		}
-		seg := clean[start:end]
-
-		if strings.HasSuffix(seg, ".") {
-			return "", xerr.Forbidden("trailing dot not allowed: " + seg)
-		}
-
-		name := seg
-		if dot := strings.IndexByte(name, '.'); dot >= 0 {
-			name = name[:dot]
-		}
-		name = strings.TrimRight(name, " ")
-		if isReservedName(name) {
-			return "", xerr.Forbidden("reserved device name: " + seg)
-		}
-
-		start = end + 1
 	}
 
 	return clean, nil
+}
+
+func validateRawPath(p string) error {
+	if p == "" {
+		return xerr.BadRequest("path is required")
+	}
+	for i := range len(p) {
+		if p[i] < 0x20 {
+			return xerr.BadRequest("path must not contain control characters")
+		}
+	}
+	if strings.IndexByte(p, ':') >= 0 {
+		return xerr.Forbidden("':' is not allowed in workspace paths")
+	}
+	if p[0] == '/' || p[0] == '\\' {
+		return xerr.Forbidden("absolute paths are not allowed")
+	}
+	return nil
+}
+
+func validateSegment(seg string) error {
+	if strings.HasSuffix(seg, ".") {
+		return xerr.Forbidden("trailing dot not allowed: " + seg)
+	}
+	name := seg
+	if dot := strings.IndexByte(name, '.'); dot >= 0 {
+		name = name[:dot]
+	}
+	name = strings.TrimRight(name, " ")
+	if isReservedName(name) {
+		return xerr.Forbidden("reserved device name: " + seg)
+	}
+	return nil
 }
