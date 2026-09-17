@@ -221,7 +221,7 @@ func New(name string) *Builder {
 	}
 }
 
-func (b *Builder) AddNode(id string, _ string, act action.AnyAction) *Builder {
+func (b *Builder) AddNode(id, _ string, act action.AnyAction) *Builder {
 	if b.compileErr != nil {
 		return b
 	}

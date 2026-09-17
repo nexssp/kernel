@@ -397,7 +397,7 @@ func callHook(meta *Meta, hook string, fn func()) {
 }
 
 // InvokeAny executes an action with an in-memory input payload.
-func InvokeAny(ctx context.Context, act any, req any) (any, error) {
+func InvokeAny(ctx context.Context, act, req any) (any, error) {
 	if act == nil {
 		return nil, errors.New("action: cannot invoke nil action")
 	}
