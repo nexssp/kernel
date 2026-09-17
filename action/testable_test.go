@@ -12,7 +12,7 @@ import (
 func TestTestable_CaptureReq_And_ExpectErr(t *testing.T) {
 	t.Parallel()
 
-	builder := action.New("order.process", func(ctx context.Context, req int) (int, error) {
+	builder := action.New("order.process", func(_ context.Context, req int) (int, error) {
 		if req <= 0 {
 			return 0, xerr.Validation("quantity must be > 0")
 		}
@@ -40,7 +40,7 @@ func TestTestable_DoRaw(t *testing.T) {
 	t.Parallel()
 
 	calls := 0
-	builder := action.New("raw.test", func(ctx context.Context, req int) (int, error) {
+	builder := action.New("raw.test", func(_ context.Context, req int) (int, error) {
 		calls++
 		return req * 2, nil
 	}).HookBefore(func(ctx context.Context, _ int, _ *action.Meta) (context.Context, error) {
@@ -64,7 +64,7 @@ func TestTestable_DoRaw(t *testing.T) {
 func TestTestable_ExpectErrPlainError(t *testing.T) {
 	t.Parallel()
 
-	builder := action.New("plain.err", func(ctx context.Context, req int) (int, error) {
+	builder := action.New("plain.err", func(_ context.Context, _ int) (int, error) {
 		return 0, errors.New("plain failure")
 	})
 	testable := action.TestFrom(builder)

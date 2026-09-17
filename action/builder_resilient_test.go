@@ -14,9 +14,9 @@ func TestMemoryRateLimiter_GoroutineLeak(t *testing.T) {
 	initialGoroutines := runtime.NumGoroutine()
 
 	for range 50 {
-		_ = action.New("leak.action", func(ctx context.Context, req struct{}) (string, error) {
+		_ = action.New("leak.action", func(_ context.Context, _ struct{}) (string, error) {
 			return "ok", nil
-		}).RateLimitWithKey(10, 2, func(ctx context.Context) string {
+		}).RateLimitWithKey(10, 2, func(_ context.Context) string {
 			return "test-key"
 		}).Build()
 	}

@@ -16,7 +16,7 @@ func TestAction_HooksOrder(t *testing.T) {
 
 	var execution strings.Builder
 
-	act := action.New("test.order", func(ctx context.Context, req string) (string, error) {
+	act := action.New("test.order", func(_ context.Context, _ string) (string, error) {
 		execution.WriteString("EXEC;")
 		return "ok", nil
 	}).
@@ -25,7 +25,7 @@ func TestAction_HooksOrder(t *testing.T) {
 				execution.WriteString("B1;")
 				return ctx, nil
 			},
-			After: func(ctx context.Context, r, res string, err error, m *action.Meta) {
+			After: func(_ context.Context, _, _ string, _ error, _ *action.Meta) {
 				execution.WriteString("A1;")
 			},
 		}).
@@ -34,7 +34,7 @@ func TestAction_HooksOrder(t *testing.T) {
 				execution.WriteString("B2;")
 				return ctx, nil
 			},
-			After: func(ctx context.Context, r, res string, err error, m *action.Meta) {
+			After: func(_ context.Context, _, _ string, _ error, _ *action.Meta) {
 				execution.WriteString("A2;")
 			},
 		}).
@@ -54,7 +54,7 @@ func TestAction_HooksOrder(t *testing.T) {
 func TestAction_PanicRecovery(t *testing.T) {
 	t.Parallel()
 
-	act := action.New("test.panic", func(ctx context.Context, req int) (int, error) {
+	act := action.New("test.panic", func(_ context.Context, _ int) (int, error) {
 		panic("database connection lost")
 	}).Build()
 
@@ -71,7 +71,7 @@ func TestExecuteDecoded(t *testing.T) {
 	t.Parallel()
 
 	type Req struct{ Name string }
-	act := action.New("test.decode", func(ctx context.Context, req *Req) (string, error) {
+	act := action.New("test.decode", func(_ context.Context, req *Req) (string, error) {
 		return req.Name, nil
 	}).Build()
 
@@ -96,10 +96,10 @@ func TestAnyHook_OnPanic_Fires(t *testing.T) {
 	t.Parallel()
 	var recoveredVal any
 
-	act := action.New("critical.db.write", func(ctx context.Context, req int) (int, error) {
+	act := action.New("critical.db.write", func(_ context.Context, _ int) (int, error) {
 		panic("database connection melted")
 	}).AnyHook(action.AnyHook{
-		OnPanic: func(ctx context.Context, req any, recovered any, meta *action.Meta) {
+		OnPanic: func(_ context.Context, _ any, recovered any, _ *action.Meta) {
 			recoveredVal = recovered
 		},
 	}).Build()
@@ -119,7 +119,7 @@ var errRejected = errors.New("rejected")
 func TestBeforeHook_Abort(t *testing.T) {
 	t.Parallel()
 
-	act := action.New("abort.test", func(ctx context.Context, req string) (string, error) {
+	act := action.New("abort.test", func(_ context.Context, _ string) (string, error) {
 		t.Fatal("handler should not have been called")
 		return "never", nil
 	}).
@@ -149,7 +149,7 @@ func TestMixedHooks_Order(t *testing.T) {
 
 	var execution strings.Builder
 
-	act := action.New("mixed.order", func(ctx context.Context, req string) (string, error) {
+	act := action.New("mixed.order", func(_ context.Context, _ string) (string, error) {
 		execution.WriteString("EXEC;")
 		return "ok", nil
 	}).
@@ -158,7 +158,7 @@ func TestMixedHooks_Order(t *testing.T) {
 				execution.WriteString("TB1;")
 				return ctx, nil
 			},
-			After: func(ctx context.Context, r, res string, err error, m *action.Meta) {
+			After: func(_ context.Context, _, _ string, _ error, _ *action.Meta) {
 				execution.WriteString("TA1;")
 			},
 		}).
@@ -167,7 +167,7 @@ func TestMixedHooks_Order(t *testing.T) {
 				execution.WriteString("AB1;")
 				return ctx, nil
 			},
-			After: func(ctx context.Context, r, res any, err error, m *action.Meta) {
+			After: func(_ context.Context, _, _ any, _ error, _ *action.Meta) {
 				execution.WriteString("AA1;")
 			},
 		}).
@@ -176,7 +176,7 @@ func TestMixedHooks_Order(t *testing.T) {
 				execution.WriteString("TB2;")
 				return ctx, nil
 			},
-			After: func(ctx context.Context, r, res string, err error, m *action.Meta) {
+			After: func(_ context.Context, _, _ string, _ error, _ *action.Meta) {
 				execution.WriteString("TA2;")
 			},
 		}).
@@ -185,7 +185,7 @@ func TestMixedHooks_Order(t *testing.T) {
 				execution.WriteString("AB2;")
 				return ctx, nil
 			},
-			After: func(ctx context.Context, r, res any, err error, m *action.Meta) {
+			After: func(_ context.Context, _, _ any, _ error, _ *action.Meta) {
 				execution.WriteString("AA2;")
 			},
 		}).

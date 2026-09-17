@@ -10,7 +10,7 @@ import (
 func TestHistory(t *testing.T) {
 	t.Parallel()
 
-	act, hist := action.New("hist.test", func(ctx context.Context, req int) (int, error) {
+	act, hist := action.New("hist.test", func(_ context.Context, req int) (int, error) {
 		return req * 10, nil
 	}).WithHistory(5)
 

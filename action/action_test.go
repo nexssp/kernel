@@ -14,18 +14,18 @@ func TestBuiltAction_Do_LifecycleOrder(t *testing.T) {
 	t.Parallel()
 
 	var steps []string
-	act := action.New("order.test", func(ctx context.Context, req string) (string, error) {
+	act := action.New("order.test", func(_ context.Context, req string) (string, error) {
 		steps = append(steps, "handler")
 		return "result_" + req, nil
 	}).
-		HookBefore(func(ctx context.Context, _ string, meta *action.Meta) (context.Context, error) {
+		HookBefore(func(ctx context.Context, _ string, _ *action.Meta) (context.Context, error) {
 			steps = append(steps, "before")
 			return ctx, nil
 		}).
-		HookAfter(func(ctx context.Context, req, res string, err error, meta *action.Meta) {
+		HookAfter(func(_ context.Context, _, _ string, _ error, _ *action.Meta) {
 			steps = append(steps, "after")
 		}).
-		HookExecuted(func(ctx context.Context, req, res string, meta *action.Meta) {
+		HookExecuted(func(_ context.Context, _, _ string, _ *action.Meta) {
 			steps = append(steps, "executed")
 		}).
 		Build()
@@ -53,13 +53,13 @@ func TestBuiltAction_Do_ErrorLifecycle(t *testing.T) {
 	t.Parallel()
 
 	var errorHookCalled, executedHookCalled bool
-	act := action.New("error.test", func(ctx context.Context, req string) (string, error) {
+	act := action.New("error.test", func(_ context.Context, _ string) (string, error) {
 		return "", errors.New("business failure")
 	}).
-		HookError(func(ctx context.Context, req string, err error, meta *action.Meta) {
+		HookError(func(_ context.Context, _ string, _ error, _ *action.Meta) {
 			errorHookCalled = true
 		}).
-		HookExecuted(func(ctx context.Context, req, res string, meta *action.Meta) {
+		HookExecuted(func(_ context.Context, _, _ string, _ *action.Meta) {
 			executedHookCalled = true
 		}).
 		Build()
@@ -80,11 +80,11 @@ func TestBuiltAction_Do_PanicRecovery(t *testing.T) {
 	t.Parallel()
 
 	var panicHookRan atomic.Bool
-	act := action.New("panic.test", func(ctx context.Context, req string) (string, error) {
+	act := action.New("panic.test", func(_ context.Context, _ string) (string, error) {
 		panic("fatal unexpected crash")
 	}).
 		AnyHook(action.AnyHook{
-			OnPanic: func(ctx context.Context, req, recovered any, meta *action.Meta) {
+			OnPanic: func(_ context.Context, _, _ any, _ *action.Meta) {
 				panicHookRan.Store(true)
 			},
 		}).
@@ -117,7 +117,7 @@ func TestBuiltAction_ExecuteDecoded(t *testing.T) {
 		Greeting string `json:"greeting"`
 	}
 
-	act := action.New("decode.test", func(ctx context.Context, req RequestDto) (ResponseDto, error) {
+	act := action.New("decode.test", func(_ context.Context, req RequestDto) (ResponseDto, error) {
 		return ResponseDto{Greeting: "Hello, " + req.Name}, nil
 	}).Build()
 

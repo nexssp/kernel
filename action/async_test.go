@@ -12,7 +12,7 @@ import (
 func TestAsync(t *testing.T) {
 	t.Parallel()
 
-	act := action.New("async.test", func(ctx context.Context, req int) (int, error) {
+	act := action.New("async.test", func(_ context.Context, req int) (int, error) {
 		return req * 2, nil
 	}).Build()
 
@@ -30,7 +30,7 @@ func TestAsync(t *testing.T) {
 func TestFanOut(t *testing.T) {
 	t.Parallel()
 
-	act := action.New("fanout.test", func(ctx context.Context, req int) (int, error) {
+	act := action.New("fanout.test", func(_ context.Context, req int) (int, error) {
 		return req * 10, nil
 	}).Build()
 
@@ -53,7 +53,7 @@ func TestFanOut(t *testing.T) {
 func TestRace(t *testing.T) {
 	t.Parallel()
 
-	act := action.New("race.test", func(ctx context.Context, req int) (int, error) {
+	act := action.New("race.test", func(_ context.Context, req int) (int, error) {
 		if req == 1 {
 			time.Sleep(50 * time.Millisecond) // slow
 			return 1, nil

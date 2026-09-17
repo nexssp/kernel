@@ -15,7 +15,7 @@ func TestRetry_WrappedTransientError(t *testing.T) {
 	t.Parallel()
 
 	var attempts atomic.Int32
-	act := action.New("test.retry.wrapped", func(ctx context.Context, req struct{}) (string, error) {
+	act := action.New("test.retry.wrapped", func(_ context.Context, _ struct{}) (string, error) {
 		if attempts.Add(1) < 3 {
 			// Wrap a transient xerr inside a plain fmt error
 			return "", fmt.Errorf("db wrapper: %w", xerr.Unavailable("temporary glitch"))
@@ -39,7 +39,7 @@ func TestRetry_WrappedPermanentErrorNoRetry(t *testing.T) {
 	t.Parallel()
 
 	var attempts atomic.Int32
-	act := action.New("test.retry.wrapped.permanent", func(ctx context.Context, req struct{}) (string, error) {
+	act := action.New("test.retry.wrapped.permanent", func(_ context.Context, _ struct{}) (string, error) {
 		attempts.Add(1)
 		return "", fmt.Errorf("wrap: %w", xerr.Forbidden("nope"))
 	}).Retry(3, action.ConstantBackoff(1*time.Millisecond)).Build()

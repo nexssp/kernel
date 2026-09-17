@@ -10,14 +10,14 @@ import (
 
 func TestBranch(t *testing.T) {
 	t.Parallel()
-	defaultAct := action.New("default", func(ctx context.Context, req string) (string, error) {
+	defaultAct := action.New("default", func(_ context.Context, req string) (string, error) {
 		return "default:" + req, nil
 	})
-	specialAct := action.New("special", func(ctx context.Context, req string) (string, error) {
+	specialAct := action.New("special", func(_ context.Context, req string) (string, error) {
 		return "special:" + req, nil
 	})
 
-	router := func(ctx context.Context, req string) (string, error) {
+	router := func(_ context.Context, req string) (string, error) {
 		if req == "magic" {
 			return "s", nil
 		}
@@ -48,10 +48,10 @@ func TestBranch(t *testing.T) {
 func TestFirstSuccess(t *testing.T) {
 	t.Parallel()
 	// First action fails, second succeeds
-	a1 := action.New("f1", func(ctx context.Context, req int) (int, error) {
+	a1 := action.New("f1", func(_ context.Context, _ int) (int, error) {
 		return 0, errors.New("failure")
 	})
-	a2 := action.New("f2", func(ctx context.Context, req int) (int, error) {
+	a2 := action.New("f2", func(_ context.Context, req int) (int, error) {
 		return req * 2, nil
 	})
 	fs := action.FirstSuccess("first.success", a1, a2).Build()
@@ -68,8 +68,8 @@ func TestFirstSuccess(t *testing.T) {
 func TestChain(t *testing.T) {
 	t.Parallel()
 	// Chain of transformations: add 1, then multiply by 2
-	add := action.New("add1", func(ctx context.Context, n int) (int, error) { return n + 1, nil })
-	mul := action.New("mul2", func(ctx context.Context, n int) (int, error) { return n * 2, nil })
+	add := action.New("add1", func(_ context.Context, n int) (int, error) { return n + 1, nil })
+	mul := action.New("mul2", func(_ context.Context, n int) (int, error) { return n * 2, nil })
 	ch := action.Chain("num.transform", add, mul).Build()
 
 	res, err := ch.Do(context.Background(), 5)

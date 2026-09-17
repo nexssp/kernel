@@ -10,7 +10,7 @@ import (
 // BenchmarkAction_Overhead mathematically proves the zero-alloc claims
 // for the core Action pipeline (routing, hooks, meta attachment).
 func BenchmarkAction_Overhead(b *testing.B) {
-	rawHandler := func(ctx context.Context, req int) (int, error) {
+	rawHandler := func(_ context.Context, req int) (int, error) {
 		return req * 2, nil
 	}
 

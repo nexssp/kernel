@@ -36,9 +36,9 @@ type mockFixedHookNode struct {
 	hookLen  int
 }
 
-func (m *mockFixedHookNode) DoAny(ctx context.Context, req any) (any, error) { return req, nil }
-func (m *mockFixedHookNode) Describe() *action.Meta                          { return &action.Meta{Name: m.name} }
-func (m *mockFixedHookNode) GetBindings() []action.Binding                   { return nil }
+func (m *mockFixedHookNode) DoAny(_ context.Context, req any) (any, error) { return req, nil }
+func (m *mockFixedHookNode) Describe() *action.Meta                        { return &action.Meta{Name: m.name} }
+func (m *mockFixedHookNode) GetBindings() []action.Binding                 { return nil }
 func (m *mockFixedHookNode) ExecuteDecoded(_ context.Context, _ action.DecodeFunc) (any, error) {
 	return nil, nil
 }

@@ -15,7 +15,7 @@ func TestRetryMiddleware(t *testing.T) {
 	t.Parallel()
 
 	var attempts atomic.Int32
-	act := action.New("test.retry", func(ctx context.Context, req struct{}) (string, error) {
+	act := action.New("test.retry", func(_ context.Context, _ struct{}) (string, error) {
 		if attempts.Add(1) < 3 {
 			// Transient error triggers retry
 			return "", xerr.Unavailable("temporary glitch")
@@ -39,7 +39,7 @@ func TestConcurrencyLimit(t *testing.T) {
 	t.Parallel()
 
 	inProgress := make(chan struct{})
-	act := action.New("test.limit", func(ctx context.Context, req struct{}) (string, error) {
+	act := action.New("test.limit", func(_ context.Context, _ struct{}) (string, error) {
 		<-inProgress // block
 		return "ok", nil
 	}).ConcurrencyLimit(1).Build()
@@ -67,7 +67,7 @@ func TestConcurrencyLimit(t *testing.T) {
 func TestRateLimit(t *testing.T) {
 	t.Parallel()
 
-	act := action.New("test.rate", func(ctx context.Context, req struct{}) (string, error) {
+	act := action.New("test.rate", func(_ context.Context, _ struct{}) (string, error) {
 		return "ok", nil
 	}).RateLimit(10, 2).Build() // 10 rps, burst of 2
 
@@ -92,7 +92,7 @@ func TestBuilder_Resilient_Bundle(t *testing.T) {
 	t.Parallel()
 	var attempts atomic.Int32
 
-	act := action.New("stripe.charge", func(ctx context.Context, req struct{}) (string, error) {
+	act := action.New("stripe.charge", func(_ context.Context, _ struct{}) (string, error) {
 		attempts.Add(1)
 		return "", xerr.Unavailable("stripe gateway timeout")
 	}).Resilient(action.ResilienceConfig{

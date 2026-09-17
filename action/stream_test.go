@@ -11,7 +11,7 @@ import (
 
 func TestStreamAction(t *testing.T) {
 	t.Parallel()
-	stream := action.NewStream("paginate", func(ctx context.Context, limit int) (iter.Seq2[int, error], error) {
+	stream := action.NewStream("paginate", func(_ context.Context, limit int) (iter.Seq2[int, error], error) {
 		return func(yield func(int, error) bool) {
 			for i := 1; i <= limit; i++ {
 				if !yield(i, nil) {
@@ -39,7 +39,7 @@ func TestStreamAction(t *testing.T) {
 
 func TestCollectStream(t *testing.T) {
 	t.Parallel()
-	stream := action.NewStream("collect", func(ctx context.Context, _ struct{}) (iter.Seq2[string, error], error) {
+	stream := action.NewStream("collect", func(_ context.Context, _ struct{}) (iter.Seq2[string, error], error) {
 		return func(yield func(string, error) bool) {
 			for _, s := range []string{"a", "b", "c"} {
 				if !yield(s, nil) {
@@ -61,7 +61,7 @@ func TestCollectStream(t *testing.T) {
 
 func TestStreamAction_ErrorInIterator(t *testing.T) {
 	t.Parallel()
-	stream := action.NewStream("errstream", func(ctx context.Context, _ any) (iter.Seq2[int, error], error) {
+	stream := action.NewStream("errstream", func(_ context.Context, _ any) (iter.Seq2[int, error], error) {
 		return func(yield func(int, error) bool) {
 			yield(1, nil)
 			yield(0, errors.New("item-process-failed"))

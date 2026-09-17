@@ -26,7 +26,7 @@ func TestDeduplicate(t *testing.T) {
 	startGate := make(chan struct{})
 	handlerHold := make(chan struct{})
 
-	act := action.New("dedup.test", func(ctx context.Context, req string) (string, error) {
+	act := action.New("dedup.test", func(_ context.Context, _ string) (string, error) {
 		callCount.Add(1)
 		<-handlerHold
 		return "shared", nil
@@ -83,7 +83,7 @@ func TestCoalesce(t *testing.T) {
 	var arrived atomic.Int32
 	handlerHold := make(chan struct{})
 
-	act := action.New("coal.test", func(ctx context.Context, req string) (string, error) {
+	act := action.New("coal.test", func(_ context.Context, _ string) (string, error) {
 		callCount.Add(1)
 		<-handlerHold
 		return "coalesced", nil

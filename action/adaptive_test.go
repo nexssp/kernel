@@ -16,7 +16,7 @@ func TestAdaptive_OpenAndHalfOpen(t *testing.T) {
 	var fail atomic.Bool
 	fail.Store(true)
 
-	act := action.New("cb.test", func(ctx context.Context, req string) (string, error) {
+	act := action.New("cb.test", func(_ context.Context, _ string) (string, error) {
 		if fail.Load() {
 			return "", xerr.Internal("boom") // Must return error to trip CB
 		}

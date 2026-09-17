@@ -11,8 +11,8 @@ import (
 func TestPipe(t *testing.T) {
 	t.Parallel()
 
-	act1 := action.New("step1", func(ctx context.Context, req int) (int, error) { return req + 1, nil }).Build()
-	act2 := action.New("step2", func(ctx context.Context, req int) (int, error) { return req * 2, nil }).Build()
+	act1 := action.New("step1", func(_ context.Context, req int) (int, error) { return req + 1, nil }).Build()
+	act2 := action.New("step2", func(_ context.Context, req int) (int, error) { return req * 2, nil }).Build()
 
 	pipe := action.Pipe("pipe", act1, act2).Build()
 
@@ -28,8 +28,8 @@ func TestPipe(t *testing.T) {
 func TestParallel(t *testing.T) {
 	t.Parallel()
 
-	b1 := action.New("p1", func(ctx context.Context, req string) (string, error) { return req + "1", nil })
-	b2 := action.New("p2", func(ctx context.Context, req string) (string, error) { return req + "2", nil })
+	b1 := action.New("p1", func(_ context.Context, req string) (string, error) { return req + "1", nil })
+	b2 := action.New("p2", func(_ context.Context, req string) (string, error) { return req + "2", nil })
 
 	para := action.Parallel("par", b1, b2).Build()
 

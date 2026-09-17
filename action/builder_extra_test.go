@@ -24,7 +24,7 @@ type mockAuditLogger struct {
 	logged atomic.Bool
 }
 
-func (m *mockAuditLogger) Log(ctx context.Context, category, actionName, details string) {
+func (m *mockAuditLogger) Log(_ context.Context, _, _, _ string) {
 	m.logged.Store(true)
 }
 
@@ -32,7 +32,7 @@ type mockPIITracker struct {
 	tracked atomic.Bool
 }
 
-func (m *mockPIITracker) TrackPIIAccess(ctx context.Context, purpose string, actionName string) {
+func (m *mockPIITracker) TrackPIIAccess(_ context.Context, _, _ string) {
 	m.tracked.Store(true)
 }
 
@@ -40,7 +40,7 @@ type mockPublisher struct {
 	lastSubject string
 }
 
-func (m *mockPublisher) PublishEvent(ctx context.Context, subject string, payload any) error {
+func (m *mockPublisher) PublishEvent(_ context.Context, subject string, _ any) error {
 	m.lastSubject = subject
 	return nil
 }
@@ -51,7 +51,7 @@ func TestBuilder_Transactional(t *testing.T) {
 	t.Parallel()
 	runner := &mockTxRunner{}
 
-	act := action.New("tx.test", func(ctx context.Context, req string) (string, error) {
+	act := action.New("tx.test", func(_ context.Context, _ string) (string, error) {
 		return "ok", nil
 	}).Transactional(runner).Build()
 
@@ -64,11 +64,11 @@ func TestBuilder_Transactional(t *testing.T) {
 func TestBuilder_RequireCreationLimit(t *testing.T) {
 	t.Parallel()
 
-	checkFn := func(ctx context.Context, tenantID string) (int64, int64, error) {
+	checkFn := func(_ context.Context, _ string) (int64, int64, error) {
 		return 10, 5, nil // Current 10 >= Limit 5 -> Exceeded
 	}
 
-	act := action.New("quota.test", func(ctx context.Context, req string) (string, error) {
+	act := action.New("quota.test", func(_ context.Context, _ string) (string, error) {
 		return "created", nil
 	}).RequireCreationLimit("projects", checkFn).Build()
 
@@ -85,7 +85,7 @@ func TestBuilder_AuditedAndEvent(t *testing.T) {
 	pii := &mockPIITracker{}
 	pub := &mockPublisher{}
 
-	act := action.New("audit.event.test", func(ctx context.Context, req string) (string, error) {
+	act := action.New("audit.event.test", func(_ context.Context, req string) (string, error) {
 		return "res:" + req, nil
 	}).
 		Audited(audit, "BILLING", nil).

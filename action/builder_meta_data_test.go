@@ -9,7 +9,7 @@ import (
 
 func TestBuilder_MetadataAndRoute(t *testing.T) {
 	t.Parallel()
-	b := action.New("unknown", func(ctx context.Context, req int) (int, error) {
+	b := action.New("unknown", func(_ context.Context, req int) (int, error) {
 		return req, nil
 	}).
 		Name("user.create").

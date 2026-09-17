@@ -10,7 +10,7 @@ import (
 func TestBuilder_RecordHistoryZeroCapacity(t *testing.T) {
 	t.Parallel()
 
-	act := action.New("hist.zero", func(ctx context.Context, req int) (int, error) {
+	act := action.New("hist.zero", func(_ context.Context, req int) (int, error) {
 		return req * 2, nil
 	}).RecordHistory(0).Build()
 

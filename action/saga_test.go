@@ -13,10 +13,10 @@ func TestSaga_Success(t *testing.T) {
 	t.Parallel()
 
 	saga := action.NewSaga[int, int]("order.saga").
-		AddStep("step1", func(ctx context.Context, req int) (int, error) {
+		AddStep("step1", func(_ context.Context, req int) (int, error) {
 			return req + 10, nil
 		}, nil).
-		AddStep("step2", func(ctx context.Context, req int) (int, error) {
+		AddStep("step2", func(_ context.Context, req int) (int, error) {
 			return req * 2, nil
 		}, nil).
 		Build()
@@ -37,15 +37,15 @@ func TestSaga_RollbackLIFO(t *testing.T) {
 
 	saga := action.NewSaga[string, string]("payment.saga").
 		AddStep("reserve_funds",
-			func(ctx context.Context, req string) (string, error) { return "reserved", nil },
-			func(ctx context.Context, req string) error { undo1Ran.Store(true); return nil },
+			func(_ context.Context, _ string) (string, error) { return "reserved", nil },
+			func(_ context.Context, _ string) error { undo1Ran.Store(true); return nil },
 		).
 		AddStep("authorize_card",
-			func(ctx context.Context, req string) (string, error) { return "authorized", nil },
-			func(ctx context.Context, req string) error { undo2Ran.Store(true); return nil },
+			func(_ context.Context, _ string) (string, error) { return "authorized", nil },
+			func(_ context.Context, _ string) error { undo2Ran.Store(true); return nil },
 		).
 		AddStep("failing_step",
-			func(ctx context.Context, req string) (string, error) { return "", errors.New("terminal bank failure") },
+			func(_ context.Context, _ string) (string, error) { return "", errors.New("terminal bank failure") },
 			nil,
 		).
 		Build()
@@ -70,21 +70,21 @@ func TestSaga_UndoPanicRecovery(t *testing.T) {
 
 	saga := action.NewSaga[string, string]("resilient.saga").
 		AddStep("step_1",
-			func(ctx context.Context, req string) (string, error) { return "ok", nil },
-			func(ctx context.Context, req string) error {
+			func(_ context.Context, _ string) (string, error) { return "ok", nil },
+			func(_ context.Context, _ string) error {
 				undo1Ran.Store(true)
 				return nil
 			},
 		).
 		AddStep("step_2",
-			func(ctx context.Context, req string) (string, error) { return "ok", nil },
-			func(ctx context.Context, req string) error {
+			func(_ context.Context, _ string) (string, error) { return "ok", nil },
+			func(_ context.Context, _ string) error {
 				undo2Ran.Store(true)
 				panic("step 2 compensation panic")
 			},
 		).
 		AddStep("step_3",
-			func(ctx context.Context, req string) (string, error) {
+			func(_ context.Context, _ string) (string, error) {
 				return "", errors.New("terminal failure in step 3")
 			},
 			nil,

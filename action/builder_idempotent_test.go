@@ -10,7 +10,7 @@ import (
 
 func TestBuilder_Idempotent(t *testing.T) {
 	t.Parallel()
-	act := action.New("idem.test", func(ctx context.Context, req string) (string, error) {
+	act := action.New("idem.test", func(_ context.Context, req string) (string, error) {
 		return req, nil
 	}).Idempotent().Build()
 
@@ -25,7 +25,7 @@ func TestBuilder_Idempotent(t *testing.T) {
 
 func TestBuilder_IdempotentWithConfig(t *testing.T) {
 	t.Parallel()
-	act := action.New("idem.custom", func(ctx context.Context, req string) (string, error) {
+	act := action.New("idem.custom", func(_ context.Context, req string) (string, error) {
 		return req, nil
 	}).IdempotentWithConfig(action.IdempotencyConfig{
 		TTL:       10 * time.Second,

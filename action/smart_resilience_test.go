@@ -13,7 +13,7 @@ func TestSmartResilience_RetryTransient(t *testing.T) {
 	t.Parallel()
 	var attempt atomic.Int32
 
-	act := action.New("smart.retry", func(ctx context.Context, req string) (string, error) {
+	act := action.New("smart.retry", func(_ context.Context, _ string) (string, error) {
 		a := attempt.Add(1)
 		if a < 3 {
 			return "", xerr.Unavailable("transient")
@@ -37,7 +37,7 @@ func TestSmartResilience_NoRetryOnBadRequest(t *testing.T) {
 	t.Parallel()
 	var callCount atomic.Int32
 
-	act := action.New("smart.noretry", func(ctx context.Context, req string) (string, error) {
+	act := action.New("smart.noretry", func(_ context.Context, _ string) (string, error) {
 		callCount.Add(1)
 		return "", xerr.BadRequest("invalid")
 	}).InferredResilient().Build()

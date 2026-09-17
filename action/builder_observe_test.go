@@ -19,7 +19,7 @@ func TestInstrument(t *testing.T) {
 	var callCount, errCount int
 	var latencySum float64
 
-	act := action.New("instr.action", func(ctx context.Context, _ string) (string, error) {
+	act := action.New("instr.action", func(_ context.Context, _ string) (string, error) {
 		return "done", nil
 	}).Instrument(
 		func(_ string) { callCount++ },
@@ -45,7 +45,7 @@ func TestInstrument(t *testing.T) {
 
 func TestBuilder_RecordHistory(t *testing.T) {
 	t.Parallel()
-	act := action.New("payment.charge", func(ctx context.Context, req int) (int, error) {
+	act := action.New("payment.charge", func(_ context.Context, req int) (int, error) {
 		return req * 2, nil
 	}).RecordHistory(5).Build()
 
@@ -70,7 +70,7 @@ func TestLogCalls(t *testing.T) {
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
-	act := action.New("logged.action", func(ctx context.Context, name string) (string, error) {
+	act := action.New("logged.action", func(_ context.Context, name string) (string, error) {
 		return "hello " + name, nil
 	}).LogCalls(logger).Build()
 
@@ -88,7 +88,7 @@ func TestInstrument_ErrorCount(t *testing.T) {
 	t.Parallel()
 
 	var callCount, errCount atomic.Int32
-	act := action.New("instr.error", func(ctx context.Context, _ string) (string, error) {
+	act := action.New("instr.error", func(_ context.Context, _ string) (string, error) {
 		return "", errors.New("simulated failure")
 	}).Instrument(
 		func(_ string) { callCount.Add(1) },

@@ -64,18 +64,18 @@ func TestCache_Hit(t *testing.T) {
 	var hitHookCalled bool
 	var executedHookCalled bool
 
-	act := action.New("cache.hit", func(ctx context.Context, req string) (string, error) {
+	act := action.New("cache.hit", func(_ context.Context, _ string) (string, error) {
 		handlerCalled = true
 		return "fresh", nil
 	}).
 		Cache(10*time.Minute, func(r string) string { return r }, store).
-		HookCacheHit(func(ctx context.Context, req string, res string, meta *action.Meta) {
+		HookCacheHit(func(_ context.Context, _ string, res string, _ *action.Meta) {
 			hitHookCalled = true
 			if res != "cached" {
 				t.Errorf("expected cached value 'cached', got %q", res)
 			}
 		}).
-		HookExecuted(func(ctx context.Context, req string, res string, meta *action.Meta) {
+		HookExecuted(func(_ context.Context, _ string, _ string, _ *action.Meta) {
 			executedHookCalled = true
 		}).
 		Build()
@@ -104,17 +104,17 @@ func TestCache_Miss(t *testing.T) {
 	var handlerHit bool
 	var executedHookCalled bool
 
-	act := action.New("cache.miss", func(ctx context.Context, req string) (string, error) {
+	act := action.New("cache.miss", func(_ context.Context, _ string) (string, error) {
 		handlerHit = true
 		return "computed", nil
 	}).
 		Cache(10*time.Minute, func(r string) string { return r }, store).
-		HookCacheMiss(func(ctx context.Context, req string, meta *action.Meta) {
+		HookCacheMiss(func(_ context.Context, req string, _ *action.Meta) {
 			if req != "missKey" {
 				t.Errorf("expected req 'missKey', got %q", req)
 			}
 		}).
-		HookExecuted(func(ctx context.Context, req string, res string, meta *action.Meta) {
+		HookExecuted(func(_ context.Context, _ string, _ string, _ *action.Meta) {
 			executedHookCalled = true
 		}).
 		Build()
@@ -150,7 +150,7 @@ func TestCache_BackFill(t *testing.T) {
 		t.Fatalf("failed to pre-populate L2: %v", err)
 	}
 
-	act := action.New("cache.backfill", func(ctx context.Context, req string) (string, error) {
+	act := action.New("cache.backfill", func(_ context.Context, _ string) (string, error) {
 		return "never_called", nil
 	}).
 		Cache(10*time.Minute, func(r string) string { return r }, l1, l2).
@@ -195,11 +195,11 @@ func TestCache_Singleflight_SingleMissNotification(t *testing.T) {
 		}
 	}).
 		Cache(10*time.Minute, func(r string) string { return r }, store).
-		HookCacheMiss(func(ctx context.Context, req string, meta *action.Meta) {
+		HookCacheMiss(func(_ context.Context, _ string, _ *action.Meta) {
 			missCount.Add(1)
 		}).
 		Hook(action.Hook[string, string]{
-			OnCoalesced: func(ctx context.Context, req string, meta *action.Meta) {
+			OnCoalesced: func(_ context.Context, _ string, _ *action.Meta) {
 				coalesceCount.Add(1)
 			},
 		}).
@@ -273,7 +273,7 @@ func TestCache_Singleflight_ContextCancellation(t *testing.T) {
 	}).
 		Cache(10*time.Minute, func(r string) string { return r }, store).
 		Hook(action.Hook[string, string]{
-			OnCoalesced: func(ctx context.Context, req string, meta *action.Meta) {
+			OnCoalesced: func(_ context.Context, _ string, _ *action.Meta) {
 				caller2JoinedOnce.Do(func() {
 					close(caller2Joined)
 				})
@@ -337,7 +337,7 @@ func TestCache_Singleflight_PanicRecovery(t *testing.T) {
 	t.Parallel()
 	store := newMockStore()
 
-	act := action.New("cache.panic", func(ctx context.Context, req string) (string, error) {
+	act := action.New("cache.panic", func(_ context.Context, _ string) (string, error) {
 		panic("database crashed inside cache flight")
 	}).
 		Cache(10*time.Minute, func(r string) string { return r }, store).
@@ -360,7 +360,7 @@ func TestCache_Singleflight_PanicRecovery(t *testing.T) {
 func TestOnce(t *testing.T) {
 	t.Parallel()
 	var callCount int
-	act := action.New("once.test", func(ctx context.Context, req string) (string, error) {
+	act := action.New("once.test", func(_ context.Context, _ string) (string, error) {
 		callCount++
 		return fmt.Sprintf("call-%d", callCount), nil
 	}).Once().Build()
@@ -394,7 +394,7 @@ func TestOnce(t *testing.T) {
 func TestOnce_ErrorCaching(t *testing.T) {
 	t.Parallel()
 	failCount := 0
-	act := action.New("once.err", func(ctx context.Context, req string) (string, error) {
+	act := action.New("once.err", func(_ context.Context, _ string) (string, error) {
 		failCount++
 		return "", fmt.Errorf("fatal %d", failCount)
 	}).Once().Build()

@@ -27,7 +27,7 @@ func TestDAG_ContextCancellation_WaitgroupSafety(t *testing.T) {
 	}).Build()
 
 	// Węzeł 2: Natychmiastowo rzuca błąd
-	fastFailNode := action.New("fail_node", func(_ context.Context, nCtx *dag.NodeContext) (string, error) {
+	fastFailNode := action.New("fail_node", func(_ context.Context, _ *dag.NodeContext) (string, error) {
 		return "", errors.New("natychmiastowy błąd")
 	}).Build()
 

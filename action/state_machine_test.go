@@ -18,7 +18,7 @@ func (o *Order) SetState(s string) { o.State = s }
 func TestStateMachine(t *testing.T) {
 	t.Parallel()
 
-	handler := func(ctx context.Context, o *Order) (*Order, error) {
+	handler := func(_ context.Context, o *Order) (*Order, error) {
 		o.SetState("paid")
 		return o, nil
 	}

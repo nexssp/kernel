@@ -95,7 +95,7 @@ func TestFilterByNode(t *testing.T) {
 	t.Parallel()
 
 	buildAction := func(name string) action.AnyAction {
-		return action.New(name, func(ctx context.Context, _ struct{}) (string, error) {
+		return action.New(name, func(_ context.Context, _ struct{}) (string, error) {
 			return name, nil
 		}).Build()
 	}
@@ -105,19 +105,19 @@ func TestFilterByNode(t *testing.T) {
 	systemAct.Describe().Scope = action.ScopeSystem // not ideal; use builder below instead
 
 	// Exact typed builder is clearer:
-	builderSystem := action.New("health", func(ctx context.Context, _ struct{}) (string, error) {
+	builderSystem := action.New("health", func(_ context.Context, _ struct{}) (string, error) {
 		return "ok", nil
 	}).System().Build()
 
-	workerAct := action.New("worker.job", func(ctx context.Context, _ struct{}) (string, error) {
+	workerAct := action.New("worker.job", func(_ context.Context, _ struct{}) (string, error) {
 		return "ok", nil
 	}).Node("worker").Build()
 
-	aiAct := action.New("ai.job", func(ctx context.Context, _ struct{}) (string, error) {
+	aiAct := action.New("ai.job", func(_ context.Context, _ struct{}) (string, error) {
 		return "ok", nil
 	}).Node("ai").Build()
 
-	untagged := action.New("shared.job", func(ctx context.Context, _ struct{}) (string, error) {
+	untagged := action.New("shared.job", func(_ context.Context, _ struct{}) (string, error) {
 		return "ok", nil
 	}).Build()
 

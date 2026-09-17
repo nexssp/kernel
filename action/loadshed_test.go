@@ -22,7 +22,7 @@ func TestLoadShedding_LowPriority(t *testing.T) {
 		MaxCPU:        100,
 		MaxGoroutines: 1000,
 	}, action.PriorityLow)
-	next := func(ctx context.Context, req string) (string, error) { return "ok", nil }
+	next := func(_ context.Context, _ string) (string, error) { return "ok", nil }
 	wrapped := mw(next)
 
 	_, err := wrapped(context.Background(), "req")
@@ -38,7 +38,7 @@ func TestLoadShedding_CriticalProtected(t *testing.T) {
 		MaxCPU:        100,
 		MaxGoroutines: 1000,
 	}, action.PriorityCritical)
-	next := func(ctx context.Context, req string) (string, error) { return "ok", nil }
+	next := func(_ context.Context, _ string) (string, error) { return "ok", nil }
 	wrapped := mw(next)
 
 	res, err := wrapped(context.Background(), "req")

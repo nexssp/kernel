@@ -10,7 +10,7 @@ import (
 
 func TestRequireAuth(t *testing.T) {
 	t.Parallel()
-	act := action.New("auth.only", func(ctx context.Context, _ struct{}) (string, error) {
+	act := action.New("auth.only", func(_ context.Context, _ struct{}) (string, error) {
 		return "ok", nil
 	}).RequireAuth().Build()
 
@@ -33,7 +33,7 @@ func TestRequireAuth(t *testing.T) {
 
 func TestRequireTenant(t *testing.T) {
 	t.Parallel()
-	act := action.New("tenant.only", func(ctx context.Context, _ struct{}) (string, error) {
+	act := action.New("tenant.only", func(_ context.Context, _ struct{}) (string, error) {
 		return "ok", nil
 	}).RequireTenant().Build()
 
@@ -54,7 +54,7 @@ func TestRequireTenant(t *testing.T) {
 
 func TestRequireAnyRole(t *testing.T) {
 	t.Parallel()
-	act := action.New("any.role", func(ctx context.Context, _ struct{}) (string, error) {
+	act := action.New("any.role", func(_ context.Context, _ struct{}) (string, error) {
 		return "ok", nil
 	}).RequireAnyRole("admin", "moderator").Build()
 
@@ -77,7 +77,7 @@ func TestRequireAnyRole(t *testing.T) {
 
 func TestRequirePermission(t *testing.T) {
 	t.Parallel()
-	act := action.New("perm.only", func(ctx context.Context, _ struct{}) (string, error) {
+	act := action.New("perm.only", func(_ context.Context, _ struct{}) (string, error) {
 		return "ok", nil
 	}).RequirePermission("write:orders").Build()
 
@@ -101,7 +101,7 @@ func TestRequirePermission(t *testing.T) {
 
 func TestRequireAnyFeature(t *testing.T) {
 	t.Parallel()
-	act := action.New("any.feat", func(ctx context.Context, _ struct{}) (string, error) {
+	act := action.New("any.feat", func(_ context.Context, _ struct{}) (string, error) {
 		return "ok", nil
 	}).RequireAnyFeature("beta", "premium").Build()
 

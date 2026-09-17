@@ -30,7 +30,7 @@ func TestRetryMiddleware_BackwardCompatible(t *testing.T) {
 		action.ConstantBackoff(time.Millisecond),
 	)
 
-	next := func(ctx context.Context, req string) (string, error) {
+	next := func(_ context.Context, _ string) (string, error) {
 		if calls.Add(1) < 2 {
 			return "", xerr.Unavailable("transient")
 		}
@@ -61,7 +61,7 @@ func TestRetry_DefensiveSafeguards(t *testing.T) {
 		action.AlwaysRetryPredicate,
 	)
 
-	next := func(ctx context.Context, req string) (string, error) {
+	next := func(_ context.Context, _ string) (string, error) {
 		attempts.Add(1)
 		return "", errors.New("err")
 	}
@@ -84,7 +84,7 @@ func TestRetryIf_CustomCondition(t *testing.T) {
 
 	var attempts atomic.Int32
 
-	act := action.New("custom.sdk.retry", func(ctx context.Context, req string) (string, error) {
+	act := action.New("custom.sdk.retry", func(_ context.Context, _ string) (string, error) {
 		a := attempts.Add(1)
 		if a < 3 {
 			// Plain 3rd-party error struct
@@ -115,7 +115,7 @@ func TestRetryIf_SkipsOnPredicateFalse(t *testing.T) {
 
 	var attempts atomic.Int32
 
-	act := action.New("custom.sdk.noretry", func(ctx context.Context, req string) (string, error) {
+	act := action.New("custom.sdk.noretry", func(_ context.Context, _ string) (string, error) {
 		attempts.Add(1)
 		return "", &customSDKError{Code: 400, Msg: "invalid client request"}
 	}).
@@ -145,7 +145,7 @@ func TestRetryAll_RetriesNonTransientErrors(t *testing.T) {
 
 	var attempts atomic.Int32
 
-	act := action.New("script.retryall", func(ctx context.Context, req string) (string, error) {
+	act := action.New("script.retryall", func(_ context.Context, _ string) (string, error) {
 		a := attempts.Add(1)
 		if a < 3 {
 			return "", errors.New("raw unclassified error from os.Exec")
@@ -172,7 +172,7 @@ func TestRetry_DefaultSafetyInvariantPreserved(t *testing.T) {
 
 	var attempts atomic.Int32
 
-	act := action.New("safety.default", func(ctx context.Context, req string) (string, error) {
+	act := action.New("safety.default", func(_ context.Context, _ string) (string, error) {
 		attempts.Add(1)
 		return "", errors.New("unclassified plain error")
 	}).
@@ -193,7 +193,7 @@ func TestResilienceConfig_WithCustomPredicate(t *testing.T) {
 
 	var attempts atomic.Int32
 
-	act := action.New("resilience.bundle.predicate", func(ctx context.Context, req string) (string, error) {
+	act := action.New("resilience.bundle.predicate", func(_ context.Context, _ string) (string, error) {
 		a := attempts.Add(1)
 		if a < 2 {
 			return "", errors.New("custom retryable error")

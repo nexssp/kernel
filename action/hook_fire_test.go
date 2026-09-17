@@ -15,7 +15,7 @@ func TestOnRetry_HookFires(t *testing.T) {
 	var retryCalled atomic.Bool
 	var attempts atomic.Int32
 
-	act := action.New("hook.retry", func(ctx context.Context, req string) (string, error) {
+	act := action.New("hook.retry", func(_ context.Context, _ string) (string, error) {
 		a := attempts.Add(1)
 		if a == 1 {
 			return "", &transientError{}
@@ -23,7 +23,7 @@ func TestOnRetry_HookFires(t *testing.T) {
 		return "ok", nil
 	}).
 		Retry(1, action.ConstantBackoff(0)).
-		HookRetry(func(ctx context.Context, req string, attempt int, err error, meta *action.Meta) {
+		HookRetry(func(_ context.Context, _ string, attempt int, _ error, _ *action.Meta) {
 			retryCalled.Store(true)
 			if attempt != 1 {
 				t.Errorf("expected attempt 1, got %d", attempt)
@@ -54,14 +54,14 @@ func TestOnDeduplicated_HookFires(t *testing.T) {
 	handlerStart := make(chan struct{})
 
 	var handlerCalls atomic.Int32
-	act := action.New("hook.dedup", func(ctx context.Context, req string) (string, error) {
+	act := action.New("hook.dedup", func(_ context.Context, _ string) (string, error) {
 		handlerCalls.Add(1)
 		<-handlerStart // block to ensure overlap
 		return "shared", nil
 	}).
 		Dedup(func(r string) string { return r }).
 		Hook(action.Hook[string, string]{
-			OnDeduplicated: func(ctx context.Context, req string, meta *action.Meta) {
+			OnDeduplicated: func(_ context.Context, _ string, _ *action.Meta) {
 				dedupCalled.Done()
 			},
 		}).
@@ -98,13 +98,13 @@ func TestOnCoalesced_HookFires(t *testing.T) {
 	// Gate: release handler only after both goroutines have entered the middleware.
 	handlerStart := make(chan struct{})
 
-	act := action.New("hook.coal", func(ctx context.Context, req string) (string, error) {
+	act := action.New("hook.coal", func(_ context.Context, _ string) (string, error) {
 		<-handlerStart // block until released
 		return "coalesced", nil
 	}).
 		Coalesce(c, func(r string) string { return r }).
 		Hook(action.Hook[string, string]{
-			OnCoalesced: func(ctx context.Context, req string, meta *action.Meta) {
+			OnCoalesced: func(_ context.Context, _ string, _ *action.Meta) {
 				coalescedHookCalled.Store(true)
 			},
 		}).

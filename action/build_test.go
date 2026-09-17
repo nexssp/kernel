@@ -404,6 +404,6 @@ func BenchmarkRegistry_Actions(b *testing.B) {
 	}
 }
 
-func dummyHandler(ctx context.Context, req any) (any, error) {
+func dummyHandler(_ context.Context, req any) (any, error) {
 	return req, nil
 }

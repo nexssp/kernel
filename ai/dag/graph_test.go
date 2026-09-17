@@ -22,20 +22,20 @@ func TestDAG_ExecutionAndStateIsolation(t *testing.T) {
 	var layer1Concurrency atomic.Int32
 
 	// Layer 1: Parallel User & Order fetching
-	fetchUserAct := action.New("fetch_user", func(ctx context.Context, nCtx *dag.NodeContext) (string, error) {
+	fetchUserAct := action.New("fetch_user", func(_ context.Context, _ *dag.NodeContext) (string, error) {
 		layer1Concurrency.Add(1)
 		time.Sleep(20 * time.Millisecond)
 		return "Alice", nil
 	}).Build()
 
-	fetchOrdersAct := action.New("fetch_orders", func(ctx context.Context, nCtx *dag.NodeContext) (int, error) {
+	fetchOrdersAct := action.New("fetch_orders", func(_ context.Context, _ *dag.NodeContext) (int, error) {
 		layer1Concurrency.Add(1)
 		time.Sleep(20 * time.Millisecond)
 		return 5, nil
 	}).Build()
 
 	// Layer 2: Dependent Summary Aggregation
-	mergeSummaryAct := action.New("merge_summary", func(ctx context.Context, nCtx *dag.NodeContext) (string, error) {
+	mergeSummaryAct := action.New("merge_summary", func(_ context.Context, nCtx *dag.NodeContext) (string, error) {
 		if nCtx == nil || nCtx.Input == nil {
 			return "", errors.New("node context or input state is nil")
 		}
@@ -90,7 +90,7 @@ func TestDAG_ExecutionAndStateIsolation(t *testing.T) {
 func TestDAG_CycleDetection(t *testing.T) {
 	t.Parallel()
 
-	dummyAct := action.New("dummy", func(ctx context.Context, _ *dag.NodeContext) (string, error) {
+	dummyAct := action.New("dummy", func(_ context.Context, _ *dag.NodeContext) (string, error) {
 		return "ok", nil
 	}).Build()
 
@@ -113,7 +113,7 @@ func TestDAG_CycleDetection(t *testing.T) {
 func TestDAG_NodeErrorPropagation(t *testing.T) {
 	t.Parallel()
 
-	failAct := action.New("fail_node", func(ctx context.Context, nCtx *dag.NodeContext) (string, error) {
+	failAct := action.New("fail_node", func(_ context.Context, _ *dag.NodeContext) (string, error) {
 		return "", errors.New("db connection lost")
 	}).Build()
 

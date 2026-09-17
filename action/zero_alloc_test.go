@@ -8,7 +8,7 @@ import (
 )
 
 func newZeroAllocAction() *action.BuiltAction[int, int] {
-	return action.New("zeroalloc.action", func(ctx context.Context, req int) (int, error) {
+	return action.New("zeroalloc.action", func(_ context.Context, req int) (int, error) {
 		return req * 2, nil
 	}).
 		Tag("bench").
@@ -19,7 +19,7 @@ func newZeroAllocAction() *action.BuiltAction[int, int] {
 }
 
 func newZeroAllocAnyHookAction() *action.BuiltAction[int, int] {
-	return action.New("zeroalloc.anyhook", func(ctx context.Context, req int) (int, error) {
+	return action.New("zeroalloc.anyhook", func(_ context.Context, req int) (int, error) {
 		return req * 2, nil
 	}).
 		AnyHook(action.AnyHook{}).

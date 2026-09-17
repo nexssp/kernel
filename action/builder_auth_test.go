@@ -11,7 +11,7 @@ import (
 func TestRequireRole(t *testing.T) {
 	t.Parallel()
 
-	act := action.New("admin.only", func(ctx context.Context, _ struct{}) (string, error) {
+	act := action.New("admin.only", func(_ context.Context, _ struct{}) (string, error) {
 		return "ok", nil
 	}).RequireRole("admin").Build()
 
@@ -35,7 +35,7 @@ func TestRequireRole(t *testing.T) {
 func TestRequireFeature(t *testing.T) {
 	t.Parallel()
 
-	act := action.New("beta.feature", func(ctx context.Context, _ struct{}) (string, error) {
+	act := action.New("beta.feature", func(_ context.Context, _ struct{}) (string, error) {
 		return "ok", nil
 	}).RequireFeature("beta-ui").Build()
 
