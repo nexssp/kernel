@@ -1,12 +1,90 @@
+// Copyright 2018-2026 Marcin Polak. All rights reserved.
+// Use of this source code is governed by an Apache-2.0 license
+// that can be found in the LICENSE file.
+
 package action
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
 	"slices"
 )
+
+// InvokeAny executes an action with an in-memory input payload.
+func InvokeAny(ctx context.Context, act, req any) (any, error) {
+	if act == nil {
+		return nil, errors.New("action: cannot invoke nil action")
+	}
+
+	if invoker, ok := act.(AnyDoer); ok {
+		return invoker.DoAny(ctx, req)
+	}
+
+	if exec, ok := act.(Executable); ok {
+		return exec.ExecuteDecoded(ctx, func(target any) error {
+			if req == nil {
+				return nil
+			}
+			return Assign(target, req)
+		})
+	}
+
+	return nil, fmt.Errorf("action: type %T does not implement Invoker or Executable", act)
+}
+
+func (a *BuiltAction[Req, Res]) DoAny(ctx context.Context, req any) (any, error) {
+	// ⚡ 1 CPU cycle: direct type match (0 allocs)
+	if typed, ok := req.(Req); ok {
+		return a.Do(ctx, typed)
+	}
+
+	// Fast path: pointer dereference (*Req -> Req)
+	if req != nil {
+		if ptr, ok := req.(*Req); ok && ptr != nil {
+			return a.Do(ctx, *ptr)
+		}
+	}
+
+	// Nil handling for parameterless actions (struct{})
+	if req == nil {
+		var zero Req
+		return a.Do(ctx, zero)
+	}
+
+	// Fallback coercion for cross-struct bridging
+	typed, err := Coerce[Req](req)
+	if err != nil {
+		var zero Res
+		return zero, fmt.Errorf("action [%s]: cannot coerce input %T into %T: %w", a.meta.Name, req, typed, err)
+	}
+	return a.Do(ctx, typed)
+}
+
+// ToBuilder converts a compiled action back to a Builder for further composition,
+// preserving all bindings, hooks, cleanups, history, and metadata.
+func (a *BuiltAction[Req, Res]) ToBuilder() *Builder[Req, Res] {
+	if a == nil {
+		return nil
+	}
+
+	var metaCopy Meta
+	if a.meta != nil {
+		metaCopy = *a.GetMeta()
+	}
+
+	return &Builder[Req, Res]{
+		meta:     metaCopy,
+		exec:     a.exec,
+		bindings: append([]Binding(nil), a.bindings...),
+		hooks:    append([]Hook[Req, Res](nil), a.hooks...),
+		anyHooks: append([]AnyHook(nil), a.anyHooksSnapshot()...),
+		cleanups: append([]func(){}, a.cleanups...),
+		history:  a.history,
+	}
+}
 
 var DefaultTextFields = []string{"content", "text", "output", "result", "message"}
 
@@ -138,4 +216,15 @@ func assignJSON(target, source any) error {
 		return fmt.Errorf("coerce: unmarshal into %T: %w", target, err)
 	}
 	return nil
+}
+
+// assertTo converts any to T, falling back to the zero value when the type
+// assertion fails. Adapt relies on this so hooks stay resilient to nil or
+// mismatched payloads instead of panicking.
+func assertTo[T any](v any) T {
+	if t, ok := v.(T); ok {
+		return t
+	}
+	var zero T
+	return zero
 }

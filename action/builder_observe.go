@@ -1,15 +1,39 @@
-package action
+// Copyright 2018-2026 Marcin Polak. All rights reserved.
+// Use of this source code is governed by an Apache-2.0 license
+// that can be found in the LICENSE file.
 
-// builder_observe.go — Observability shortcuts on Builder[Req, Res].
-//
-// These methods wrap common hook patterns to keep call sites concise
-// while preserving full type safety.
+package action
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"time"
+
+	"github.com/nexssp/kernel/xctx"
 )
+
+// Emits registers automatic event emission upon successful action execution.
+// Payload mapping is evaluated lazily only when an active EventPublisher is in context.
+func (b *Builder[Req, Res]) Emits(subject string, mapper func(res Res) any) *Builder[Req, Res] {
+	return b.HookExecuted(func(ctx context.Context, _ Req, res Res, _ *Meta) {
+		// Short-circuit: Exit without payload allocation if no publisher is configured
+		pub, ok := xctx.EventPublisherFrom(ctx)
+		if !ok || pub == nil {
+			return
+		}
+
+		// Lazy evaluation: build DTO only when sending
+		var payload any = res
+		if mapper != nil {
+			payload = mapper(res)
+		}
+
+		if err := pub.PublishEvent(ctx, subject, payload); err != nil {
+			xctx.AddTrace(ctx, fmt.Sprintf("event_emit_failed:%s: %v", subject, err))
+		}
+	})
+}
 
 // WithHistory attaches a ring-buffer execution history to the action
 // AND returns the *History[Req, Res] handle for inspection.

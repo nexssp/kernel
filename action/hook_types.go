@@ -1,39 +1,27 @@
 // Copyright 2018-2026 Marcin Polak. All rights reserved.
 // Use of this source code is governed by an Apache-2.0 license
 // that can be found in the LICENSE file.
+
 package action
 
 import (
 	"context"
+	"log/slog"
 	"reflect"
-	"strings"
-	"time"
 )
 
-type HookProvider interface {
-	GetAnyHooks() []AnyHook
+func callHook(meta *Meta, hook string, fn func()) {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("action_hook_panic",
+				"action", meta.Name,
+				"hook", hook,
+				"panic", r,
+			)
+		}
+	}()
+	fn()
 }
-
-//nolint:revive // exported name kept for API stability
-type ActionProvider interface {
-	Actions() []AnyAction
-}
-
-type Fn[Req, Res any] func(context.Context, Req) (Res, error)
-
-type Middleware[Req, Res any] func(Fn[Req, Res]) Fn[Req, Res]
-
-type DispatcherMiddleware[Req, Res any] func(next Fn[Req, Res], hooks HookDispatcher[Req, Res]) Fn[Req, Res]
-
-type HookDispatcher[Req, Res any] interface {
-	OnCacheHit(ctx context.Context, req Req, res Res)
-	OnCacheMiss(ctx context.Context, req Req)
-	OnRetry(ctx context.Context, req Req, attempt int, err error)
-	OnCoalesced(ctx context.Context, req Req)
-	OnDeduplicated(ctx context.Context, req Req)
-}
-
-type Binding any
 
 type Hook[Req, Res any] struct {
 	// OnBuild runs once per action at build time. Must be pure and O(1):
@@ -93,126 +81,6 @@ type AnyHook struct {
 	OnCancel       func(ctx context.Context, req any, meta *Meta)
 	OnExecuted     func(ctx context.Context, req any, res any, err error, meta *Meta)
 	OnPanic        func(ctx context.Context, req any, recovered any, meta *Meta)
-}
-
-type Meta struct {
-	Name             string            `json:"name"`
-	Description      string            `json:"description,omitempty"`
-	Node             string            `json:"node,omitempty"`
-	Tags             []string          `json:"tags,omitempty"`
-	Scope            ActionScope       `json:"scope,omitempty"`
-	Idempotency      IdempotencyConfig `json:"idempotency"`
-	SuccessStatus    int               `json:"success_status,omitempty"`
-	LogSlowThreshold time.Duration     `json:"log_slow_threshold,omitempty"`
-	Example          any               `json:"example,omitempty"`
-
-	RequiredRoles       []string `json:"required_roles,omitempty"`
-	RequiredPermissions []string `json:"required_permissions,omitempty"`
-	RequiredFeatures    []string `json:"required_features,omitempty"`
-	RequiresAuth        bool     `json:"requires_auth,omitempty"`
-
-	RetryMax         int           `json:"retry_max,omitempty"`
-	Timeout          time.Duration `json:"timeout,omitempty"`
-	ConcurrencyLimit int32         `json:"concurrency_limit,omitempty"`
-	RateLimit        string        `json:"rate_limit,omitempty"`
-	CacheTTL         time.Duration `json:"cache_ttl,omitempty"`
-	Deduplicated     bool          `json:"deduplicated,omitempty"`
-	Coalesced        bool          `json:"coalesced,omitempty"`
-}
-
-// ActionScope describes the contract audience for an action. It is not an
-// authorization rule: authentication and authorization remain enforced by the
-// action's transport middleware and guards.
-//
-//nolint:revive // exported name kept for API stability
-type ActionScope string
-
-const (
-	// ScopePublic is the browser/client business contract. It is the zero-value
-	// behavior so normal client actions remain concise.
-	ScopePublic ActionScope = ""
-	// ScopeInternal is a trusted service-to-service or runner contract.
-	ScopeInternal ActionScope = "internal"
-	// ScopeSystem is a framework or operational contract.
-	ScopeSystem ActionScope = "system"
-)
-
-// IsSystem reports whether the action belongs to the framework/operations plane.
-func (m *Meta) IsSystem() bool { return m != nil && m.Scope == ScopeSystem }
-
-// IsInternal reports whether the action belongs only to trusted callers.
-func (m *Meta) IsInternal() bool { return m != nil && m.Scope == ScopeInternal }
-
-// IsPublic reports whether the action is part of the public business contract.
-// The zero value is public for concise ordinary client actions.
-func (m *Meta) IsPublic() bool { return m != nil && m.Scope == ScopePublic }
-
-func (a *BuiltAction[Req, Res]) String() string {
-	return a.meta.String()
-}
-
-func (m Meta) String() string {
-	s := m.Name
-	if m.Description != "" {
-		s += ": " + m.Description
-	}
-	if len(m.Tags) > 0 {
-		s += " [" + strings.Join(m.Tags, ",") + "]"
-	}
-	return s
-}
-
-// DecodeFunc allows transports to inject data directly into the concrete type.
-type DecodeFunc func(v any) error
-
-// Executable handles the HOT path — execution only.
-type Executable interface {
-	ExecuteDecoded(ctx context.Context, decode DecodeFunc) (any, error)
-}
-
-// AnyDoer is the single-method interface for in-memory untyped execution.
-type AnyDoer interface {
-	DoAny(ctx context.Context, req any) (any, error)
-}
-
-// Describable handles the COLD path — boot, discovery, routing, and CLI help.
-type Describable interface {
-	Describe() *Meta
-}
-
-// AnyAction is the type-erased interface for the App and Transports to handle actions.
-type AnyAction interface {
-	Executable
-	AnyDoer
-	Describable
-	GetBindings() []Binding
-	GetAnyHooks() []AnyHook
-	AddAnyHook(h ...AnyHook)
-}
-
-// TypedPayload allows plugins (like OpenAPI) to discover the underlying Request and Response
-// types at boot time without storing them in metadata or using reflection during execution.
-type TypedPayload interface {
-	ReqPayload() any
-	ResPayload() any
-}
-
-// MessageRes is a standard DTO for actions that only need to return a text message.
-// Using a strongly-typed struct instead of map[string]string ensures precise SDK generation
-// and clean OpenAPI documentation.
-type MessageRes struct {
-	Message string `json:"message"`
-}
-
-// assertTo converts any to T, falling back to the zero value when the type
-// assertion fails. Adapt relies on this so hooks stay resilient to nil or
-// mismatched payloads instead of panicking.
-func assertTo[T any](v any) T {
-	if t, ok := v.(T); ok {
-		return t
-	}
-	var zero T
-	return zero
 }
 
 // Adapt converts a type-safe Hook[Req, Res] into the standardized AnyHook container.

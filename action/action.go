@@ -1,13 +1,13 @@
 // Copyright 2018-2026 Marcin Polak. All rights reserved.
 // Use of this source code is governed by an Apache-2.0 license
-// that can be found in the LICENSE fil
+// that can be found in the LICENSE file.
+
 package action
 
 import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"reflect"
 	"slices"
 	"sync"
@@ -424,38 +424,3 @@ func (a *BuiltAction[Req, Res]) AddAnyHook(h ...AnyHook) {
 
 func (a *BuiltAction[Req, Res]) ReqPayload() any { var r Req; return r }
 func (a *BuiltAction[Req, Res]) ResPayload() any { var r Res; return r }
-
-func callHook(meta *Meta, hook string, fn func()) {
-	defer func() {
-		if r := recover(); r != nil {
-			slog.Error("action_hook_panic",
-				"action", meta.Name,
-				"hook", hook,
-				"panic", r,
-			)
-		}
-	}()
-	fn()
-}
-
-// InvokeAny executes an action with an in-memory input payload.
-func InvokeAny(ctx context.Context, act, req any) (any, error) {
-	if act == nil {
-		return nil, errors.New("action: cannot invoke nil action")
-	}
-
-	if invoker, ok := act.(AnyDoer); ok {
-		return invoker.DoAny(ctx, req)
-	}
-
-	if exec, ok := act.(Executable); ok {
-		return exec.ExecuteDecoded(ctx, func(target any) error {
-			if req == nil {
-				return nil
-			}
-			return Assign(target, req)
-		})
-	}
-
-	return nil, fmt.Errorf("action: type %T does not implement Invoker or Executable", act)
-}

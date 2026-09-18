@@ -1,3 +1,7 @@
+// Copyright 2018-2026 Marcin Polak. All rights reserved.
+// Use of this source code is governed by an Apache-2.0 license
+// that can be found in the LICENSE file.
+
 package action
 
 import (
@@ -126,8 +130,13 @@ func (b *Builder[Req, Res]) Add(others ...AnyAction) *Builder[Req, Res] {
 	return b
 }
 
-// Compose copies typed hooks, AnyHooks, and Bindings from another BuiltAction
-// with the same Req/Res types into this builder.
+// Compose copies runtime hooks (typed + AnyHook), bindings, and transport
+// hints (Idempotency, SuccessStatus) from a compiled action into this builder.
+//
+// Middleware-backed policies are intentionally NOT inherited. Timeout, RetryMax,
+// ConcurrencyLimit, CacheTTL, RequiresAuth, and the Required* guards are
+// already compiled into other.exec as closures and cannot be extracted from a
+// BuiltAction.
 func (b *Builder[Req, Res]) Compose(other *BuiltAction[Req, Res]) *Builder[Req, Res] {
 	if other == nil {
 		return b
@@ -137,20 +146,15 @@ func (b *Builder[Req, Res]) Compose(other *BuiltAction[Req, Res]) *Builder[Req, 
 	b.anyHooks = append(b.anyHooks, other.GetAnyHooks()...)
 	b.bindings = append(b.bindings, other.bindings...)
 
-	// Inherit operational metadata from the composed action.
+	// Transport hints — no middleware needed, safe to copy.
 	// Do not overwrite values explicitly set on this builder.
 	if other.meta != nil {
 		if !b.meta.Idempotency.Enabled && other.meta.Idempotency.Enabled {
 			b.meta.Idempotency = other.meta.Idempotency
 		}
-
 		if b.meta.SuccessStatus == 0 && other.meta.SuccessStatus != 0 {
 			b.meta.SuccessStatus = other.meta.SuccessStatus
 		}
-
-		// Optionally inherit more operational metadata:
-		// Timeout, RetryMax, ConcurrencyLimit, CacheTTL,
-		// RequiredRoles, RequiredPermissions, RequiresAuth, etc.
 	}
 
 	return b

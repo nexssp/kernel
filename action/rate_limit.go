@@ -1,3 +1,7 @@
+// Copyright 2018-2026 Marcin Polak. All rights reserved.
+// Use of this source code is governed by an Apache-2.0 license
+// that can be found in the LICENSE file.
+
 package action
 
 import (
@@ -7,50 +11,11 @@ import (
 	"time"
 
 	"github.com/nexssp/kernel/xerr"
-
 	"golang.org/x/time/rate"
 )
 
 type RateLimiter interface {
 	Allow(ctx context.Context, key string) (bool, error)
-}
-
-type ResilienceConfig struct {
-	MaxRetries    int
-	Backoff       func(attempt int) time.Duration
-	Predicate     RetryPredicate
-	Timeout       time.Duration
-	MaxConcurrent int32
-	Adaptive      *AdaptiveConfig
-}
-
-func (b *Builder[Req, Res]) Resilient(cfg ResilienceConfig) *Builder[Req, Res] {
-	if cfg.MaxRetries > 0 {
-		backoff := cfg.Backoff
-		if backoff == nil {
-			backoff = ExponentialJitter(200*time.Millisecond, 5*time.Second)
-		}
-
-		if cfg.Predicate != nil {
-			b = b.RetryIf(cfg.MaxRetries, backoff, cfg.Predicate)
-		} else {
-			b = b.Retry(cfg.MaxRetries, backoff)
-		}
-	}
-
-	if cfg.Timeout > 0 {
-		b = b.Timeout(cfg.Timeout)
-	}
-
-	if cfg.MaxConcurrent > 0 {
-		b = b.ConcurrencyLimit(cfg.MaxConcurrent)
-	}
-
-	if cfg.Adaptive != nil {
-		b = b.Use(Adaptive[Req, Res](b.meta.Name, *cfg.Adaptive))
-	}
-
-	return b
 }
 
 func (b *Builder[Req, Res]) RateLimit(requestsPerSecond float64, burst int) *Builder[Req, Res] {

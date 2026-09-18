@@ -1,21 +1,8 @@
-package action
+// Copyright 2018-2026 Marcin Polak. All rights reserved.
+// Use of this source code is governed by an Apache-2.0 license
+// that can be found in the LICENSE file.
 
-// builder_auth.go — RBAC and feature-flag guards as fluent builder methods.
-//
-// Because these are methods on Builder[Req, Res], Go infers both type
-// parameters from the receiver. Callers never write type annotations:
-//
-//	// Before (manual middleware):
-//	action.New("order.delete", handler).
-//	    Use(middleware.RequireRole[DeleteReq, DeleteRes]("admin")).
-//	    Use(middleware.RequirePermission[DeleteReq, DeleteRes]("orders:delete")).
-//	    Build()
-//
-//	// After (fluent, zero type annotation):
-//	action.New("order.delete", handler).
-//	    RequireRole("admin").
-//	    RequirePermission("orders:delete").
-//	    Build()
+package action
 
 import (
 	"context"

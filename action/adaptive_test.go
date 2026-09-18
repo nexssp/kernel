@@ -97,3 +97,73 @@ func TestAdaptive_DoesNotTripOnForbidden(t *testing.T) {
 		}
 	}
 }
+
+// TestAdaptive_CancelledProbe_LeavesBreakerPermanentlyHalfOpen reproduces
+// the liveness bug: a probe that is aborted by the caller's context
+// cancellation never reaches state.Observe, so the breaker stays in
+// stateHalfOpen forever and rejects every future request, healthy or not.
+func TestAdaptive_CancelledProbe_LeavesBreakerPermanentlyHalfOpen(t *testing.T) {
+	t.Parallel()
+
+	var mode atomic.Int32
+	// 0 = return a hard failure (used to trip the breaker)
+	// 1 = block until ctx is done (used to simulate a probe that is canceled)
+	// 2 = succeed (used to prove the breaker recovers)
+
+	act := action.New("cb.halfopen.cancel", func(ctx context.Context, _ string) (string, error) {
+		switch mode.Load() {
+		case 0:
+			return "", xerr.Internal("upstream down")
+		case 1:
+			<-ctx.Done()
+			return "", ctx.Err()
+		default:
+			return "ok", nil
+		}
+	}).Use(action.Adaptive[string, string]("cb.halfopen.cancel", action.AdaptiveConfig{
+		FailureThreshold: 1,
+		ResetTimeout:     30 * time.Millisecond,
+		InitialTimeout:   30 * time.Millisecond,
+	})).Build()
+
+	// Phase 1: trip the breaker (Closed -> Open).
+	mode.Store(0)
+	if _, err := act.Do(context.Background(), "req"); err == nil {
+		t.Fatal("expected first upstream failure to trip the breaker")
+	}
+	if _, err := act.Do(context.Background(), "req"); xerr.KindFrom(err) != xerr.KindCircuitBreaker {
+		t.Fatalf("expected Open state, got %v", err)
+	}
+
+	// Phase 2: wait out ResetTimeout so the next call is treated as a probe.
+	time.Sleep(50 * time.Millisecond)
+
+	// Phase 3: fire the probe, then cancel its context mid-flight.
+	mode.Store(1)
+	probeCtx, cancel := context.WithCancel(context.Background())
+	probeDone := make(chan struct{})
+	go func() {
+		defer close(probeDone)
+		_, _ = act.Do(probeCtx, "req")
+	}()
+	time.Sleep(15 * time.Millisecond) // let the probe transition Open -> HalfOpen
+	cancel()
+	<-probeDone
+
+	// Phase 4: the breaker must recover. With the fix, ReleaseProbe puts it
+	// back into Open so the next ResetTimeout window re-arms a fresh probe.
+	time.Sleep(50 * time.Millisecond)
+
+	mode.Store(2)
+	res, err := act.Do(context.Background(), "req")
+	if xerr.KindFrom(err) == xerr.KindCircuitBreaker {
+		t.Fatal("BUG: circuit breaker permanently stuck in stateHalfOpen after a canceled probe; " +
+			"every subsequent call is rejected regardless of upstream health")
+	}
+	if err != nil {
+		t.Fatalf("unexpected error after recovery window: %v", err)
+	}
+	if res != "ok" {
+		t.Fatalf("expected 'ok', got %q", res)
+	}
+}

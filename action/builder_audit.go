@@ -1,3 +1,7 @@
+// Copyright 2018-2026 Marcin Polak. All rights reserved.
+// Use of this source code is governed by an Apache-2.0 license
+// that can be found in the LICENSE file.
+
 package action
 
 import (
@@ -23,5 +27,20 @@ func (b *Builder[Req, Res]) Audited(logger AuditLogger, category string, details
 		}
 
 		logger.Log(ctx, category, meta.Name, details)
+	})
+}
+
+// PIITracker defines the minimal contract for personal data access tracking.
+type PIITracker interface {
+	TrackPIIAccess(ctx context.Context, purpose string, actionName string)
+}
+
+// TrackPIIAccess attaches a non-blocking hook recording the purpose of PII data access.
+func (b *Builder[Req, Res]) TrackPIIAccess(tracker PIITracker, purpose string) *Builder[Req, Res] {
+	return b.HookExecuted(func(ctx context.Context, _ Req, _ Res, meta *Meta) {
+		if tracker == nil {
+			return
+		}
+		tracker.TrackPIIAccess(ctx, purpose, meta.Name)
 	})
 }
