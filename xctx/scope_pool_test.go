@@ -19,3 +19,17 @@ func TestNewScopeCleanupIsIdempotent(t *testing.T) {
 		t.Fatalf("pooled scope retained request ID %q", next.RequestID)
 	}
 }
+
+func TestAddTrace_AfterCleanupStaysOut(t *testing.T) {
+	ctx, _, cleanup := xctx.NewScope(context.Background())
+	cleanup()
+
+	fresh, scope, freshCleanup := xctx.NewScope(context.Background())
+	defer freshCleanup()
+
+	xctx.AddTrace(ctx, "stale-event")
+	if len(scope.TraceEvents) != 0 {
+		t.Fatalf("stale AddTrace leaked into pooled scope: %v", scope.TraceEvents)
+	}
+	_ = fresh
+}

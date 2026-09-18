@@ -1,0 +1,145 @@
+package xctx_test
+
+import (
+	"context"
+	"testing"
+
+	"github.com/nexssp/kernel/xctx"
+)
+
+func TestSettersAndGetters(t *testing.T) {
+	t.Parallel()
+	ctx, _, release := xctx.NewScope(context.Background())
+	defer release()
+
+	ctx = xctx.WithRequestID(ctx, "req-999")
+	ctx = xctx.WithEndpoint(ctx, "/api/v1/test")
+	ctx = xctx.WithTenantID(ctx, "tenant-999")
+	ctx = xctx.WithTraceID(ctx, "trace-999")
+	ctx = xctx.WithClientIP(ctx, "192.168.1.1")
+
+	if xctx.RequestIDFrom(ctx) != "req-999" {
+		t.Fatalf("expected RequestID 'req-999', got %q", xctx.RequestIDFrom(ctx))
+	}
+	if xctx.EndpointFrom(ctx) != "/api/v1/test" {
+		t.Fatalf("expected Endpoint '/api/v1/test', got %q", xctx.EndpointFrom(ctx))
+	}
+	if xctx.TenantIDFrom(ctx) != "tenant-999" {
+		t.Fatalf("expected TenantID 'tenant-999', got %q", xctx.TenantIDFrom(ctx))
+	}
+	if xctx.TraceIDFrom(ctx) != "trace-999" {
+		t.Fatalf("expected TraceID 'trace-999', got %q", xctx.TraceIDFrom(ctx))
+	}
+	if xctx.ClientIPFrom(ctx) != "192.168.1.1" {
+		t.Fatalf("expected ClientIP '192.168.1.1', got %q", xctx.ClientIPFrom(ctx))
+	}
+}
+
+func TestFromClaims(t *testing.T) {
+	t.Parallel()
+	scope := &xctx.RequestScope{}
+
+	claims := map[string]any{
+		"sub":      "usr_100",
+		"ten":      "tenant_abc",
+		"jti":      "jwt_id_123",
+		"roles":    []any{"operator", "viewer"},
+		"features": []any{"ksef", "ai"},
+		"perms":    []any{"invoice:create"},
+	}
+
+	xctx.FromClaims(scope, claims)
+
+	if scope.UserID != "usr_100" {
+		t.Fatalf("expected UserID 'usr_100', got %q", scope.UserID)
+	}
+	if scope.TenantID != "tenant_abc" {
+		t.Fatalf("expected TenantID 'tenant_abc', got %q", scope.TenantID)
+	}
+	if scope.Role != "operator" {
+		t.Fatalf("expected primary Role 'operator', got %q", scope.Role)
+	}
+	if !xctx.HasFeature(xctx.WithScope(context.Background(), scope), "ksef") {
+		t.Fatal("expected feature 'ksef' to be active")
+	}
+	if !xctx.HasPermission(xctx.WithScope(context.Background(), scope), "invoice:create") {
+		t.Fatal("expected permission 'invoice:create' to be active")
+	}
+}
+
+func TestZeroAlloc_SettersWithScope(t *testing.T) {
+	ctx, _, release := xctx.NewScope(context.Background())
+	defer release()
+
+	roles := []string{"admin", "editor"}
+	features := []string{"beta", "ai"}
+	perms := []string{"read", "write"}
+
+	// Pre-warm the scope so internal slices grow to required capacity
+	ctx = xctx.WithRoles(ctx, roles)
+	ctx = xctx.WithFeatures(ctx, features)
+	ctx = xctx.WithPermissions(ctx, perms)
+
+	allocs := testing.AllocsPerRun(1000, func() {
+		// Mutating an existing RequestScope must not trigger context.WithValue
+		// and MUST be 100% zero-alloc.
+		c := ctx
+		c = xctx.WithUserID(c, "user-123")
+		c = xctx.WithTenantID(c, "tenant-456")
+		c = xctx.WithRequestID(c, "req-789")
+		c = xctx.WithTraceID(c, "trace-abc")
+		c = xctx.WithEndpoint(c, "/api")
+		c = xctx.WithClientIP(c, "127.0.0.1")
+		c = xctx.WithRoles(c, roles)
+		c = xctx.WithFeatures(c, features)
+		c = xctx.WithPermissions(c, perms)
+
+		if !xctx.HasPermission(c, "write") {
+			t.Fatal("expected 'write' permission to be set")
+		}
+	})
+
+	if allocs != 0 {
+		t.Fatalf("CRITICAL: expected exactly 0 allocations when mutating scope, got %.2f", allocs)
+	}
+}
+
+func TestSliceOwnershipAndMutation(t *testing.T) {
+	t.Parallel()
+	ctx, _, release := xctx.NewScope(context.Background())
+	defer release()
+
+	callerRoles := []string{"admin", "editor"}
+	ctx = xctx.WithRoles(ctx, callerRoles)
+
+	// Caller maliciously or accidentally mutates the slice
+	callerRoles[0] = "hacker"
+
+	// Ensure context was protected by defensive copy
+	if !xctx.HasRole(ctx, "admin") {
+		t.Fatal("context lost 'admin' role after caller mutation")
+	}
+	if xctx.HasRole(ctx, "hacker") {
+		t.Fatal("context state was corrupted by caller slice mutation")
+	}
+}
+
+func TestWithRoles_Resetting(t *testing.T) {
+	t.Parallel()
+	ctx, scope, release := xctx.NewScope(context.Background())
+	defer release()
+
+	ctx = xctx.WithRoles(ctx, []string{"operator"})
+	if scope.Role != "operator" || !xctx.HasRole(ctx, "operator") {
+		t.Fatal("failed to set initial role")
+	}
+
+	// Clearing roles should clear both the slice and the primary Role field
+	ctx = xctx.WithRoles(ctx, nil)
+	if scope.Role != "" {
+		t.Fatalf("expected primary role to be cleared, got %q", scope.Role)
+	}
+	if xctx.HasRole(ctx, "operator") {
+		t.Fatal("HasRole returned true after roles were cleared")
+	}
+}
