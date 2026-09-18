@@ -21,15 +21,15 @@ func TestNamespacedOutputsPreventParallelCollision(t *testing.T) {
 	}
 	state := dag.AcquireState()
 	defer state.Release()
-	out, err := graph.Execute(context.Background(), state)
+	out, err := graph.Execute(context.Background(), state.AsRead())
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer out.Release()
-	if got, err := dag.GetNodeOutput[string](out, "left"); err != nil || got != "left" {
+	if got, err := dag.GetNodeOutput[string](out.AsRead(), "left"); err != nil || got != "left" {
 		t.Fatalf("left=%q err=%v", got, err)
 	}
-	if got, err := dag.GetNodeOutput[string](out, "right"); err != nil || got != "right" {
+	if got, err := dag.GetNodeOutput[string](out.AsRead(), "right"); err != nil || got != "right" {
 		t.Fatalf("right=%q err=%v", got, err)
 	}
 	if _, ok := out.Get("report"); ok {
@@ -41,7 +41,7 @@ func TestTypedOutputRejectsMismatch(t *testing.T) {
 	state := dag.AcquireState()
 	defer state.Release()
 	state.Set(dag.OutputKey("worker"), "not-a-report")
-	_, err := dag.GetNodeOutput[struct{ Score int }](state, "worker")
+	_, err := dag.GetNodeOutput[struct{ Score int }](state.AsRead(), "worker")
 	if err == nil || !strings.Contains(err.Error(), "expected") {
 		t.Fatalf("expected typed mismatch, got %v", err)
 	}

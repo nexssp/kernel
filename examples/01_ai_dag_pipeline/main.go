@@ -69,7 +69,7 @@ func main() {
 	initialState := dag.AcquireState()
 	defer initialState.Release()
 
-	finalState, err := graph.Execute(ctx, initialState)
+	finalState, err := graph.Execute(ctx, initialState.AsRead())
 	if finalState != nil {
 		defer finalState.Release()
 	}
@@ -78,7 +78,7 @@ func main() {
 	}
 
 	// 6. Read typed output
-	result, err := dag.GetNodeOutput[string](finalState, "ai_node")
+	result, err := dag.GetNodeOutput[string](finalState.AsRead(), "ai_node")
 	if err != nil {
 		panic(err)
 	}

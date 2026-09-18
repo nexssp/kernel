@@ -19,7 +19,7 @@ func TestGetNodeOutput_CoercionAndBadPaths(t *testing.T) {
 
 		state.Set(dag.OutputKey("node_a"), DummyResult{Status: "ok", Value: 42})
 
-		res, err := dag.GetNodeOutput[DummyResult](state, "node_a")
+		res, err := dag.GetNodeOutput[DummyResult](state.AsRead(), "node_a")
 		if err != nil {
 			t.Fatalf("expected no error, got: %v", err)
 		}
@@ -32,14 +32,12 @@ func TestGetNodeOutput_CoercionAndBadPaths(t *testing.T) {
 		state := dag.AcquireState()
 		defer state.Release()
 
-		// Simulate what happens when state is loaded from a JSON checkpoint
-		// (Numbers become float64, structs become map[string]any)
 		state.Set(dag.OutputKey("node_b"), map[string]any{
 			"status": "resumed",
 			"value":  float64(99),
 		})
 
-		res, err := dag.GetNodeOutput[DummyResult](state, "node_b")
+		res, err := dag.GetNodeOutput[DummyResult](state.AsRead(), "node_b")
 		if err != nil {
 			t.Fatalf("expected successful coercion, got: %v", err)
 		}
@@ -52,15 +50,12 @@ func TestGetNodeOutput_CoercionAndBadPaths(t *testing.T) {
 		state := dag.AcquireState()
 		defer state.Release()
 
-		// Put a string where a struct is expected
 		state.Set(dag.OutputKey("node_c"), "this is just a string")
 
-		_, err := dag.GetNodeOutput[DummyResult](state, "node_c")
+		_, err := dag.GetNodeOutput[DummyResult](state.AsRead(), "node_c")
 		if err == nil {
 			t.Fatal("expected error, got nil")
 		}
-
-		// Must return a Validation error
 		if xerr.KindFrom(err) != xerr.KindValidation {
 			t.Fatalf("expected KindValidation, got: %s (err: %v)", xerr.KindFrom(err), err)
 		}
@@ -70,7 +65,7 @@ func TestGetNodeOutput_CoercionAndBadPaths(t *testing.T) {
 		state := dag.AcquireState()
 		defer state.Release()
 
-		_, err := dag.GetNodeOutput[DummyResult](state, "ghost_node")
+		_, err := dag.GetNodeOutput[DummyResult](state.AsRead(), "ghost_node")
 		if err == nil {
 			t.Fatal("expected error, got nil")
 		}
@@ -79,8 +74,8 @@ func TestGetNodeOutput_CoercionAndBadPaths(t *testing.T) {
 		}
 	})
 
-	t.Run("5. Bad Path - nil state", func(t *testing.T) {
-		var state *dag.State // explicitly nil
+	t.Run("5. Bad Path - zero ReadState", func(t *testing.T) {
+		var state dag.ReadState
 
 		_, err := dag.GetNodeOutput[DummyResult](state, "node_x")
 		if err == nil {
@@ -95,9 +90,10 @@ func TestGetNodeOutput_CoercionAndBadPaths(t *testing.T) {
 		state := dag.AcquireState()
 		defer state.Release()
 		state.Set(dag.OutputKey("node_hot"), DummyResult{Status: "ok", Value: 7})
+		view := state.AsRead()
 
 		allocs := testing.AllocsPerRun(1000, func() {
-			if _, err := dag.GetNodeOutput[DummyResult](state, "node_hot"); err != nil {
+			if _, err := dag.GetNodeOutput[DummyResult](view, "node_hot"); err != nil {
 				t.Fatal(err)
 			}
 		})

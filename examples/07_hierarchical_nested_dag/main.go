@@ -33,7 +33,7 @@ func main() {
 		if err != nil {
 			return "", err
 		}
-		finalPrice, _ := dag.GetNodeOutput[float64](subState, "sub_tax")
+		finalPrice, _ := dag.GetNodeOutput[float64](subState.AsRead(), "sub_tax")
 		return fmt.Sprintf("Order audited. Gross price from sub-graph: %.2f USD", finalPrice), nil
 	}).Build()
 
@@ -49,7 +49,7 @@ func main() {
 	state := dag.AcquireState()
 	defer state.Release()
 
-	finalState, err := masterDAG.Execute(ctx, state)
+	finalState, err := masterDAG.Execute(ctx, state.AsRead())
 	if finalState != nil {
 		defer finalState.Release()
 	}
@@ -57,7 +57,7 @@ func main() {
 		panic(err)
 	}
 
-	report, _ := dag.GetNodeOutput[string](finalState, "audit_node")
+	report, _ := dag.GetNodeOutput[string](finalState.AsRead(), "audit_node")
 	fmt.Println("🚀 Nested DAG Execution Result:")
 	fmt.Println(report)
 }

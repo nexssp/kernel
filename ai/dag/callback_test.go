@@ -42,7 +42,7 @@ func TestLayerCallback_FiresOncePerLayer(t *testing.T) {
 
 	state := AcquireState()
 	defer state.Release()
-	final, err := g.Execute(ctx, state)
+	final, err := g.Execute(ctx, state.AsRead())
 	if err != nil {
 		t.Fatalf("execute: %v", err)
 	}
@@ -88,7 +88,7 @@ func TestLayerCallback_ReceivesAccumulatedState(t *testing.T) {
 
 	state := AcquireState()
 	defer state.Release()
-	final, err := g.Execute(ctx, state)
+	final, err := g.Execute(ctx, state.AsRead())
 	if err != nil {
 		t.Fatalf("execute: %v", err)
 	}
@@ -123,7 +123,7 @@ func TestLayerCallback_ErrorAbortsAndPreservesState(t *testing.T) {
 		})
 
 	state := AcquireState()
-	final, err := g.Execute(ctx, state)
+	final, err := g.Execute(ctx, state.AsRead())
 	defer state.Release()
 
 	if !errors.Is(err, sentinel) {
@@ -150,7 +150,9 @@ func TestLayerCallback_NilCallbackSafe(t *testing.T) {
 		return b.AddNode("a", "a_out", echo("a"))
 	})
 
-	final, err := g.Execute(context.Background(), AcquireState())
+	state := AcquireState()
+	defer state.Release()
+	final, err := g.Execute(context.Background(), state.AsRead())
 	if err != nil {
 		t.Fatalf("execute: %v", err)
 	}
@@ -180,15 +182,14 @@ func TestLayerCallback_ConsumedByOutermostOnly(t *testing.T) {
 			return nil
 		})
 
-	final, err := outer.Execute(ctx, AcquireState())
+	state := AcquireState()
+	defer state.Release()
+	final, err := outer.Execute(ctx, state.AsRead())
 	if err != nil {
 		t.Fatalf("execute: %v", err)
 	}
 	defer final.Release()
 
-	// Outer has 2 layers. Inner DAG has 1 layer, but must NOT fire
-	// the callback: otherwise the runner would see 3 events and
-	// checkpoint a nested state as if it were a top-level one.
 	if len(layers) != 2 {
 		t.Fatalf("callback fired %d times, want 2 (outer only), layers=%v", len(layers), layers)
 	}
@@ -226,7 +227,7 @@ func TestLayerCallback_PrePopulatedStateSkipsNode(t *testing.T) {
 	})
 
 	state := AcquireState()
-	state.Set(OutputKey("a"), "preset-a") // simulate resume
+	state.Set(OutputKey("a"), "preset-a")
 
 	var bRan bool
 	ctx := WithLayerCallback(context.Background(),
@@ -237,16 +238,48 @@ func TestLayerCallback_PrePopulatedStateSkipsNode(t *testing.T) {
 			return nil
 		})
 
-	final, err := g.Execute(ctx, state)
+	final, err := g.Execute(ctx, state.AsRead())
 	if err != nil {
 		t.Fatalf("execute: %v", err)
 	}
 	defer final.Release()
+	defer state.Release()
 
 	if !bRan {
 		t.Fatal("b should have run in the resumed execution")
 	}
 	if v, _ := final.Get(OutputKey("a")); v != "preset-a" {
 		t.Fatalf("a's preset output was overwritten: %v", v)
+	}
+}
+
+func TestLayerCallback_SuspendPreservesSentinel(t *testing.T) {
+	g := mustGraph(t, func(b *Builder) *Builder {
+		return b.AddNode("a", "a_out", echo("a"))
+	})
+
+	ctx := WithLayerCallback(context.Background(),
+		func(_ context.Context, _ int, _ *State) error {
+			return Suspend("awaiting approval", map[string]any{"amount": 12000})
+		})
+
+	state := AcquireState()
+	defer state.Release()
+
+	final, err := g.Execute(ctx, state.AsRead())
+
+	if !errors.Is(err, ErrSuspended) {
+		t.Fatalf("expected ErrSuspended, got %v", err)
+	}
+	if _, ok := errors.AsType[*ExecutionError](err); ok {
+		t.Fatal("ErrSuspended must not be wrapped in *ExecutionError")
+	}
+	if final == nil {
+		t.Fatal("state must be preserved on suspend")
+	}
+	defer final.Release()
+
+	if v, ok := final.Get(OutputKey("a")); !ok || v != "a" {
+		t.Fatalf("preserved state lost a's output: v=%v ok=%v", v, ok)
 	}
 }
