@@ -140,12 +140,22 @@ func (b *Builder[Req, Res]) Resilient(cfg ResilienceConfig) *Builder[Req, Res] {
 		b = b.Timeout(cfg.Timeout)
 	}
 
-	if cfg.MaxConcurrent > 0 {
-		b = b.ConcurrencyLimit(cfg.MaxConcurrent)
+	// UseFirst (not Use): the circuit breaker must observe only the final result
+	// of the Do() call after all retries are exhausted — never individual attempts.
+	// Adding it via Use() would nest it inside Retry, causing AllowRequest/Observe
+	// to fire per attempt rather than per caller invocation, silently breaking
+	// the breaker's failure accounting.
+	// SmartResilience manually constructs this same invariant as cb(retry(next)).
+	if cfg.Adaptive != nil {
+		b = b.UseFirst(Adaptive[Req, Res](b.meta.Name, *cfg.Adaptive))
 	}
 
-	if cfg.Adaptive != nil {
-		b = b.Use(Adaptive[Req, Res](b.meta.Name, *cfg.Adaptive))
+	// UseFirst: admission control must reject overloads before any retry
+	// or circuit breaker logic executes, regardless of what this builder
+	// already has installed.
+	if cfg.MaxConcurrent > 0 {
+		b.meta.ConcurrencyLimit = cfg.MaxConcurrent
+		b = b.UseFirst(ConcurrencyLimitMiddleware[Req, Res](cfg.MaxConcurrent))
 	}
 
 	return b

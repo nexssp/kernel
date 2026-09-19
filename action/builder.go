@@ -128,6 +128,18 @@ func (b *Builder[Req, Res]) Use(m Middleware[Req, Res]) *Builder[Req, Res] {
 	return b
 }
 
+// UseFirst inserts a middleware at the outermost position of the
+// chain. Middlewares added with Use wrap earlier ones from the inside,
+// so a wrapper that must observe every inner failure — timeouts,
+// exhausted retries, cancellations — has to be installed with
+// UseFirst. Use for recovery, circuit-breaking, or measurement.
+func (b *Builder[Req, Res]) UseFirst(m Middleware[Req, Res]) *Builder[Req, Res] {
+	b.middlewares = slices.Insert(b.middlewares, 0, func(next Fn[Req, Res], _ HookDispatcher[Req, Res]) Fn[Req, Res] {
+		return m(next)
+	})
+	return b
+}
+
 func (b *Builder[Req, Res]) UseWithDispatcher(m DispatcherMiddleware[Req, Res]) *Builder[Req, Res] {
 	b.middlewares = append(b.middlewares, m)
 	return b
