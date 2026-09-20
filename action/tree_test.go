@@ -60,8 +60,20 @@ func (m *mockFixedHookNode) Children() []action.AnyAction {
 	return m.children
 }
 
+// CloneWithHooks for the fixed mock simply modifies in-place to avoid allocations
+// during the strict ZeroAlloc benchmarking tests.
+func (m *mockFixedHookNode) CloneWithHooks(hooks ...action.AnyHook) action.AnyAction {
+	m.AddAnyHook(hooks...)
+	return m
+}
+
 func (m *mockFixedHookNode) ResetHooks() {
 	m.hookLen = 0
+}
+
+func (m *mockGraphNode) CloneWithHooks(hooks ...action.AnyHook) action.AnyAction {
+	m.AddAnyHook(hooks...)
+	return m
 }
 
 func TestApplyTreeHook_Deduplication_DiamondDAG(t *testing.T) {

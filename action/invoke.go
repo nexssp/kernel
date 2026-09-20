@@ -63,29 +63,6 @@ func (a *BuiltAction[Req, Res]) DoAny(ctx context.Context, req any) (any, error)
 	return a.Do(ctx, typed)
 }
 
-// ToBuilder converts a compiled action back to a Builder for further composition,
-// preserving all bindings, hooks, cleanups, history, and metadata.
-func (a *BuiltAction[Req, Res]) ToBuilder() *Builder[Req, Res] {
-	if a == nil {
-		return nil
-	}
-
-	var metaCopy Meta
-	if a.meta != nil {
-		metaCopy = *a.GetMeta()
-	}
-
-	return &Builder[Req, Res]{
-		meta:     metaCopy,
-		exec:     a.exec,
-		bindings: append([]Binding(nil), a.bindings...),
-		hooks:    append([]Hook[Req, Res](nil), a.hooks...),
-		anyHooks: append([]AnyHook(nil), a.anyHooksSnapshot()...),
-		cleanups: append([]func(){}, a.cleanups...),
-		history:  a.history,
-	}
-}
-
 var DefaultTextFields = []string{"content", "text", "output", "result", "message"}
 
 // Dynamic lifts any AnyAction into a *Builder[any, any].

@@ -23,6 +23,31 @@ type Builder[Req, Res any] struct {
 	bindings    []Binding
 	history     *History[Req, Res]
 	cleanups    []func()
+	resources   *actionResources
+}
+
+// ToBuilder creates a mutable configuration state from an existing action.
+// The returned builder shares the exact same resource lifecycle (cleanups)
+// to ensure idempotent resource shutdown.
+func (b *BuiltAction[Req, Res]) ToBuilder() *Builder[Req, Res] {
+	if b == nil {
+		return nil
+	}
+
+	var metaCopy Meta
+	if b.meta != nil {
+		metaCopy = *b.GetMeta()
+	}
+
+	return &Builder[Req, Res]{
+		meta:      metaCopy,
+		exec:      b.exec,
+		bindings:  append([]Binding(nil), b.bindings...),
+		hooks:     append([]Hook[Req, Res](nil), b.hooks...),
+		anyHooks:  append([]AnyHook(nil), b.anyHooksSnapshot()...),
+		resources: b.resources,
+		history:   b.history,
+	}
 }
 
 // New creates an action builder.
@@ -173,38 +198,43 @@ func (b *Builder[Req, Res]) Build() *BuiltAction[Req, Res] {
 	metaCopy.RequiredPermissions = slices.Clone(b.meta.RequiredPermissions)
 	metaCopy.RequiredFeatures = slices.Clone(b.meta.RequiredFeatures)
 
+	resources := b.resources
+	if resources == nil {
+		resources = newActionResources(b.cleanups)
+	}
+
 	act := &BuiltAction[Req, Res]{
-		meta:     &metaCopy,
-		bindings: append([]Binding(nil), b.bindings...),
-		history:  b.history,
-		cleanups: append([]func(){}, b.cleanups...),
+		meta:      &metaCopy,
+		bindings:  append([]Binding(nil), b.bindings...),
+		history:   b.history,
+		resources: resources,
 	}
 
 	reqType := reflect.TypeFor[Req]()
 	resType := reflect.TypeFor[Res]()
 
 	anyHooks := make([]AnyHook, 0, len(b.anyHooks))
-	for _, h := range b.anyHooks {
-		if h.OnBuild != nil && !h.OnBuild(&metaCopy, reqType, resType) {
+	for _, hook := range b.anyHooks {
+		if hook.OnBuild != nil && !hook.OnBuild(&metaCopy, reqType, resType) {
 			continue
 		}
-		anyHooks = append(anyHooks, h)
+		anyHooks = append(anyHooks, hook)
 	}
 	act.anyHooks.Store(&anyHookSet{hooks: anyHooks})
 
 	hooks := make([]Hook[Req, Res], 0, len(b.hooks))
-	for _, h := range b.hooks {
-		if h.OnBuild != nil && !h.OnBuild(&metaCopy, reqType, resType) {
+	for _, hook := range b.hooks {
+		if hook.OnBuild != nil && !hook.OnBuild(&metaCopy, reqType, resType) {
 			continue
 		}
-		hooks = append(hooks, h)
+		hooks = append(hooks, hook)
 	}
 	act.hooks = hooks
 
 	exec := b.exec
 	if exec != nil {
-		for _, m := range slices.Backward(b.middlewares) {
-			exec = m(exec, act)
+		for _, middleware := range slices.Backward(b.middlewares) {
+			exec = middleware(exec, act)
 		}
 	}
 	act.exec = exec

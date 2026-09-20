@@ -127,62 +127,43 @@ func TestNewRegistry_ErrorsOnCollisionWithoutOverride(t *testing.T) {
 	}
 }
 
-func TestNewRegistry_RejectsActionReuseWithHooks(t *testing.T) {
+func TestNewRegistry_AllowsActionReuseAcrossMultipleRegistries(t *testing.T) {
 	t.Parallel()
 
-	act := action.New("task.run", dummyHandler).Build()
-	hook := action.AnyHook{
+	// 1. Create a core business action ONCE.
+	coreAction := action.New("task.run", dummyHandler).Build()
+
+	// 2. Create a hook for the public API registry
+	publicHook := action.AnyHook{
 		Before: func(ctx context.Context, _ any, _ *action.Meta) (context.Context, error) {
 			return ctx, nil
 		},
 	}
 
-	lib := action.Library{
-		Name:    "with_hooks",
-		Actions: []action.AnyAction{act},
-		Hooks:   []action.AnyHook{hook},
+	// 3. Create a hook for the internal admin registry
+	internalHook := action.AnyHook{
+		Before: func(ctx context.Context, _ any, _ *action.Meta) (context.Context, error) {
+			return ctx, nil
+		},
 	}
 
-	if _, err := action.NewRegistry(lib); err != nil {
-		t.Fatalf("first registry must succeed: %v", err)
+	// 4. Safely clone and apply hooks for two completely independent registries
+	publicLib := action.Library{
+		Name:    "public_api",
+		Actions: action.ApplyHooks([]action.AnyAction{coreAction}, publicHook),
 	}
 
-	_, err := action.NewRegistry(lib)
-	if err == nil {
-		t.Fatal("expected error on second registry with same action instance (and hooks), got nil")
+	internalLib := action.Library{
+		Name:    "internal_api",
+		Actions: action.ApplyHooks([]action.AnyAction{coreAction}, internalHook),
 	}
 
-	if !strings.Contains(err.Error(), "task.run") {
-		t.Fatalf("expected action name 'task.run' in error, got %q", err.Error())
+	// Both registries build perfectly. No panics. The coreAction is cloned safely.
+	if _, err := action.NewRegistry(publicLib); err != nil {
+		t.Fatalf("failed to build public registry: %v", err)
 	}
-	if !strings.Contains(err.Error(), "already received hooks from a previous NewRegistry call") {
-		t.Fatalf("expected specific error message for hook accumulation, got %q", err.Error())
-	}
-}
-
-func TestNewRegistry_AllowsActionReuseWithoutHooks(t *testing.T) {
-	t.Parallel()
-
-	act := action.New("task.run", dummyHandler).Build()
-	libNoHooks := action.Library{Name: "no_hooks", Actions: []action.AnyAction{act}}
-
-	if _, err := action.NewRegistry(libNoHooks); err != nil {
-		t.Fatalf("first registry must succeed: %v", err)
-	}
-	if _, err := action.NewRegistry(libNoHooks); err != nil {
-		t.Fatalf("second registry must also succeed (no hooks): %v", err)
-	}
-
-	// Akcja nie została oznaczona przez poprzednie rejestracje (nie było hooków),
-	// więc wciąż można jej przypisać hooki. To jest obserwowalny efekt kontraktu
-	// zamiast zaglądania w nieeksportowane pole.
-	libWithHooks := action.Library{
-		Name:    "with_hooks",
-		Actions: []action.AnyAction{act},
-		Hooks:   []action.AnyHook{{}},
-	}
-	if _, err := action.NewRegistry(libWithHooks); err != nil {
-		t.Fatalf("action should still be claimable after hook-less registries: %v", err)
+	if _, err := action.NewRegistry(internalLib); err != nil {
+		t.Fatalf("failed to build internal registry: %v", err)
 	}
 }
 

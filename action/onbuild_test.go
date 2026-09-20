@@ -68,17 +68,18 @@ func TestOnBuild_AppliesViaLibraryHooks(t *testing.T) {
 		return 0, nil
 	}).Build()
 
-	type taggedReq struct{ A int }
 	hook := action.AnyHook{
 		OnBuild: func(_ *action.Meta, reqType, _ reflect.Type) bool {
 			return reqType == reflect.TypeFor[struct{ A int }]()
 		},
 	}
 
+	// Use the new ApplyHooks pattern instead of Library.Hooks
+	wrappedActions := action.ApplyHooks([]action.AnyAction{tagged, plain}, hook)
+
 	reg := action.MustNewRegistry(action.Library{
 		Name:    "onbuild.lib",
-		Actions: []action.AnyAction{tagged, plain},
-		Hooks:   []action.AnyHook{hook},
+		Actions: wrappedActions,
 	})
 
 	kept, _ := reg.Get("lib.keep")
@@ -89,7 +90,6 @@ func TestOnBuild_AppliesViaLibraryHooks(t *testing.T) {
 	if got := len(dropped.GetAnyHooks()); got != 0 {
 		t.Fatalf("lib.drop expected 0 hooks, got %d", got)
 	}
-	_ = taggedReq{}
 }
 
 // ── Signature: meta, reqType, resType ────────────────────────────────────────
@@ -181,13 +181,18 @@ func TestOnBuild_CalledOncePerActionInRegistry(t *testing.T) {
 	hook := action.AnyHook{
 		OnBuild: func(*action.Meta, reflect.Type, reflect.Type) bool { calls++; return true },
 	}
+
+	rawActions := []action.AnyAction{
+		action.New("r.a", func(_ context.Context, _ int) (int, error) { return 0, nil }).Build(),
+		action.New("r.b", func(_ context.Context, _ string) (string, error) { return "", nil }).Build(),
+	}
+
+	// Apply hooks explicitly
+	wrappedActions := action.ApplyHooks(rawActions, hook)
+
 	_ = action.MustNewRegistry(action.Library{
-		Name: "onbuild.registry",
-		Actions: []action.AnyAction{
-			action.New("r.a", func(_ context.Context, _ int) (int, error) { return 0, nil }).Build(),
-			action.New("r.b", func(_ context.Context, _ string) (string, error) { return "", nil }).Build(),
-		},
-		Hooks: []action.AnyHook{hook},
+		Name:    "onbuild.registry",
+		Actions: wrappedActions,
 	})
 
 	if calls != 2 {

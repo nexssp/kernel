@@ -59,6 +59,7 @@ type AnyAction interface {
 	GetBindings() []Binding
 	GetAnyHooks() []AnyHook
 	AddAnyHook(h ...AnyHook)
+	CloneWithHooks(hooks ...AnyHook) AnyAction
 }
 
 // TypedPayload allows plugins (like OpenAPI) to discover the underlying Request and Response

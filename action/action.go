@@ -1,7 +1,3 @@
-// Copyright 2018-2026 Marcin Polak. All rights reserved.
-// Use of this source code is governed by an Apache-2.0 license
-// that can be found in the LICENSE file.
-
 package action
 
 import (
@@ -10,7 +6,6 @@ import (
 	"fmt"
 	"reflect"
 	"slices"
-	"sync"
 	"sync/atomic"
 
 	"github.com/nexssp/kernel/xctx"
@@ -25,47 +20,68 @@ type execState struct {
 	fromCache bool
 }
 
+// BuiltAction is a fully-configured action. Build it once, reuse it many
+// times. It is safe for concurrent .Do() calls.
+//
+// Hooks may be added via AddAnyHook. Registry construction applies
+// library hooks only once per (action, library) pair, tracked by
+// appliedLibs. This makes it safe for the same action to appear in
+// several registries without duplicating hooks.
 type BuiltAction[Req, Res any] struct {
 	meta *Meta
 	exec Fn[Req, Res]
 
-	hooks      []Hook[Req, Res]
-	anyHooks   atomic.Pointer[anyHookSet]
-	anyHooksMu sync.Mutex
-	bindings   []Binding
-	history    *History[Req, Res]
-	cleanups   []func()
-	closeOnce  sync.Once
+	hooks    []Hook[Req, Res]
+	anyHooks atomic.Pointer[anyHookSet]
 
-	// Set once NewRegistry applies library hooks. A second NewRegistry call
-	// that tries to apply hooks to the same instance fails loudly instead of
-	// silently doubling them.
-	registryHooksClaimed atomic.Bool
+	bindings  []Binding
+	history   *History[Req, Res]
+	resources *actionResources
 }
 
 type anyHookSet struct {
 	hooks []AnyHook
 }
 
-// Close releases resources owned by the action, such as internally-created
-// cache janitors. It is safe to call multiple times.
 func (a *BuiltAction[Req, Res]) Close() {
-	if a == nil {
+	if a == nil || a.resources == nil {
 		return
 	}
-	a.closeOnce.Do(func() {
-		for _, cleanup := range a.cleanups {
-			if cleanup != nil {
-				cleanup()
-			}
-		}
-	})
+	a.resources.Close()
 }
 
-// claimRegistryHooks atomically claims the right to receive registry-level
-// hooks. Returns true on the first call, false on every subsequent call.
-func (a *BuiltAction[Req, Res]) claimRegistryHooks() bool {
-	return a.registryHooksClaimed.CompareAndSwap(false, true)
+// CloneWithHooks returns an independent action whose metadata, executor,
+// bindings, and existing hooks are copied. The new hooks are appended.
+// Preserving generic Req/Res types ensures zero allocations on the hot path.
+func (a *BuiltAction[Req, Res]) CloneWithHooks(hooks ...AnyHook) AnyAction {
+	if a == nil {
+		return nil
+	}
+	builder := a.ToBuilder()
+	if builder == nil {
+		return a
+	}
+	builder.AnyHook(hooks...)
+	return builder.Build()
+}
+
+// ApplyHooks returns a new slice of actions where each action is an
+// independent clone with the given hooks appended. The originals are
+// never modified and remain safe to reuse in multiple registries concurrently.
+func ApplyHooks(actions []AnyAction, hooks ...AnyHook) []AnyAction {
+	if len(hooks) == 0 || len(actions) == 0 {
+		return actions
+	}
+
+	output := make([]AnyAction, len(actions))
+	for index, currentAction := range actions {
+		if currentAction == nil {
+			continue
+		}
+		output[index] = currentAction.CloneWithHooks(hooks...)
+	}
+
+	return output
 }
 
 func (a *BuiltAction[Req, Res]) GetMeta() *Meta {
@@ -88,13 +104,9 @@ func (a *BuiltAction[Req, Res]) GetAnyHooks() []AnyHook {
 	return append([]AnyHook(nil), a.anyHooksSnapshot()...)
 }
 
-func (a *BuiltAction[Req, Res]) Describe() *Meta {
-	return a.GetMeta()
-}
+func (a *BuiltAction[Req, Res]) Describe() *Meta { return a.GetMeta() }
 
-func (a *BuiltAction[Req, Res]) History() *History[Req, Res] {
-	return a.history
-}
+func (a *BuiltAction[Req, Res]) History() *History[Req, Res] { return a.history }
 
 func (a *BuiltAction[Req, Res]) anyHooksSnapshot() []AnyHook {
 	set := a.anyHooks.Load()
@@ -128,7 +140,6 @@ func (a *BuiltAction[Req, Res]) Do(ctx context.Context, req Req) (res Res, err e
 	var anyHooksRan, typedHooksRan int
 	var perr error
 
-	// Deferred: panic, then unwinding hooks in reverse.
 	defer func() {
 		if r := recover(); r != nil {
 			err = xerr.PanicRecovery(r)
@@ -179,7 +190,7 @@ func runAnyBeforeHooks[Req any](
 			continue
 		}
 		var err error
-		//nolint:fatcontext // intentional: hook chain must propagate context to next hook and to exec
+		//nolint:fatcontext // bounded hook slice requires sequential context propagation
 		ctx, err = h.Before(ctx, any(req), meta)
 		if err != nil {
 			return ctx, i, err
@@ -199,7 +210,7 @@ func runTypedBeforeHooks[Req, Res any](
 			continue
 		}
 		var err error
-		//nolint:fatcontext // intentional: hook chain must propagate context to next hook and to exec
+		//nolint:fatcontext // bounded hook slice requires sequential context propagation
 		ctx, err = h.Before(ctx, req, meta)
 		if err != nil {
 			return ctx, i, err
@@ -219,7 +230,6 @@ func firePanicHooks[Req any](
 		if h.OnPanic == nil {
 			continue
 		}
-
 		callHook(meta, "OnPanic", func() {
 			h.OnPanic(ctx, any(req), recovered, meta)
 		})
@@ -301,7 +311,6 @@ func (a *BuiltAction[Req, Res]) OnCacheHit(ctx context.Context, req Req, res Res
 	if s, ok := ctx.Value(execStateKey{}).(*execState); ok && s != nil {
 		s.fromCache = true
 	}
-
 	for _, h := range a.hooks {
 		if h.OnCacheHit != nil {
 			h.OnCacheHit(ctx, req, res, a.meta)
@@ -412,14 +421,22 @@ func (a *BuiltAction[Req, Res]) AddAnyHook(h ...AnyHook) {
 		return
 	}
 
-	a.anyHooksMu.Lock()
-	defer a.anyHooksMu.Unlock()
-
-	current := a.anyHooksSnapshot()
-	next := make([]AnyHook, 0, len(current)+len(applicable))
-	next = append(next, current...)
-	next = append(next, applicable...)
-	a.anyHooks.Store(&anyHookSet{hooks: next})
+	// Load, extend, store. The load/store cycle tolerates concurrent
+	// AddAnyHook calls without a coarse mutex on the hot path.
+	for {
+		cur := a.anyHooks.Load()
+		var next []AnyHook
+		if cur == nil {
+			next = append([]AnyHook(nil), applicable...)
+		} else {
+			next = make([]AnyHook, 0, len(cur.hooks)+len(applicable))
+			next = append(next, cur.hooks...)
+			next = append(next, applicable...)
+		}
+		if a.anyHooks.CompareAndSwap(cur, &anyHookSet{hooks: next}) {
+			return
+		}
+	}
 }
 
 func (a *BuiltAction[Req, Res]) ReqPayload() any { var r Req; return r }

@@ -110,3 +110,18 @@ func (p *Proxy) Children() []AnyAction {
 	}
 	return nil
 }
+
+func (p *Proxy) CloneWithHooks(hooks ...AnyHook) AnyAction {
+	if p == nil {
+		return nil
+	}
+	currentAction := p.Current()
+	if currentAction == nil {
+		return p
+	}
+	clonedAction := currentAction.CloneWithHooks(hooks...)
+	if clonedAction == nil {
+		return p
+	}
+	return NewProxy(clonedAction)
+}

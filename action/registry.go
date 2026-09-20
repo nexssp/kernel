@@ -1,7 +1,3 @@
-// Copyright 2018-2026 Marcin Polak. All rights reserved.
-// Use of this source code is governed by an Apache-2.0 license
-// that can be found in the LICENSE file.
-
 package action
 
 import (
@@ -9,13 +5,13 @@ import (
 	"sort"
 )
 
-// hookClaimer is implemented by *BuiltAction. It lets NewRegistry detect
-// that a caller is trying to apply library hooks to an action that already
-// received them in a previous registry, which would silently duplicate them.
-type hookClaimer interface {
-	claimRegistryHooks() bool
-}
-
+// NewRegistry assembles a set of libraries into a single immutable
+// lookup table.
+//
+// Registries never mutate actions. Every hook and every binding an
+// action will ever have must be attached before Build(). This keeps
+// NewRegistry pure and makes an action safe to reuse in any number of
+// registries.
 func NewRegistry(libs ...Library) (*Registry, error) {
 	if len(libs) == 0 {
 		return &Registry{byName: make(map[string]AnyAction)}, nil
@@ -31,11 +27,6 @@ func NewRegistry(libs ...Library) (*Registry, error) {
 		return nil, err
 	}
 
-	if err := claimRegistryHooks(winners, libs); err != nil {
-		return nil, err
-	}
-
-	applyRegistryHooks(winners, libs)
 	byName := indexWinners(winners)
 	applyAliases(byName, libs)
 
@@ -112,46 +103,6 @@ func collectOneAction(
 	return nil
 }
 
-func claimRegistryHooks(winners map[string]winnerClaim, libs []Library) error {
-	if !anyLibraryHasHooks(libs) {
-		return nil
-	}
-	for _, c := range winners {
-		claimer, ok := c.action.(hookClaimer)
-		if !ok {
-			continue
-		}
-		if !claimer.claimRegistryHooks() {
-			return fmt.Errorf(
-				"action: %q already received hooks from a previous NewRegistry call; "+
-					"build a fresh action for the second registry",
-				c.action.Describe().Name,
-			)
-		}
-	}
-	return nil
-}
-
-func anyLibraryHasHooks(libs []Library) bool {
-	for i := range libs {
-		if len(libs[i].Hooks) > 0 {
-			return true
-		}
-	}
-	return false
-}
-
-func applyRegistryHooks(winners map[string]winnerClaim, libs []Library) {
-	for i := range libs {
-		if len(libs[i].Hooks) == 0 {
-			continue
-		}
-		for _, c := range winners {
-			c.action.AddAnyHook(libs[i].Hooks...)
-		}
-	}
-}
-
 func indexWinners(winners map[string]winnerClaim) map[string]AnyAction {
 	byName := make(map[string]AnyAction, len(winners)*2)
 	for name, c := range winners {
@@ -200,47 +151,33 @@ func MustNewRegistry(libs ...Library) *Registry {
 	return reg
 }
 
-// Library is a named, declarative contribution to the action set.
-// Transports, domain packages, and applications each contribute one.
+// Library is a named group of actions.
 //
-// A Library is a value. Compose two or more with NewRegistry.
+// There is no Hooks field. Cross-cutting behavior is attached to each
+// action before Build() via .AnyHook(...). This keeps registries pure
+// and lets the same action appear in any number of registries.
 type Library struct {
 	Name        string
 	Description string
 	Actions     []AnyAction
-	Hooks       []AnyHook
 	Aliases     []Alias
 	Overrides   []string
 }
 
-// Alias maps a canonical action name to short names a caller may type
-// in its place.
 type Alias struct {
 	Canonical string
 	Short     []string
 }
 
-// Of wraps actions as an unnamed inline Library. Use it to mix a small
-// set of ad-hoc actions with named libraries in NewRegistry.
 func Of(actions ...AnyAction) Library {
 	return Library{Name: "inline", Actions: actions}
 }
 
-// Registry is an immutable, deterministic snapshot of the actions
-// declared by one or more Library values. Only NewRegistry produces one.
-//
-// Safe for unlimited concurrent reads: no lock is taken because the
-// Registry never mutates after NewRegistry returns.
-//
-// Actions returns canonical actions in name-sorted order. Aliases are
-// resolved by Get but do not appear in Actions.
 type Registry struct {
 	byName  map[string]AnyAction
 	actions []AnyAction
 }
 
-// Get returns the action registered under name, where name may be a
-// canonical action name or an alias short name.
 func (r *Registry) Get(name string) (AnyAction, bool) {
 	if r == nil {
 		return nil, false
@@ -249,8 +186,6 @@ func (r *Registry) Get(name string) (AnyAction, bool) {
 	return act, ok
 }
 
-// Actions returns canonical actions in name-sorted order. The slice is
-// owned by the Registry; callers must not mutate it.
 func (r *Registry) Actions() []AnyAction {
 	if r == nil {
 		return nil
@@ -258,7 +193,6 @@ func (r *Registry) Actions() []AnyAction {
 	return r.actions
 }
 
-// Len returns the number of canonical actions. Aliases are not counted.
 func (r *Registry) Len() int {
 	if r == nil {
 		return 0
