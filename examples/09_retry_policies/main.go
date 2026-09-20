@@ -24,7 +24,7 @@ func main() {
 
 	// Safe default: retries only transient xerr errors
 	var safeCalls atomic.Int32
-	safeAct := action.New("policy.safe", func(ctx context.Context, req string) (string, error) {
+	safeAct := action.New("policy.safe", func(_ context.Context, _ string) (string, error) {
 		if safeCalls.Add(1) == 1 {
 			return "", xerr.Unavailable("temporary")
 		}
@@ -33,9 +33,8 @@ func main() {
 		Retry(2, action.ConstantBackoff(time.Millisecond)).
 		Build()
 
-	// Custom predicate: retry 5xx SDK errors only
 	var sdkCalls atomic.Int32
-	sdkAct := action.New("policy.sdk", func(ctx context.Context, req string) (string, error) {
+	sdkAct := action.New("policy.sdk", func(_ context.Context, _ string) (string, error) {
 		if sdkCalls.Add(1) == 1 {
 			return "", errors.New("just a test")
 		}
@@ -53,9 +52,8 @@ func main() {
 		).
 		Build()
 
-	// Retry all errors: good for idempotent scripts
 	var idempotentCalls atomic.Int32
-	idempotentAct := action.New("policy.retry_all", func(ctx context.Context, req string) (string, error) {
+	idempotentAct := action.New("policy.retry_all", func(_ context.Context, _ string) (string, error) {
 		if idempotentCalls.Add(1) == 1 {
 			return "", errors.New("plain error")
 		}
@@ -64,10 +62,15 @@ func main() {
 		RetryAll(2, action.ConstantBackoff(time.Millisecond)).
 		Build()
 
-	// Simulate calls
-	_, _ = safeAct.Do(ctx, "safe")
-	_, _ = sdkAct.Do(ctx, "sdk")
-	_, _ = idempotentAct.Do(ctx, "all")
+	if _, err := safeAct.Do(ctx, "safe"); err != nil {
+		fmt.Printf("safeAct error: %v\n", err)
+	}
+	if _, err := sdkAct.Do(ctx, "sdk"); err != nil {
+		fmt.Printf("sdkAct error: %v\n", err)
+	}
+	if _, err := idempotentAct.Do(ctx, "all"); err != nil {
+		fmt.Printf("idempotentAct error: %v\n", err)
+	}
 
 	fmt.Println("safe calls:", safeCalls.Load())
 	fmt.Println("sdk calls:", sdkCalls.Load())

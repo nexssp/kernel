@@ -24,20 +24,20 @@ func main() {
 	ctx := context.Background()
 
 	// 1. Layer 0 (Parallel Node A): Fetch User Profile
-	fetchUser := action.New("user.fetch", func(ctx context.Context, nCtx *dag.NodeContext) (UserProfile, error) {
+	fetchUser := action.New("user.fetch", func(_ context.Context, _ *dag.NodeContext) (UserProfile, error) {
 		time.Sleep(20 * time.Millisecond) // Simulated network latency
 		return UserProfile{ID: "usr_42", Name: "Alice", Tier: "VIP"}, nil
 	}).Build()
 
 	// 2. Layer 0 (Parallel Node B): Fetch User Orders
-	fetchOrders := action.New("orders.fetch", func(ctx context.Context, nCtx *dag.NodeContext) (OrderSummary, error) {
+	fetchOrders := action.New("orders.fetch", func(_ context.Context, _ *dag.NodeContext) (OrderSummary, error) {
 		time.Sleep(30 * time.Millisecond)
 		return OrderSummary{TotalSpent: 1249.99, Count: 8}, nil
 	}).Build()
 
 	// 3. Layer 1 (Dependent Node C): AI Synthesis
 	// Runs ONLY after both User and Orders finish.
-	generateInsight := action.New("ai.synthesize", func(ctx context.Context, nCtx *dag.NodeContext) (string, error) {
+	generateInsight := action.New("ai.synthesize", func(_ context.Context, nCtx *dag.NodeContext) (string, error) {
 		user, err := dag.GetNodeOutput[UserProfile](nCtx.Input, "user_node")
 		if err != nil {
 			return "", err

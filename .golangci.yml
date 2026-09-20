@@ -189,9 +189,6 @@ linters:
         linters:
           - govet
 
-    paths:
-      - examples
-
 formatters:
   enable:
     - gofumpt

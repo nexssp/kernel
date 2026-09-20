@@ -68,79 +68,8 @@ func main() {
 		return "payment settled", nil
 	}).Retry(1, action.ConstantBackoff(10*time.Millisecond)).AnyHook(hook).Build()
 	defer payment.Close()
-	_, _ = payment.Do(ctx, 99.95)
-
-	failed := action.New("payment.validate", func(context.Context, string) (string, error) {
-		return "", xerr.Validation("card number is invalid")
-	}).AnyHook(hook).Build()
-	_, _ = failed.Do(ctx, "bad-card")
-
-	findUser := action.New("user.find", func(_ context.Context, id string) (string, error) {
-		return "User_" + id, nil
-	}).Cache(time.Minute, func(id string) string { return id }).AnyHook(hook).Build()
-	defer findUser.Close()
-	for _, id := range []string{"alice", "alice", "bob"} {
-		_, _ = findUser.Do(ctx, id)
-	}
-
-	cancelAction := action.New("request.cancel", func(ctx context.Context, _ string) (string, error) {
-		return "", ctx.Err()
-	}).AnyHook(hook).Build()
-	cancelCtx, cancel := context.WithCancel(ctx)
-	cancel()
-	_, _ = cancelAction.Do(cancelCtx, "canceled-request")
-
-	panicAction := action.New("worker.panic", func(context.Context, string) (string, error) {
-		panic("simulated worker panic")
-	}).AnyHook(hook).Build()
-	_, _ = panicAction.Do(ctx, "panic-request")
-
-	dedupEntered := make(chan struct{})
-	dedupRelease := make(chan struct{})
-	dedupSecondSeen := make(chan struct{})
-	var dedupOnce sync.Once
-	var dedupRequests atomic.Int32
-	dedup := action.New("product.price", func(context.Context, string) (string, error) {
-		dedupOnce.Do(func() { close(dedupEntered) })
-		<-dedupRelease
-		return "19.99", nil
-	}).Dedup(func(id string) string {
-		if dedupRequests.Add(1) == 2 {
-			close(dedupSecondSeen)
-		}
-		return id
-	}).AnyHook(hook).Build()
-	var dedupWG sync.WaitGroup
-	dedupWG.Go(func() { ; _, _ = dedup.Do(ctx, "sku-123") })
-	<-dedupEntered
-	dedupWG.Go(func() { ; _, _ = dedup.Do(ctx, "sku-123") })
-	<-dedupSecondSeen
-	close(dedupRelease)
-	dedupWG.Wait()
-
-	coalesceEntered := make(chan struct{})
-	coalesceRelease := make(chan struct{})
-	coalesceSecondSeen := make(chan struct{})
-	var coalesceOnce sync.Once
-	var coalesceRequests atomic.Int32
-	coalescer := action.NewCoalescer()
-	coalesced := action.New("inventory.check", func(context.Context, string) (string, error) {
-		coalesceOnce.Do(func() { close(coalesceEntered) })
-		<-coalesceRelease
-		return "in-stock", nil
-	}).Coalesce(coalescer, func(sku string) string {
-		if coalesceRequests.Add(1) == 2 {
-			close(coalesceSecondSeen)
-		}
-		return sku
-	}).AnyHook(hook).Build()
-	var coalesceWG sync.WaitGroup
-	coalesceWG.Go(func() { ; _, _ = coalesced.Do(ctx, "sku-123") })
-	<-coalesceEntered
-	coalesceWG.Go(func() { ; _, _ = coalesced.Do(ctx, "sku-123") })
-	<-coalesceSecondSeen
-	close(coalesceRelease)
-	coalesceWG.Wait()
+	runBasicActionScenarios(ctx, hook)
+	runConcurrencyScenarios(ctx, hook)
 
 	fmt.Println("\n=== Recent observation events ===")
 	events := memorySink.Events()
@@ -191,4 +120,119 @@ func closeFile(file *os.File, label string) {
 func fatal(operation string, err error) {
 	fmt.Fprintf(os.Stderr, "%s: %v\n", operation, err)
 	os.Exit(1)
+}
+
+func runBasicActionScenarios(ctx context.Context, hook action.AnyHook) {
+	var attempts atomic.Int32
+	payment := action.New("payment.process", func(_ context.Context, amount float64) (string, error) {
+		if amount <= 0 {
+			return "", xerr.Validation("amount must be positive")
+		}
+		if attempts.Add(1) == 1 {
+			return "", xerr.Unavailable("temporary payment gateway timeout")
+		}
+		return "payment settled", nil
+	}).Retry(1, action.ConstantBackoff(10*time.Millisecond)).AnyHook(hook).Build()
+	defer payment.Close()
+	if _, err := payment.Do(ctx, 99.95); err != nil {
+		slog.Debug("payment result", "error", err)
+	}
+
+	failed := action.New("payment.validate", func(context.Context, string) (string, error) {
+		return "", xerr.Validation("card number is invalid")
+	}).AnyHook(hook).Build()
+	if _, err := failed.Do(ctx, "bad-card"); err != nil {
+		slog.Debug("failed validation result", "error", err)
+	}
+
+	findUser := action.New("user.find", func(_ context.Context, id string) (string, error) {
+		return "User_" + id, nil
+	}).Cache(time.Minute, func(id string) string { return id }).AnyHook(hook).Build()
+	defer findUser.Close()
+	for _, id := range []string{"alice", "alice", "bob"} {
+		if _, err := findUser.Do(ctx, id); err != nil {
+			slog.Debug("findUser result", "error", err)
+		}
+	}
+
+	cancelAction := action.New("request.cancel", func(ctx context.Context, _ string) (string, error) {
+		return "", ctx.Err()
+	}).AnyHook(hook).Build()
+	cancelCtx, cancel := context.WithCancel(ctx)
+	cancel()
+	if _, err := cancelAction.Do(cancelCtx, "canceled-request"); err != nil {
+		slog.Debug("cancelAction result", "error", err)
+	}
+
+	panicAction := action.New("worker.panic", func(context.Context, string) (string, error) {
+		panic("simulated worker panic")
+	}).AnyHook(hook).Build()
+	if _, err := panicAction.Do(ctx, "panic-request"); err != nil {
+		slog.Debug("panicAction result", "error", err)
+	}
+}
+
+func runConcurrencyScenarios(ctx context.Context, hook action.AnyHook) {
+	dedupEntered := make(chan struct{})
+	dedupRelease := make(chan struct{})
+	dedupSecondSeen := make(chan struct{})
+	var dedupOnce sync.Once
+	var dedupRequests atomic.Int32
+	dedup := action.New("product.price", func(context.Context, string) (string, error) {
+		dedupOnce.Do(func() { close(dedupEntered) })
+		<-dedupRelease
+		return "19.99", nil
+	}).Dedup(func(id string) string {
+		if dedupRequests.Add(1) == 2 {
+			close(dedupSecondSeen)
+		}
+		return id
+	}).AnyHook(hook).Build()
+	var dedupWG sync.WaitGroup
+	dedupWG.Go(func() {
+		if _, err := dedup.Do(ctx, "sku-123"); err != nil {
+			slog.Debug("dedup error", "error", err)
+		}
+	})
+	<-dedupEntered
+	dedupWG.Go(func() {
+		if _, err := dedup.Do(ctx, "sku-123"); err != nil {
+			slog.Debug("dedup error", "error", err)
+		}
+	})
+	<-dedupSecondSeen
+	close(dedupRelease)
+	dedupWG.Wait()
+
+	coalesceEntered := make(chan struct{})
+	coalesceRelease := make(chan struct{})
+	coalesceSecondSeen := make(chan struct{})
+	var coalesceOnce sync.Once
+	var coalesceRequests atomic.Int32
+	coalescer := action.NewCoalescer()
+	coalesced := action.New("inventory.check", func(context.Context, string) (string, error) {
+		coalesceOnce.Do(func() { close(coalesceEntered) })
+		<-coalesceRelease
+		return "in-stock", nil
+	}).Coalesce(coalescer, func(sku string) string {
+		if coalesceRequests.Add(1) == 2 {
+			close(coalesceSecondSeen)
+		}
+		return sku
+	}).AnyHook(hook).Build()
+	var coalesceWG sync.WaitGroup
+	coalesceWG.Go(func() {
+		if _, err := coalesced.Do(ctx, "sku-123"); err != nil {
+			slog.Debug("coalesced error", "error", err)
+		}
+	})
+	<-coalesceEntered
+	coalesceWG.Go(func() {
+		if _, err := coalesced.Do(ctx, "sku-123"); err != nil {
+			slog.Debug("coalesced error", "error", err)
+		}
+	})
+	<-coalesceSecondSeen
+	close(coalesceRelease)
+	coalesceWG.Wait()
 }

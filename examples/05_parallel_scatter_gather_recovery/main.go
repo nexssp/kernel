@@ -20,7 +20,7 @@ func main() {
 
 	// Flaky Worker – fails on the 1st attempt for WorkerID=3 with a transient error,
 	// then recovers on the 2nd attempt via RetryMiddleware.
-	flakyWorker := action.New("flaky.worker", func(ctx context.Context, req WorkerReq) (string, error) {
+	flakyWorker := action.New("flaky.worker", func(_ context.Context, req WorkerReq) (string, error) {
 		att := attempts.Add(1)
 		if req.WorkerID == 3 && att == 1 {
 			// Returns a transient error to trigger RetryMiddleware

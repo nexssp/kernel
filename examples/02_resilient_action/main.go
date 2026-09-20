@@ -23,7 +23,7 @@ func main() {
 	var databaseCalls atomic.Int32
 
 	// Simulated flaky stock checker
-	checkStock := action.New("inventory.check", func(ctx context.Context, req StockRequest) (StockResponse, error) {
+	checkStock := action.New("inventory.check", func(_ context.Context, req StockRequest) (StockResponse, error) {
 		call := databaseCalls.Add(1)
 		if call == 1 {
 			// First call fails with a transient error
@@ -40,7 +40,7 @@ func main() {
 		// 4. In-flight Singleflight Deduplication (Thundering Herd shield)
 		Dedup(func(r StockRequest) string { return r.SKU }).
 		// 5. Audit & Log Hooks
-		HookExecuted(func(ctx context.Context, req StockRequest, res StockResponse, meta *action.Meta) {
+		HookExecuted(func(_ context.Context, _ StockRequest, res StockResponse, meta *action.Meta) {
 			fmt.Printf("✅ [Audit] %s -> SKU: %s has %d items in stock\n", meta.Name, res.SKU, res.Quantity)
 		}).
 		Build()
