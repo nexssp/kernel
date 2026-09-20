@@ -2,84 +2,197 @@ package action_test
 
 import (
 	"context"
-	"errors"
 	"iter"
+	"sync/atomic"
 	"testing"
 
 	"github.com/nexssp/kernel/action"
+	"github.com/nexssp/kernel/xerr"
 )
 
-func TestStreamAction(t *testing.T) {
+func TestStream_HappyPath(t *testing.T) {
 	t.Parallel()
-	stream := action.NewStream("paginate", func(_ context.Context, limit int) (iter.Seq2[int, error], error) {
+
+	var beforeCalled, afterCalled atomic.Bool
+
+	stream := action.NewStream("test.stream", func(_ context.Context, count int) (iter.Seq2[int, error], error) {
 		return func(yield func(int, error) bool) {
-			for i := 1; i <= limit; i++ {
+			for i := 1; i <= count; i++ {
 				if !yield(i, nil) {
 					return
 				}
 			}
 		}, nil
+	}).Use(action.Hook[int, iter.Seq2[int, error]]{
+		Before: func(ctx context.Context, _ int, _ *action.Meta) (context.Context, error) {
+			beforeCalled.Store(true)
+			return ctx, nil
+		},
+		After: func(_ context.Context, _ int, _ iter.Seq2[int, error], err error, _ *action.Meta) {
+			if err != nil {
+				t.Errorf("unexpected error in After hook: %v", err)
+			}
+			afterCalled.Store(true)
+		},
 	})
 
 	seq, err := stream.Do(context.Background(), 3)
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatalf("Do failed: %v", err)
 	}
-	var got []int
-	for v, err := range seq {
+
+	var collected []int
+	for item, err := range seq {
 		if err != nil {
 			t.Fatalf("unexpected item error: %v", err)
 		}
-		got = append(got, v)
+		collected = append(collected, item)
 	}
-	if len(got) != 3 || got[0] != 1 || got[2] != 3 {
-		t.Fatalf("expected [1,2,3], got %v", got)
+
+	if len(collected) != 3 || collected[2] != 3 {
+		t.Fatalf("unexpected collected values: %v", collected)
+	}
+	if !beforeCalled.Load() || !afterCalled.Load() {
+		t.Fatal("expected both Before and After hooks to execute")
 	}
 }
 
-func TestCollectStream(t *testing.T) {
+func TestStream_ConsumerPanic_NotSwallowed(t *testing.T) {
 	t.Parallel()
-	stream := action.NewStream("collect", func(_ context.Context, _ struct{}) (iter.Seq2[string, error], error) {
-		return func(yield func(string, error) bool) {
-			for _, s := range []string{"a", "b", "c"} {
-				if !yield(s, nil) {
-					return
-				}
-			}
-		}, nil
-	})
 
-	// Use CollectStream helper
-	values, err := action.CollectStream(context.Background(), stream, struct{}{})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(values) != 3 || values[0] != "a" || values[2] != "c" {
-		t.Fatalf("expected [a,b,c], got %v", values)
-	}
-}
+	var afterHookSawError atomic.Bool
 
-func TestStreamAction_ErrorInIterator(t *testing.T) {
-	t.Parallel()
-	stream := action.NewStream("errstream", func(_ context.Context, _ any) (iter.Seq2[int, error], error) {
+	stream := action.NewStream("test.consumer.panic", func(_ context.Context, _ struct{}) (iter.Seq2[int, error], error) {
 		return func(yield func(int, error) bool) {
 			yield(1, nil)
-			yield(0, errors.New("item-process-failed"))
+			yield(2, nil)
+		}, nil
+	}).Use(action.Hook[struct{}, iter.Seq2[int, error]]{
+		After: func(_ context.Context, _ struct{}, _ iter.Seq2[int, error], err error, _ *action.Meta) {
+			if err != nil {
+				afterHookSawError.Store(true)
+			}
+		},
+	})
+
+	seq, err := stream.Do(context.Background(), struct{}{})
+	if err != nil {
+		t.Fatalf("Do failed: %v", err)
+	}
+
+	consumerPanicked := false
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				if r == "consumer_kaboom" {
+					consumerPanicked = true
+				}
+			}
+		}()
+
+		for item := range seq {
+			if item == 2 {
+				panic("consumer_kaboom")
+			}
+		}
+	}()
+
+	if !consumerPanicked {
+		t.Fatal("CRITICAL: consumer panic was silently swallowed by stream wrapper!")
+	}
+	if !afterHookSawError.Load() {
+		t.Fatal("After hook did not receive error notification about the panic")
+	}
+}
+
+func TestStream_GeneratorPanic_NotSwallowed(t *testing.T) {
+	t.Parallel()
+
+	var afterHookSawError atomic.Bool
+
+	stream := action.NewStream("test.generator.panic", func(_ context.Context, _ struct{}) (iter.Seq2[int, error], error) {
+		return func(yield func(int, error) bool) {
+			yield(1, nil)
+			panic("generator_internal_crash")
+		}, nil
+	}).Use(action.Hook[struct{}, iter.Seq2[int, error]]{
+		After: func(_ context.Context, _ struct{}, _ iter.Seq2[int, error], err error, _ *action.Meta) {
+			if err != nil {
+				afterHookSawError.Store(true)
+			}
+		},
+	})
+
+	seq, err := stream.Do(context.Background(), struct{}{})
+	if err != nil {
+		t.Fatalf("Do failed: %v", err)
+	}
+
+	generatorPanicked := false
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				if r == "generator_internal_crash" {
+					generatorPanicked = true
+				}
+			}
+		}()
+
+		for item := range seq {
+			_ = item
+		}
+	}()
+
+	if !generatorPanicked {
+		t.Fatal("CRITICAL: generator panic was silently swallowed!")
+	}
+	if !afterHookSawError.Load() {
+		t.Fatal("After hook did not receive error notification about generator panic")
+	}
+}
+
+func TestStream_HandlerPanicInDo(t *testing.T) {
+	t.Parallel()
+
+	var afterHookRan atomic.Bool
+
+	stream := action.NewStream("test.init.panic", func(_ context.Context, _ struct{}) (iter.Seq2[int, error], error) {
+		panic("panic_during_init")
+	}).Use(action.Hook[struct{}, iter.Seq2[int, error]]{
+		After: func(_ context.Context, _ struct{}, _ iter.Seq2[int, error], err error, _ *action.Meta) {
+			if err != nil {
+				afterHookRan.Store(true)
+			}
+		},
+	})
+
+	_, err := stream.Do(context.Background(), struct{}{})
+	if err == nil {
+		t.Fatal("expected Do() to return error on panic, got nil")
+	}
+	if xerr.KindFrom(err) != xerr.KindInternal {
+		t.Fatalf("expected KindInternal, got: %v", err)
+	}
+	if !afterHookRan.Load() {
+		t.Fatal("After hook was not executed on init panic")
+	}
+}
+
+func TestCollectStream_GeneratorPanicCaptured(t *testing.T) {
+	t.Parallel()
+
+	stream := action.NewStream("test.collect.panic", func(_ context.Context, _ struct{}) (iter.Seq2[int, error], error) {
+		return func(yield func(int, error) bool) {
+			yield(10, nil)
+			panic("crash_during_iteration")
 		}, nil
 	})
-	seq, err := stream.Do(context.Background(), nil)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+
+	_, err := action.CollectStream(context.Background(), stream, struct{}{})
+	if err == nil {
+		t.Fatal("expected CollectStream to return error on generator panic")
 	}
-	var items []int
-	for v, err := range seq {
-		if err != nil {
-			// last received error stops iteration
-			break
-		}
-		items = append(items, v)
-	}
-	if len(items) != 1 || items[0] != 1 {
-		t.Fatalf("expected [1], got %v", items)
+	if xerr.KindFrom(err) != xerr.KindInternal {
+		t.Fatalf("expected KindInternal error, got: %v", err)
 	}
 }
