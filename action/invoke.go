@@ -84,9 +84,14 @@ func Dynamic(act AnyAction) *Builder[any, any] {
 		b.meta.RequiredFeatures = slices.Clone(desc.RequiredFeatures)
 	}
 
-	// Preserve bindings and hooks
+	// Preserve bindings (transport metadata).
+	//
+	// Hooks are intentionally NOT copied here: InvokeAny dispatches through
+	// the wrapped action's Do method, which fires the wrapped action's own
+	// hooks. Re-registering them on this wrapper would run every hook twice
+	// per call. Callers who want to *add* hooks around the wrapper should
+	// use .AnyHook(...) on the returned builder.
 	b.bindings = append(b.bindings, act.GetBindings()...)
-	b.anyHooks = append(b.anyHooks, act.GetAnyHooks()...)
 
 	return b
 }

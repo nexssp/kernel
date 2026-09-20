@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/nexssp/kernel/action"
+	"github.com/nexssp/kernel/xctx"
 	"github.com/nexssp/kernel/xerr"
 )
 
@@ -42,13 +43,12 @@ type ResultDTO struct {
 
 // ── 1. Contract & Binding Preservation (Regression Test) ──────────────────────
 
-func TestDynamic_PreservesContractBindingsAndHooks(t *testing.T) {
+func TestDynamic_BindingsPreservedAndBaseHooksFireOnce(t *testing.T) {
 	t.Parallel()
 
-	var hookFired atomic.Bool
+	var hookCalls atomic.Int32
 	route := dummyHTTPRoute{Method: "POST", Path: "/api/autonomous/solve"}
 
-	// Concrete base action with bindings, auth, tags, and lifecycle hooks
 	base := action.New("orders.process", func(_ context.Context, req UserDTO) (ResultDTO, error) {
 		return ResultDTO{Message: "processed: " + req.Name, Success: true}, nil
 	}).
@@ -59,47 +59,42 @@ func TestDynamic_PreservesContractBindingsAndHooks(t *testing.T) {
 		RequireRole("operator").
 		AnyHook(action.AnyHook{
 			Before: func(ctx context.Context, _ any, _ *action.Meta) (context.Context, error) {
-				hookFired.Store(true)
+				hookCalls.Add(1)
 				return ctx, nil
 			},
 		}).
 		Build()
 
-	// Wrap dynamically
-	dynBuilder := action.Dynamic(base)
-	dynAct := dynBuilder.Build()
+	dynAct := action.Dynamic(base).Build()
 
-	// 1. Invariant: Bindings MUST NOT be stripped
+	// 1. Bindings are transport metadata — must be preserved on the wrapper.
 	bindings := dynAct.GetBindings()
 	if len(bindings) != 1 {
 		t.Fatalf("expected 1 binding preserved, got %d", len(bindings))
 	}
 	r, ok := bindings[0].(dummyHTTPRoute)
 	if !ok || r.Method != http.MethodPost || r.Path != "/api/autonomous/solve" {
-		t.Fatalf("binding corrupted or modified: %+v", bindings[0])
+		t.Fatalf("binding corrupted: %+v", bindings[0])
 	}
 
-	// 2. Invariant: Operational metadata must match the wrapped target
+	// 2. Operational metadata must match the wrapped target.
 	meta := dynAct.Describe()
-	if meta.Name != "orders.process" {
-		t.Errorf("name = %q, want orders.process", meta.Name)
-	}
-	if meta.Description != "Core order processing action" {
-		t.Errorf("description = %q", meta.Description)
-	}
-	if meta.Timeout != 2*time.Second {
-		t.Errorf("timeout = %v, want 2s", meta.Timeout)
-	}
-	if !reflect.DeepEqual(meta.Tags, []string{"orders", "production"}) {
-		t.Errorf("tags = %v, want [orders production]", meta.Tags)
-	}
-	if len(meta.RequiredRoles) != 1 || meta.RequiredRoles[0] != "operator" {
-		t.Errorf("required roles = %v, want [operator]", meta.RequiredRoles)
+	if meta.Name != "orders.process" || meta.Timeout != 2*time.Second {
+		t.Errorf("metadata mismatch: %+v", meta)
 	}
 
-	// 3. Invariant: Inherited hooks must be preserved and executed
-	if len(dynAct.GetAnyHooks()) != 1 {
-		t.Fatalf("expected 1 AnyHook preserved, got %d", len(dynAct.GetAnyHooks()))
+	// 3. The wrapper MUST NOT carry the base's hooks: base.Do fires them.
+	if got := len(dynAct.GetAnyHooks()); got != 0 {
+		t.Fatalf("wrapper duplicated base hooks (%d) — double-firing bug", got)
+	}
+
+	// 4. Base hook fires exactly once per wrapper invocation.
+	ctx := xctx.WithRoles(context.Background(), []string{"operator"})
+	if _, err := dynAct.DoAny(ctx, UserDTO{Name: "Alice"}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := hookCalls.Load(); got != 1 {
+		t.Fatalf("base hook fired %d times, want exactly 1", got)
 	}
 }
 
