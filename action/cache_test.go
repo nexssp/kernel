@@ -209,7 +209,7 @@ func TestCache_Singleflight_SingleMissNotification(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(concurrentCallers)
 
-	// 1. Uruchom pierwszego callera (lidera flightu)
+	// 1. Launch the first caller (the flight leader)
 	go func() {
 		defer wg.Done()
 		res, err := act.Do(context.Background(), "shared_key")
@@ -218,9 +218,9 @@ func TestCache_Singleflight_SingleMissNotification(t *testing.T) {
 		}
 	}()
 
-	<-started // Czekamy aż lider zablokuje się wewnątrz handlera
+	<-started // Wait until the leader blocks inside the handler
 
-	// 2. Uruchom 9 współbieżnych callerów, które uderzą w trwający flight
+	// 2. Launch 9 concurrent callers that hit the in-flight request
 	for range concurrentCallers - 1 {
 		go func() {
 			defer wg.Done()
@@ -231,10 +231,10 @@ func TestCache_Singleflight_SingleMissNotification(t *testing.T) {
 		}()
 	}
 
-	// Dajemy wątkom wystartować i zablokować się na trwającym flighcie
+	// Give the goroutines time to start and block on the in-flight request
 	time.Sleep(20 * time.Millisecond)
 
-	// 3. Zwalniamy blokadę handlera – flight kończy się dla wszystkich
+	// Hard business invariants:
 	close(block)
 	wg.Wait()
 

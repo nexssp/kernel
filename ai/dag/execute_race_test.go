@@ -20,7 +20,7 @@ func TestDAG_FailedLayerWithDetachedReader(t *testing.T) {
 		captured = n.Input
 		wg.Go(func() {
 			time.Sleep(30 * time.Millisecond)
-			_, _ = captured.Get("seed") // czyta mapę, którą handleLayerError może zamutować
+			_, _ = captured.Get("seed") // reads the map that handleLayerError may mutate
 		})
 		return "ok", nil
 	}).Build()

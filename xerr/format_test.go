@@ -110,9 +110,9 @@ func TestTrimPath_Fallback(t *testing.T) {
 	}
 }
 
-// TestTrimPath_Windows — odpalać tylko na GOOS=windows w CI.
-// filepath.ToSlash na Linuxie nie zamienia "\" na "/", więc test
-// musiałby być build-tagowany. Zostawiam jako dokumentację.
+// TestTrimPath_Windows — run only on GOOS=windows in CI.
+// filepath.ToSlash on Linux doesn't turn "\" into "/", so this test
+// would need a build tag. Left here as documentation.
 //
 //	func TestTrimPath_Windows(t *testing.T) {
 //	    in := `C:\Users\dev\proj\nexss\kernel\xerr\format.go`

@@ -214,8 +214,8 @@ func SmartResilience[Req, Res any](name string) Middleware[Req, Res] {
 	retry := RetryWithPredicateMiddleware[Req, Res](3, backoff, predicate)
 
 	return func(next Fn[Req, Res]) Fn[Req, Res] {
-		// Kolejność ma znaczenie: Retry wewnątrz Circuit Breakera
-		// cb(retry(next)) -> błędy z retry uderzają w CB.
+		// Order matters: Retry sits inside the Circuit Breaker here.
+		// cb(retry(next)) -> errors from retry hit the CB.
 		return cb(retry(next, nil))
 	}
 }
