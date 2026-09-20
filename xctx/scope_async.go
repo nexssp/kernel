@@ -23,7 +23,12 @@ func CloneForAsync(ctx context.Context) context.Context {
 	traceEvents := append([]string(nil), s.TraceEvents...)
 	s.traceMu.Unlock()
 
+	// Seed a fresh generation so AddTrace writes to the clone, not the
+	// (possibly recycled) parent scope.
+	gen := globalGeneration.Add(1)
+
 	clone := &RequestScope{
+		generation:      gen,
 		RequestID:       s.RequestID,
 		ExecutionID:     s.ExecutionID,
 		RootExecutionID: s.RootExecutionID,
@@ -47,5 +52,6 @@ func CloneForAsync(ctx context.Context) context.Context {
 		clone.Features = append([]string(nil), s.Features...)
 	}
 
-	return context.WithValue(context.WithValue(context.WithoutCancel(ctx), scopeKeyT{}, clone), scopeGenKeyT{}, s.generation)
+	asyncCtx := context.WithValue(context.WithoutCancel(ctx), scopeKeyT{}, clone)
+	return context.WithValue(asyncCtx, scopeGenKeyT{}, gen)
 }

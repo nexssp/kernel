@@ -35,3 +35,31 @@ func TestCloneForAsync(t *testing.T) {
 		t.Fatalf("expected cloned scope to retain UserID, got %q", got)
 	}
 }
+
+func TestCloneForAsync_AddTraceWorks(t *testing.T) {
+	t.Parallel()
+
+	ctx, parentScope, release := xctx.NewScope(context.Background())
+	defer release()
+
+	asyncCtx := xctx.CloneForAsync(ctx)
+	asyncScope := xctx.ScopeFrom(asyncCtx)
+	if asyncScope == nil {
+		t.Fatal("CloneForAsync did not install a scope")
+	}
+
+	xctx.AddTrace(asyncCtx, "bg-1")
+	xctx.AddTrace(asyncCtx, "bg-2")
+
+	if got := len(asyncScope.TraceEvents); got != 2 {
+		t.Fatalf("AddTrace on clone dropped events: got %d, want 2", got)
+	}
+	if asyncScope.TraceEvents[0] != "bg-1" || asyncScope.TraceEvents[1] != "bg-2" {
+		t.Fatalf("trace order/content wrong: %v", asyncScope.TraceEvents)
+	}
+
+	// Writes must not leak back into the parent scope.
+	if got := len(parentScope.TraceEvents); got != 0 {
+		t.Fatalf("AddTrace on clone leaked into parent: got %d", got)
+	}
+}
