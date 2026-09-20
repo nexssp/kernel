@@ -197,7 +197,7 @@ func (b *Builder[Req, Res]) RetryAll(
 // SmartResilience automatically applies intelligent backoff and circuit breaking
 // based entirely on the xerr.Kind of the returned error.
 // It delegates to the universal RetryIf middleware to ensure 100% hook/telemetry fidelity.
-func SmartResilience[Req, Res any](name string) Middleware[Req, Res] {
+func SmartResilience[Req, Res any](name string) DispatcherMiddleware[Req, Res] {
 	cb := Adaptive[Req, Res](name, AdaptiveConfig{
 		FailureThreshold: 5,
 		ResetTimeout:     10 * time.Second,
@@ -213,13 +213,15 @@ func SmartResilience[Req, Res any](name string) Middleware[Req, Res] {
 
 	retry := RetryWithPredicateMiddleware[Req, Res](3, backoff, predicate)
 
-	return func(next Fn[Req, Res]) Fn[Req, Res] {
-		// Order matters: Retry sits inside the Circuit Breaker here.
-		// cb(retry(next)) -> errors from retry hit the CB.
-		return cb(retry(next, nil))
+	return func(next Fn[Req, Res], hooks HookDispatcher[Req, Res]) Fn[Req, Res] {
+		// Order matters: Retry inside Circuit Breaker.
+		// cb(retry(next, hooks)) -> retry failures hit the CB,
+		// and the retry middleware gets the real dispatcher so OnRetry,
+		// observe.Hook(sink), Instrument, etc. all fire.
+		return cb(retry(next, hooks))
 	}
 }
 
 func (b *Builder[Req, Res]) InferredResilient() *Builder[Req, Res] {
-	return b.Use(SmartResilience[Req, Res](b.meta.Name))
+	return b.UseWithDispatcher(SmartResilience[Req, Res](b.meta.Name))
 }

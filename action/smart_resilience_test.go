@@ -50,3 +50,30 @@ func TestSmartResilience_NoRetryOnBadRequest(t *testing.T) {
 		t.Fatalf("expected exactly 1 attempt, got %d", callCount.Load())
 	}
 }
+
+func TestSmartResilience_ForwardsRetryHooks(t *testing.T) {
+	t.Parallel()
+
+	var attempts atomic.Int32
+	var retryHookCalls atomic.Int32
+
+	act := action.New("smart.retry.hooks", func(_ context.Context, _ string) (string, error) {
+		if attempts.Add(1) < 3 {
+			return "", xerr.Unavailable("transient")
+		}
+		return "ok", nil
+	}).
+		InferredResilient().
+		HookRetry(func(_ context.Context, _ string, _ int, _ error, _ *action.Meta) {
+			retryHookCalls.Add(1)
+		}).
+		Build()
+
+	res, err := act.Do(context.Background(), "req")
+	if err != nil || res != "ok" {
+		t.Fatalf("res=%q err=%v", res, err)
+	}
+	if got := retryHookCalls.Load(); got != 2 {
+		t.Fatalf("OnRetry hook fired %d times, want 2 (regression: SmartResilience dropped the dispatcher)", got)
+	}
+}
