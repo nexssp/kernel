@@ -132,3 +132,27 @@ func BenchmarkScopeReads(b *testing.B) {
 		_ = xctx.TraceIDFrom(ctx)
 	}
 }
+
+func TestRolesFrom_MissingScopeReturnsNil(t *testing.T) {
+	t.Parallel()
+	if got := xctx.RolesFrom(context.Background()); got != nil {
+		t.Fatalf("RolesFrom on scope-less ctx = %v, want nil", got)
+	}
+}
+
+func TestRolesFrom_IsSnapshot(t *testing.T) {
+	t.Parallel()
+	ctx, scope, cleanup := xctx.NewScope(context.Background())
+	defer cleanup()
+	ctx = xctx.WithRoles(ctx, []string{"admin", "auditor"})
+
+	view := xctx.RolesFrom(ctx)
+	view[0] = "hacker"
+
+	if scope.Roles[0] != "admin" {
+		t.Fatal("RolesFrom leaked a mutable view into the scope")
+	}
+	if xctx.RolesFrom(ctx)[0] != "admin" {
+		t.Fatal("RolesFrom returned mutated storage")
+	}
+}

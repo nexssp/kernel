@@ -8,6 +8,9 @@ import "context"
 // best-effort audit) so that canceling the parent does not abort the
 // detached work and the detached work does not race the parent's pooled
 // scope.
+//
+// The returned context carries a scope with a fresh generation, so
+// AddTrace on the clone writes to the clone, not to the parent.
 func CloneForAsync(ctx context.Context) context.Context {
 	if ctx == nil {
 		return context.Background()
@@ -23,12 +26,9 @@ func CloneForAsync(ctx context.Context) context.Context {
 	traceEvents := append([]string(nil), s.TraceEvents...)
 	s.traceMu.Unlock()
 
-	// Seed a fresh generation so AddTrace writes to the clone, not the
-	// (possibly recycled) parent scope.
 	gen := globalGeneration.Add(1)
 
 	clone := &RequestScope{
-		generation:      gen,
 		RequestID:       s.RequestID,
 		ExecutionID:     s.ExecutionID,
 		RootExecutionID: s.RootExecutionID,
@@ -41,6 +41,7 @@ func CloneForAsync(ctx context.Context) context.Context {
 		ClientIP:        s.ClientIP,
 		TraceEvents:     traceEvents,
 	}
+	clone.generation.Store(gen)
 
 	if s.Roles != nil {
 		clone.Roles = append([]string(nil), s.Roles...)

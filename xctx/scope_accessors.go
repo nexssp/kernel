@@ -1,6 +1,9 @@
 package xctx
 
-import "context"
+import (
+	"context"
+	"slices"
+)
 
 // ── Setters ──────────────────────────────────────────────────────────────────
 //
@@ -186,20 +189,6 @@ func ClientIPFrom(ctx context.Context) string {
 	return ""
 }
 
-func FeaturesFrom(ctx context.Context) []string {
-	if s := ScopeFrom(ctx); s != nil {
-		return s.Features
-	}
-	return nil
-}
-
-func PermissionsFrom(ctx context.Context) []string {
-	if s := ScopeFrom(ctx); s != nil {
-		return s.Permissions
-	}
-	return nil
-}
-
 // ── Bulk population ──────────────────────────────────────────────────────────
 
 // FromClaims populates a scope from a decoded JWT claim map. Recognized
@@ -243,6 +232,31 @@ func toStringSlice(v any) []string {
 			}
 		}
 		return s
+	}
+	return nil
+}
+
+// RolesFrom returns a defensive copy of the scope's roles. Mutating the
+// result has no effect on the scope.
+func RolesFrom(ctx context.Context) []string {
+	if s := ScopeFrom(ctx); s != nil {
+		return slices.Clone(s.Roles)
+	}
+	return nil
+}
+
+// FeaturesFrom returns a defensive copy of the scope's features.
+func FeaturesFrom(ctx context.Context) []string {
+	if s := ScopeFrom(ctx); s != nil {
+		return slices.Clone(s.Features)
+	}
+	return nil
+}
+
+// PermissionsFrom returns a defensive copy of the scope's permissions.
+func PermissionsFrom(ctx context.Context) []string {
+	if s := ScopeFrom(ctx); s != nil {
+		return slices.Clone(s.Permissions)
 	}
 	return nil
 }

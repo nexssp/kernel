@@ -12,9 +12,11 @@ const MaxTraceEvents = 128
 // Safe for concurrent use: it is the only method that mutates TraceEvents
 // while the request is in flight. Contention is limited to concurrent
 // PublishEvent failures on the same request — an error path, not a hot
-// path — so a plain mutex is the correct tool. A lock-free ring would
-// require either a 128-bit atomic (no stdlib support) or per-slot
-// allocations, both of which lose on the actual workload.
+// path — so a plain mutex is the correct tool.
+//
+// The generation check rejects writes to a scope that has already been
+// returned to the pool, so a goroutine holding a stale context cannot
+// corrupt a scope now serving a different request.
 func AddTrace(ctx context.Context, event string) {
 	s := ScopeFrom(ctx)
 	if s == nil {
@@ -22,7 +24,7 @@ func AddTrace(ctx context.Context, event string) {
 	}
 	gen, _ := ctx.Value(scopeGenKeyT{}).(uint64)
 	s.traceMu.Lock()
-	if s.generation == gen && gen != 0 {
+	if s.generation.Load() == gen && gen != 0 {
 		if len(s.TraceEvents) >= MaxTraceEvents {
 			copy(s.TraceEvents, s.TraceEvents[1:])
 			s.TraceEvents = s.TraceEvents[:MaxTraceEvents-1]

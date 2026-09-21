@@ -13,11 +13,9 @@ type (
 
 var globalGeneration atomic.Uint64
 
-// RequestScope carries per-request metadata. Mutators run on the request's
-// owning goroutine; AddTrace is the sole exception and is guarded by
-// traceMu. See scope_trace.go.
+// RequestScope carries per-request metadata.
 type RequestScope struct {
-	generation      uint64
+	generation      atomic.Uint64
 	RequestID       string
 	ExecutionID     string
 	RootExecutionID string
@@ -40,7 +38,8 @@ type RequestScope struct {
 }
 
 // Reset clears every field, retaining slice capacity up to the trace
-// ring size. Called by the pool before returning a scope for reuse.
+// ring size. Called by the pool before returning a scope for reuse. It
+// does not touch generation; that is the pool's responsibility.
 func (s *RequestScope) Reset() {
 	s.RequestID = ""
 	s.ExecutionID = ""
@@ -75,13 +74,13 @@ func NewScope(parent context.Context) (context.Context, *RequestScope, func()) {
 		s = &RequestScope{}
 	}
 	gen := globalGeneration.Add(1)
-	s.generation = gen
+	s.generation.Store(gen)
 	ctx := context.WithValue(parent, scopeKeyT{}, s)
 	ctx = context.WithValue(ctx, scopeGenKeyT{}, gen)
 	var once sync.Once
 	return ctx, s, func() {
 		once.Do(func() {
-			s.generation = 0
+			s.generation.Store(0)
 			s.Reset()
 			scopePool.Put(s)
 		})
@@ -98,14 +97,24 @@ func ScopeFrom(ctx context.Context) *RequestScope {
 }
 
 // WithScope binds s to ctx directly. Prefer NewScope for pooled scopes.
+//
+// Safe for concurrent use on a fresh (never-bound) scope: two goroutines
+// racing to bind the same fresh scope will agree on a single generation.
+// Once a scope is bound, callers must not bind it to a second context
+// concurrently — that is a programming error, not a race the runtime
+// can detect.
 func WithScope(ctx context.Context, s *RequestScope) context.Context {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	gen := s.generation
+	gen := s.generation.Load()
 	if gen == 0 {
-		gen = globalGeneration.Add(1)
-		s.generation = gen
+		candidate := globalGeneration.Add(1)
+		if s.generation.CompareAndSwap(0, candidate) {
+			gen = candidate
+		} else {
+			gen = s.generation.Load()
+		}
 	}
 	ctx = context.WithValue(ctx, scopeKeyT{}, s)
 	return context.WithValue(ctx, scopeGenKeyT{}, gen)
@@ -125,7 +134,7 @@ func ensureScope(ctx context.Context) (context.Context, *RequestScope) {
 	}
 	s = &RequestScope{}
 	gen := globalGeneration.Add(1)
-	s.generation = gen
+	s.generation.Store(gen)
 	ctx = context.WithValue(ctx, scopeKeyT{}, s)
 	ctx = context.WithValue(ctx, scopeGenKeyT{}, gen)
 	return ctx, s
