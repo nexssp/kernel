@@ -67,7 +67,11 @@ func main() {
 		}
 		return "payment settled", nil
 	}).Retry(1, action.ConstantBackoff(10*time.Millisecond)).AnyHook(hook).Build()
-	defer payment.Close()
+
+	if _, err := payment.Do(ctx, 99.95); err != nil {
+		slog.Debug("payment result", "error", err)
+	}
+
 	runBasicActionScenarios(ctx, hook)
 	runConcurrencyScenarios(ctx, hook)
 
@@ -123,21 +127,6 @@ func fatal(operation string, err error) {
 }
 
 func runBasicActionScenarios(ctx context.Context, hook action.AnyHook) {
-	var attempts atomic.Int32
-	payment := action.New("payment.process", func(_ context.Context, amount float64) (string, error) {
-		if amount <= 0 {
-			return "", xerr.Validation("amount must be positive")
-		}
-		if attempts.Add(1) == 1 {
-			return "", xerr.Unavailable("temporary payment gateway timeout")
-		}
-		return "payment settled", nil
-	}).Retry(1, action.ConstantBackoff(10*time.Millisecond)).AnyHook(hook).Build()
-	defer payment.Close()
-	if _, err := payment.Do(ctx, 99.95); err != nil {
-		slog.Debug("payment result", "error", err)
-	}
-
 	failed := action.New("payment.validate", func(context.Context, string) (string, error) {
 		return "", xerr.Validation("card number is invalid")
 	}).AnyHook(hook).Build()
@@ -148,7 +137,6 @@ func runBasicActionScenarios(ctx context.Context, hook action.AnyHook) {
 	findUser := action.New("user.find", func(_ context.Context, id string) (string, error) {
 		return "User_" + id, nil
 	}).Cache(time.Minute, func(id string) string { return id }).AnyHook(hook).Build()
-	defer findUser.Close()
 	for _, id := range []string{"alice", "alice", "bob"} {
 		if _, err := findUser.Do(ctx, id); err != nil {
 			slog.Debug("findUser result", "error", err)
