@@ -22,13 +22,9 @@ type Builder[Req, Res any] struct {
 	anyHooks    []AnyHook
 	bindings    []Binding
 	history     *History[Req, Res]
-	cleanups    []func()
-	resources   *actionResources
 }
 
 // ToBuilder creates a mutable configuration state from an existing action.
-// The returned builder shares the exact same resource lifecycle (cleanups)
-// to ensure idempotent resource shutdown.
 func (b *BuiltAction[Req, Res]) ToBuilder() *Builder[Req, Res] {
 	if b == nil {
 		return nil
@@ -40,13 +36,12 @@ func (b *BuiltAction[Req, Res]) ToBuilder() *Builder[Req, Res] {
 	}
 
 	return &Builder[Req, Res]{
-		meta:      metaCopy,
-		exec:      b.exec,
-		bindings:  append([]Binding(nil), b.bindings...),
-		hooks:     append([]Hook[Req, Res](nil), b.hooks...),
-		anyHooks:  append([]AnyHook(nil), b.anyHooksSnapshot()...),
-		resources: b.resources,
-		history:   b.history,
+		meta:     metaCopy,
+		exec:     b.exec,
+		bindings: append([]Binding(nil), b.bindings...),
+		hooks:    append([]Hook[Req, Res](nil), b.hooks...),
+		anyHooks: append([]AnyHook(nil), b.anyHooksSnapshot()...),
+		history:  b.history,
 	}
 }
 
@@ -129,14 +124,19 @@ func (b *Builder[Req, Res]) Route(bs ...Binding) *Builder[Req, Res] {
 // ── Idempotency ───────────────────────────────────────────────────────────────
 
 func (b *Builder[Req, Res]) Idempotent() *Builder[Req, Res] {
-	b.meta.Idempotency = IdempotencyConfig{Enabled: true}
-	return b
+	return b.IdempotentWithConfig(IdempotencyConfig{Enabled: true})
 }
 
 func (b *Builder[Req, Res]) IdempotentWithConfig(cfg IdempotencyConfig) *Builder[Req, Res] {
 	cfg.Enabled = true
 	b.meta.Idempotency = cfg
-	return b
+
+	store := cfg.Store
+	if store == nil {
+		store = NewMemoryIdempotencyStore(cfg.TTL)
+	}
+
+	return b.Use(IdempotencyMiddleware[Req, Res](store, cfg))
 }
 
 func (b *Builder[Req, Res]) SuccessStatus(code int) *Builder[Req, Res] {
@@ -198,16 +198,10 @@ func (b *Builder[Req, Res]) Build() *BuiltAction[Req, Res] {
 	metaCopy.RequiredPermissions = slices.Clone(b.meta.RequiredPermissions)
 	metaCopy.RequiredFeatures = slices.Clone(b.meta.RequiredFeatures)
 
-	resources := b.resources
-	if resources == nil {
-		resources = newActionResources(b.cleanups)
-	}
-
 	act := &BuiltAction[Req, Res]{
-		meta:      &metaCopy,
-		bindings:  append([]Binding(nil), b.bindings...),
-		history:   b.history,
-		resources: resources,
+		meta:     &metaCopy,
+		bindings: append([]Binding(nil), b.bindings...),
+		history:  b.history,
 	}
 
 	reqType := reflect.TypeFor[Req]()

@@ -11,14 +11,11 @@ import (
 
 // eventually polls condition until it returns true or timeout elapses.
 //
-// IMPORTANT: timeout should be generous (seconds, not hundreds of
-// milliseconds) for anything that depends on a background goroutine (like the
-// cache janitor) being scheduled. This helper already returns as soon as the
-// condition is true, so a large timeout costs nothing on a healthy machine —
-// it only matters when the test process is under heavy scheduler contention
-// from other parallel tests (goroutine-storm tests elsewhere in this
-// package can easily starve the janitor tick for tens or hundreds of
-// milliseconds).
+// timeout should be generous (seconds, not hundreds of milliseconds) for
+// anything that depends on the scheduler running another goroutine. This
+// helper returns as soon as the condition is true, so a large timeout costs
+// nothing on a healthy machine — it only matters when the test process is
+// under heavy scheduler contention from other parallel tests in this package.
 func eventually(t *testing.T, timeout time.Duration, condition func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
@@ -33,10 +30,9 @@ func eventually(t *testing.T, timeout time.Duration, condition func() bool) {
 
 func TestDefaultMemoryKV_BasicCRUD(t *testing.T) {
 	t.Parallel()
-	ctx := t.Context() // ✅ Modern Go 1.24+ test-bound context
+	ctx := t.Context()
 
 	cache := newDefaultMemoryKV[string](5 * time.Minute)
-	t.Cleanup(cache.Stop) // ✅ Idiomatic cleanup
 
 	// 1. Get non-existent key
 	val, found, err := cache.Get(ctx, "missing_key")
@@ -78,7 +74,6 @@ func TestDefaultMemoryKV_ContextCancellation(t *testing.T) {
 	t.Parallel()
 
 	cache := newDefaultMemoryKV[string](time.Hour)
-	t.Cleanup(cache.Stop)
 
 	// Create a pre-canceled context
 	ctx, cancel := context.WithCancel(t.Context())
@@ -103,18 +98,11 @@ func TestDefaultMemoryKV_ContextCancellation(t *testing.T) {
 	}
 }
 
-// TestDefaultMemoryKV_Expiration_Deterministic previously polled for up to
-// 200ms. Under contention from other goroutine-heavy tests in this package,
-// both the janitor goroutine and this test's own polling goroutine can be
-// starved past that window. 200ms was a timing assumption dressed up as a
-// correctness check; 3s is still fast on the happy path (eventually returns
-// immediately once true) and removes the false failures.
 func TestDefaultMemoryKV_Expiration_Deterministic(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
 
 	cache := newDefaultMemoryKV[string](20 * time.Millisecond)
-	t.Cleanup(cache.Stop)
 
 	_ = cache.Set(ctx, "expiring_key", "payload", 0)
 
@@ -146,7 +134,6 @@ func TestDefaultMemoryKV_CustomTTLExpiration(t *testing.T) {
 
 	// Default TTL is long (1 hour), but we override it per-key
 	cache := newDefaultMemoryKV[string](time.Hour)
-	t.Cleanup(cache.Stop)
 
 	_ = cache.Set(ctx, "short_lived", "data", 15*time.Millisecond)
 
@@ -162,7 +149,6 @@ func TestDefaultMemoryKV_ZeroTTLExpiration(t *testing.T) {
 
 	// Cache with no default TTL (0)
 	cache := newDefaultMemoryKV[string](0)
-	t.Cleanup(cache.Stop)
 
 	_ = cache.Set(ctx, "permanent", "persists", 0)
 
@@ -181,32 +167,23 @@ func TestDefaultMemoryKV_ZeroTTLExpiration(t *testing.T) {
 	}
 }
 
-func TestDefaultMemoryKV_ActiveJanitorSweep(t *testing.T) {
+func TestDefaultMemoryKV_CapacityBounded(t *testing.T) {
 	t.Parallel()
-	cache := newDefaultMemoryKV[string](time.Hour)
-	t.Cleanup(cache.Stop)
 
-	// Artificially inject expired keys into the map without calling Get()
-	cache.mu.Lock()
-	cache.data["stale_1"] = cacheItem[string]{val: "old_1", exp: time.Now().Add(-10 * time.Minute)}
-	cache.data["stale_2"] = cacheItem[string]{val: "old_2", exp: time.Now().Add(-1 * time.Minute)}
-	cache.data["fresh_3"] = cacheItem[string]{val: "new_3", exp: time.Now().Add(10 * time.Minute)}
-	cache.mu.Unlock()
+	cache := newDefaultMemoryKV[int](time.Hour)
+	cache.maxCapacity = 16
 
-	// Trigger active background sweep directly
-	cache.evictExpired()
+	ctx := t.Context()
+	for i := range 100 {
+		_ = cache.Set(ctx, fmt.Sprintf("k%d", i), i, 0)
+	}
 
 	cache.mu.RLock()
-	_, has1 := cache.data["stale_1"]
-	_, has2 := cache.data["stale_2"]
-	_, has3 := cache.data["fresh_3"]
+	size := len(cache.data)
 	cache.mu.RUnlock()
 
-	if has1 || has2 {
-		t.Error("janitor failed to sweep expired items")
-	}
-	if !has3 {
-		t.Error("janitor incorrectly deleted fresh item")
+	if size > cache.maxCapacity {
+		t.Fatalf("map size %d exceeds capacity %d", size, cache.maxCapacity)
 	}
 }
 
@@ -215,7 +192,6 @@ func TestDefaultMemoryKV_PhantomDeletePrevention(t *testing.T) {
 	ctx := t.Context()
 
 	cache := newDefaultMemoryKV[string](time.Hour)
-	t.Cleanup(cache.Stop)
 
 	// Setup: Inject an already-expired item
 	staleExp := time.Now().Add(-time.Hour)
@@ -252,7 +228,6 @@ func TestDefaultMemoryKV_HighConcurrency(t *testing.T) {
 	ctx := t.Context()
 
 	cache := newDefaultMemoryKV[int](50 * time.Millisecond)
-	t.Cleanup(cache.Stop)
 
 	const workers = 64
 	const iterations = 500
@@ -281,36 +256,4 @@ func TestDefaultMemoryKV_HighConcurrency(t *testing.T) {
 
 	close(startBarrier)
 	wg.Wait()
-
-	// Clean sweep post-concurrency to verify map memory is coherent
-	cache.evictExpired()
-}
-
-// TestDefaultMemoryKV_ShortTTLJanitorEvictsWithoutRead previously used a
-// 500ms deadline for a background-only eviction (no Get() call to trigger
-// lazy eviction — this must come from the janitor goroutine alone). Same
-// contention concern as TestDefaultMemoryKV_Expiration_Deterministic above:
-// widened to 3s.
-func TestDefaultMemoryKV_ShortTTLJanitorEvictsWithoutRead(t *testing.T) {
-	t.Parallel()
-	cache := newDefaultMemoryKV[string](20 * time.Millisecond)
-	t.Cleanup(cache.Stop)
-	if err := cache.Set(context.Background(), "stale", "value", 20*time.Millisecond); err != nil {
-		t.Fatal(err)
-	}
-	eventually(t, 3*time.Second, func() bool {
-		cache.mu.RLock()
-		_, ok := cache.data["stale"]
-		cache.mu.RUnlock()
-		return !ok
-	})
-}
-
-func TestBuiltAction_CloseIsIdempotent(t *testing.T) {
-	t.Parallel()
-	act := New("close.cache", func(context.Context, string) (string, error) {
-		return "ok", nil
-	}).Cache(time.Hour, func(req string) string { return req }).Build()
-	act.Close()
-	act.Close()
 }

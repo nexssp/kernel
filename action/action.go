@@ -20,13 +20,6 @@ type execState struct {
 	fromCache bool
 }
 
-// BuiltAction is a fully-configured action. Build it once, reuse it many
-// times. It is safe for concurrent .Do() calls.
-//
-// Hooks may be added via AddAnyHook. Registry construction applies
-// library hooks only once per (action, library) pair, tracked by
-// appliedLibs. This makes it safe for the same action to appear in
-// several registries without duplicating hooks.
 type BuiltAction[Req, Res any] struct {
 	meta *Meta
 	exec Fn[Req, Res]
@@ -34,25 +27,21 @@ type BuiltAction[Req, Res any] struct {
 	hooks    []Hook[Req, Res]
 	anyHooks atomic.Pointer[anyHookSet]
 
-	bindings  []Binding
-	history   *History[Req, Res]
-	resources *actionResources
+	bindings []Binding
+	history  *History[Req, Res]
 }
 
 type anyHookSet struct {
 	hooks []AnyHook
 }
 
-func (a *BuiltAction[Req, Res]) Close() {
-	if a == nil || a.resources == nil {
-		return
-	}
-	a.resources.Close()
-}
-
-// CloneWithHooks returns an independent action whose metadata, executor,
-// bindings, and existing hooks are copied. The new hooks are appended.
-// Preserving generic Req/Res types ensures zero allocations on the hot path.
+// CloneWithHooks returns a fully independent action: metadata, executor,
+// bindings, and existing hooks are copied, and the new hooks are appended.
+//
+// This is the type-erased clone primitive: it is what registries and
+// plugin systems use, because they hold AnyAction and cannot call the
+// generic ToBuilder. Preserving generic Req/Res types keeps the hot path
+// zero-allocation.
 func (a *BuiltAction[Req, Res]) CloneWithHooks(hooks ...AnyHook) AnyAction {
 	if a == nil {
 		return nil
