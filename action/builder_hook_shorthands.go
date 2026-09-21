@@ -44,11 +44,38 @@ func (b *Builder[Req, Res]) HookExecuted(fn func(ctx context.Context, req Req, r
 	})
 }
 
+// HookExecutedEvent runs fn after a successful action completion, except when
+// the result is served directly from Cache. Idempotency replays are action
+// completions and therefore also fire this event. Use it when the observer
+// needs no request, response, context, or metadata.
+func (b *Builder[Req, Res]) HookExecutedEvent(fn func()) *Builder[Req, Res] {
+	if fn == nil {
+		return b
+	}
+	return b.Hook(Hook[Req, Res]{
+		OnExecuted: func(_ context.Context, _ Req, _ Res, err error, _ *Meta) {
+			if err == nil {
+				fn()
+			}
+		},
+	})
+}
+
 // HookCancel runs fn when the request context is canceled
 // (client disconnect, upstream timeout, explicit cancel).
 // Use for cleanup, releasing reserved resources, cancellation metrics.
 func (b *Builder[Req, Res]) HookCancel(fn func(ctx context.Context, req Req, meta *Meta)) *Builder[Req, Res] {
 	return b.Hook(Hook[Req, Res]{OnCancel: fn})
+}
+
+// HookCancelEvent runs fn when the request is canceled.
+func (b *Builder[Req, Res]) HookCancelEvent(fn func()) *Builder[Req, Res] {
+	if fn == nil {
+		return b
+	}
+	return b.Hook(Hook[Req, Res]{
+		OnCancel: func(_ context.Context, _ Req, _ *Meta) { fn() },
+	})
 }
 
 // HookRetry runs fn before each retry attempt made by the Retry middleware.
@@ -58,6 +85,18 @@ func (b *Builder[Req, Res]) HookRetry(fn func(ctx context.Context, req Req, atte
 	return b.Hook(Hook[Req, Res]{OnRetry: fn})
 }
 
+// HookRetryEvent runs fn before each retry attempt.
+func (b *Builder[Req, Res]) HookRetryEvent(fn func(attempt int, err error)) *Builder[Req, Res] {
+	if fn == nil {
+		return b
+	}
+	return b.Hook(Hook[Req, Res]{
+		OnRetry: func(_ context.Context, _ Req, attempt int, err error, _ *Meta) {
+			fn(attempt, err)
+		},
+	})
+}
+
 // HookCacheHit runs fn when the CacheMiddleware serves a response from cache.
 // The handler is NOT called in this case.
 // Use for cache-hit metrics, hit-rate logging.
@@ -65,11 +104,61 @@ func (b *Builder[Req, Res]) HookCacheHit(fn func(ctx context.Context, req Req, r
 	return b.Hook(Hook[Req, Res]{OnCacheHit: fn})
 }
 
+// HookCacheHitEvent runs fn when the cache serves a response.
+func (b *Builder[Req, Res]) HookCacheHitEvent(fn func()) *Builder[Req, Res] {
+	if fn == nil {
+		return b
+	}
+	return b.Hook(Hook[Req, Res]{
+		OnCacheHit: func(_ context.Context, _ Req, _ Res, _ *Meta) { fn() },
+	})
+}
+
 // HookCacheMiss runs fn when the CacheMiddleware finds no cached result.
 // The handler will be called immediately after.
 // Use for cache-miss metrics, warming triggers.
 func (b *Builder[Req, Res]) HookCacheMiss(fn func(ctx context.Context, req Req, meta *Meta)) *Builder[Req, Res] {
 	return b.Hook(Hook[Req, Res]{OnCacheMiss: fn})
+}
+
+// HookCacheMissEvent runs fn when the cache has no response for a request.
+func (b *Builder[Req, Res]) HookCacheMissEvent(fn func()) *Builder[Req, Res] {
+	if fn == nil {
+		return b
+	}
+	return b.Hook(Hook[Req, Res]{
+		OnCacheMiss: func(_ context.Context, _ Req, _ *Meta) { fn() },
+	})
+}
+
+// HookErrorEvent runs fn when execution returns an error.
+func (b *Builder[Req, Res]) HookErrorEvent(fn func(error)) *Builder[Req, Res] {
+	if fn == nil {
+		return b
+	}
+	return b.Hook(Hook[Req, Res]{
+		OnError: func(_ context.Context, _ Req, err error, _ *Meta) { fn(err) },
+	})
+}
+
+// HookCoalescedEvent runs fn when this call joins an in-flight coalesced call.
+func (b *Builder[Req, Res]) HookCoalescedEvent(fn func()) *Builder[Req, Res] {
+	if fn == nil {
+		return b
+	}
+	return b.Hook(Hook[Req, Res]{
+		OnCoalesced: func(_ context.Context, _ Req, _ *Meta) { fn() },
+	})
+}
+
+// HookDeduplicatedEvent runs fn when a duplicate call is suppressed.
+func (b *Builder[Req, Res]) HookDeduplicatedEvent(fn func()) *Builder[Req, Res] {
+	if fn == nil {
+		return b
+	}
+	return b.Hook(Hook[Req, Res]{
+		OnDeduplicated: func(_ context.Context, _ Req, _ *Meta) { fn() },
+	})
 }
 
 // HookBuild runs fn once per action at build time. Must be pure and O(1):
