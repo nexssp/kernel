@@ -32,12 +32,10 @@ func TestHistory(t *testing.T) {
 func TestRecordHistoryAndWithHistory_ShareInstance(t *testing.T) {
 	t.Parallel()
 
-	// WithHistory — zwrócony handle
 	_, histA := action.New("hist.a", func(context.Context, int) (int, error) {
 		return 1, nil
 	}).WithHistory(5)
 
-	// RecordHistory — uchwyt z BuiltAction
 	actB := action.New("hist.b", func(context.Context, int) (int, error) {
 		return 2, nil
 	}).RecordHistory(5).Build()

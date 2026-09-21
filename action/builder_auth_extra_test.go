@@ -5,7 +5,8 @@ import (
 	"testing"
 
 	"github.com/nexssp/kernel/action"
-	"github.com/nexssp/kernel/xctx"
+	"github.com/nexssp/kernel/xerr"
+	"github.com/nexssp/kernel/xtest/ktest"
 )
 
 func TestRequireAuth(t *testing.T) {
@@ -14,20 +15,12 @@ func TestRequireAuth(t *testing.T) {
 		return "ok", nil
 	}).RequireAuth().Build()
 
-	// Without user ID → should fail
 	_, err := act.Do(context.Background(), struct{}{})
-	if err == nil {
-		t.Fatal("expected unauthorized error, got nil")
-	}
+	ktest.RequireErrorKind(t, err, xerr.KindUnauthorized)
 
-	// With user ID → should pass
-	ctx := xctx.WithUserID(context.Background(), "user-123")
-	res, err := act.Do(ctx, struct{}{})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if res != "ok" {
-		t.Fatalf("expected 'ok', got %v", res)
+	res, err := act.Do(ktest.CtxWithUser(t, "user-123"), struct{}{})
+	if err != nil || res != "ok" {
+		t.Fatalf("expected 'ok', got res=%v, err=%v", res, err)
 	}
 }
 
@@ -38,17 +31,11 @@ func TestRequireTenant(t *testing.T) {
 	}).RequireTenant().Build()
 
 	_, err := act.Do(context.Background(), struct{}{})
-	if err == nil {
-		t.Fatal("expected unauthorized error, got nil")
-	}
+	ktest.RequireErrorKind(t, err, xerr.KindUnauthorized)
 
-	ctx := xctx.WithTenantID(context.Background(), "t-1")
-	res, err := act.Do(ctx, struct{}{})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if res != "ok" {
-		t.Fatalf("expected 'ok', got %v", res)
+	res, err := act.Do(ktest.CtxWithTenant(t, "t-1"), struct{}{})
+	if err != nil || res != "ok" {
+		t.Fatalf("expected 'ok', got res=%v, err=%v", res, err)
 	}
 }
 
@@ -58,20 +45,12 @@ func TestRequireAnyRole(t *testing.T) {
 		return "ok", nil
 	}).RequireAnyRole("admin", "moderator").Build()
 
-	// No role → fail
 	_, err := act.Do(context.Background(), struct{}{})
-	if err == nil {
-		t.Fatal("expected forbidden error, got nil")
-	}
+	ktest.RequireErrorKind(t, err, xerr.KindForbidden)
 
-	// Has matching role → pass
-	ctx := xctx.WithRoles(context.Background(), []string{"moderator"})
-	res, err := act.Do(ctx, struct{}{})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if res != "ok" {
-		t.Fatalf("expected 'ok', got %v", res)
+	res, err := act.Do(ktest.CtxWithRole(t, "moderator"), struct{}{})
+	if err != nil || res != "ok" {
+		t.Fatalf("expected 'ok', got res=%v, err=%v", res, err)
 	}
 }
 
@@ -82,20 +61,11 @@ func TestRequirePermission(t *testing.T) {
 	}).RequirePermission("write:orders").Build()
 
 	_, err := act.Do(context.Background(), struct{}{})
-	if err == nil {
-		t.Fatal("expected forbidden error, got nil")
-	}
+	ktest.RequireErrorKind(t, err, xerr.KindForbidden)
 
-	// FIX: Inject an empty Scope into the context first!
-	ctx := xctx.WithScope(context.Background(), &xctx.RequestScope{})
-
-	ctx = xctx.WithPermissions(ctx, []string{"write:orders"})
-	res, err := act.Do(ctx, struct{}{})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if res != "ok" {
-		t.Fatalf("expected 'ok', got %v", res)
+	res, err := act.Do(ktest.CtxWithPerm(t, "write:orders"), struct{}{})
+	if err != nil || res != "ok" {
+		t.Fatalf("expected 'ok', got res=%v, err=%v", res, err)
 	}
 }
 
@@ -105,19 +75,14 @@ func TestRequireAnyFeature(t *testing.T) {
 		return "ok", nil
 	}).RequireAnyFeature("beta", "premium").Build()
 
-	// No feature → fail
 	_, err := act.Do(context.Background(), struct{}{})
-	if err == nil {
-		t.Fatal("expected forbidden error, got nil")
-	}
+	ktest.RequireErrorKind(t, err, xerr.KindForbidden)
 
-	// One matching feature → pass
-	ctx := xctx.WithFeatures(context.Background(), []string{"beta"})
+	ctx, scope := ktest.Ctx(t)
+	scope.Features = []string{"beta"}
+
 	res, err := act.Do(ctx, struct{}{})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if res != "ok" {
-		t.Fatalf("expected 'ok', got %v", res)
+	if err != nil || res != "ok" {
+		t.Fatalf("expected 'ok', got res=%v, err=%v", res, err)
 	}
 }

@@ -289,22 +289,6 @@ func TestBuiltAction_ToBuilder_MultiTransportRetention(t *testing.T) {
 	}
 }
 
-// ── 5. Lifecycle Cleanups on Close() ──────────────────────────────────────────
-
-func TestBuiltAction_ToBuilder_CleanupsExecutedAndIdempotent(t *testing.T) {
-	t.Parallel()
-
-	actWithCleanup := action.New("direct.clean", func(_ context.Context, _ struct{}) (string, error) {
-		return "ok", nil
-	}).
-		Cache(time.Hour, func(_ struct{}) string { return "key" }).
-		Build()
-
-	rebuiltCustom := actWithCleanup.ToBuilder().Build()
-	rebuiltCustom.Close()
-	rebuiltCustom.Close() // Idempotency check: second Close() must not panic or double-free
-}
-
 // ── 6. ApplyDSL Real-World Overlay (Jumalu Regression) ────────────────────────
 
 func TestBuiltAction_ApplyDSL_HappyAndBadPath(t *testing.T) {

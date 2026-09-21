@@ -12,6 +12,8 @@ import (
 
 	"github.com/nexssp/kernel/action"
 	"github.com/nexssp/kernel/xerr"
+	"github.com/nexssp/kernel/xtest"
+	"github.com/nexssp/kernel/xtest/ktest"
 )
 
 type mockKVStore struct {
@@ -150,9 +152,7 @@ func TestCache_BackFill(t *testing.T) {
 		t.Fatalf("failed to pre-populate L2: %v", err)
 	}
 
-	act := action.New("cache.backfill", func(_ context.Context, _ string) (string, error) {
-		return "never_called", nil
-	}).
+	act := ktest.Returns[string, string]("cache.backfill", "never_called").
 		Cache(10*time.Minute, func(r string) string { return r }, l1, l2).
 		Build()
 
@@ -179,6 +179,7 @@ func TestCache_Singleflight_SingleMissNotification(t *testing.T) {
 
 	started := make(chan struct{})
 	block := make(chan struct{})
+	const concurrentCallers = 10
 
 	var handlerCalls atomic.Int32
 	var missCount atomic.Int32
@@ -205,7 +206,6 @@ func TestCache_Singleflight_SingleMissNotification(t *testing.T) {
 		}).
 		Build()
 
-	const concurrentCallers = 10
 	var wg sync.WaitGroup
 	wg.Add(concurrentCallers)
 
@@ -231,14 +231,14 @@ func TestCache_Singleflight_SingleMissNotification(t *testing.T) {
 		}()
 	}
 
-	// Give the goroutines time to start and block on the in-flight request
+	// The public hook reports coalescing only after the shared flight completes;
+	// allow waiters to reach singleflight before releasing the blocked leader.
 	time.Sleep(20 * time.Millisecond)
 
 	// Hard business invariants:
 	close(block)
 	wg.Wait()
 
-	// Twarde niezmienniki biznesowe:
 	if got := handlerCalls.Load(); got != 1 {
 		t.Fatalf("CRITICAL: handler executed %d times, expected exactly 1", got)
 	}
@@ -257,8 +257,14 @@ func TestCache_Singleflight_ContextCancellation(t *testing.T) {
 	started := make(chan struct{})
 	var startOnce sync.Once
 	block := make(chan struct{})
-	caller2Joined := make(chan struct{})
-	var caller2JoinedOnce sync.Once
+	caller2Reached := make(chan struct{})
+	var caller2ReachedOnce sync.Once
+	var gets atomic.Int32
+	store.onGet = func(_ string) {
+		if gets.Add(1) == 2 {
+			caller2ReachedOnce.Do(func() { close(caller2Reached) })
+		}
+	}
 
 	act := action.New("cache.concurrent_cancel", func(ctx context.Context, _ string) (string, error) {
 		startOnce.Do(func() {
@@ -272,13 +278,6 @@ func TestCache_Singleflight_ContextCancellation(t *testing.T) {
 		}
 	}).
 		Cache(10*time.Minute, func(r string) string { return r }, store).
-		Hook(action.Hook[string, string]{
-			OnCoalesced: func(_ context.Context, _ string, _ *action.Meta) {
-				caller2JoinedOnce.Do(func() {
-					close(caller2Joined)
-				})
-			},
-		}).
 		Build()
 
 	ctx1, cancel1 := context.WithCancel(context.Background())
@@ -301,12 +300,8 @@ func TestCache_Singleflight_ContextCancellation(t *testing.T) {
 		res2, err2 = act.Do(ctx2, "shared_key")
 	}()
 
-	// Deterministic synchronization: wait until caller 2 is confirmed coalesced on the flight
-	select {
-	case <-caller2Joined:
-	case <-time.After(200 * time.Millisecond):
-		// Fallback for fast execution
-	}
+	// Deterministic synchronization: caller 2 must reach the cache miss path.
+	xtest.WaitForSignal(t, caller2Reached, 200*time.Millisecond)
 
 	cancel1() // Cancel caller 1; caller 2 must remain unaffected
 

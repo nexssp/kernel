@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/nexssp/kernel/action"
+	"github.com/nexssp/kernel/xtest/ktest"
 )
 
 // =============================================================================
@@ -16,8 +17,8 @@ import (
 func TestMustNewRegistry_Success(t *testing.T) {
 	t.Parallel()
 
-	act1 := action.New("user.create", dummyHandler).Build()
-	act2 := action.New("user.delete", dummyHandler).Build()
+	act1 := ktest.Echo[any]("user.create").Build()
+	act2 := ktest.Echo[any]("user.delete").Build()
 
 	reg := action.MustNewRegistry(
 		action.Library{
@@ -28,7 +29,7 @@ func TestMustNewRegistry_Success(t *testing.T) {
 			},
 		},
 		action.Of(
-			action.New("system.ping", dummyHandler).Build(),
+			ktest.Echo[any]("system.ping").Build(),
 		),
 	)
 
@@ -58,7 +59,7 @@ func TestMustNewRegistry_Success(t *testing.T) {
 func TestNewRegistry_ErrorsOnConflictingOverrides(t *testing.T) {
 	t.Parallel()
 
-	act := action.New("task.run", dummyHandler).Build()
+	act := ktest.Echo[any]("task.run").Build()
 	lib1 := action.Library{Name: "lib1", Actions: []action.AnyAction{act}, Overrides: []string{"task.run"}}
 	lib2 := action.Library{Name: "lib2", Actions: []action.AnyAction{act}, Overrides: []string{"task.run"}}
 
@@ -76,7 +77,7 @@ func TestNewRegistry_ErrorsOnConflictingOverrides(t *testing.T) {
 func TestNewRegistry_ErrorsOnUnnamedAction(t *testing.T) {
 	t.Parallel()
 
-	unnamed := action.New("", dummyHandler).Name("").Build()
+	unnamed := ktest.Echo[any]("").Name("").Build()
 	lib := action.Library{Name: "broken", Actions: []action.AnyAction{unnamed}}
 
 	_, err := action.NewRegistry(lib)
@@ -93,8 +94,8 @@ func TestNewRegistry_ErrorsOnUnnamedAction(t *testing.T) {
 func TestNewRegistry_ErrorsOnDuplicateActionInSameLibrary(t *testing.T) {
 	t.Parallel()
 
-	act1 := action.New("item.save", dummyHandler).Build()
-	act2 := action.New("item.save", dummyHandler).Build()
+	act1 := ktest.Echo[any]("item.save").Build()
+	act2 := ktest.Echo[any]("item.save").Build()
 	lib := action.Library{Name: "store", Actions: []action.AnyAction{act1, act2}}
 
 	_, err := action.NewRegistry(lib)
@@ -131,7 +132,7 @@ func TestNewRegistry_AllowsActionReuseAcrossMultipleRegistries(t *testing.T) {
 	t.Parallel()
 
 	// 1. Create a core business action ONCE.
-	coreAction := action.New("task.run", dummyHandler).Build()
+	coreAction := ktest.Echo[any]("task.run").Build()
 
 	// 2. Create a hook for the public API registry
 	publicHook := action.AnyHook{

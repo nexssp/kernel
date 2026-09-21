@@ -8,14 +8,13 @@ import (
 	"testing"
 
 	"github.com/nexssp/kernel/action"
+	"github.com/nexssp/kernel/xtest/ktest"
 )
 
 // ── Behavior ─────────────────────────────────────────────────────────────────
 
 func TestOnBuild_NilAlwaysAttaches(t *testing.T) {
-	act := action.New("onbuild.nil", func(_ context.Context, n int) (int, error) {
-		return n, nil
-	}).AnyHook(action.AnyHook{}).Build()
+	act := ktest.Echo[int]("onbuild.nil").AnyHook(action.AnyHook{}).Build()
 
 	if got := len(act.GetAnyHooks()); got != 1 {
 		t.Fatalf("nil OnBuild must attach unconditionally, got %d hooks", got)
@@ -23,9 +22,7 @@ func TestOnBuild_NilAlwaysAttaches(t *testing.T) {
 }
 
 func TestOnBuild_TrueAttachesInBuild(t *testing.T) {
-	act := action.New("onbuild.true", func(_ context.Context, n int) (int, error) {
-		return n, nil
-	}).AnyHook(action.AnyHook{
+	act := ktest.Echo[int]("onbuild.true").AnyHook(action.AnyHook{
 		OnBuild: func(*action.Meta, reflect.Type, reflect.Type) bool { return true },
 	}).Build()
 
@@ -35,9 +32,7 @@ func TestOnBuild_TrueAttachesInBuild(t *testing.T) {
 }
 
 func TestOnBuild_FalseDropsInBuild(t *testing.T) {
-	act := action.New("onbuild.false", func(_ context.Context, n int) (int, error) {
-		return n, nil
-	}).AnyHook(action.AnyHook{
+	act := ktest.Echo[int]("onbuild.false").AnyHook(action.AnyHook{
 		OnBuild: func(*action.Meta, reflect.Type, reflect.Type) bool { return false },
 	}).Build()
 
@@ -47,9 +42,7 @@ func TestOnBuild_FalseDropsInBuild(t *testing.T) {
 }
 
 func TestOnBuild_FalseDropsInAddAnyHook(t *testing.T) {
-	act := action.New("onbuild.addhook", func(_ context.Context, n int) (int, error) {
-		return n, nil
-	}).Build()
+	act := ktest.Echo[int]("onbuild.addhook").Build()
 
 	act.AddAnyHook(action.AnyHook{
 		OnBuild: func(*action.Meta, reflect.Type, reflect.Type) bool { return false },
@@ -215,9 +208,7 @@ func TestOnBuild_FilteredHookNeverRunsInDo(t *testing.T) {
 		},
 	}
 
-	act := action.New("onbuild.isolated", func(_ context.Context, n int) (int, error) {
-		return n, nil
-	}).AnyHook(hook).Build()
+	act := ktest.Echo[int]("onbuild.isolated").AnyHook(hook).Build()
 
 	for i := range 5 {
 		if _, err := act.Do(context.Background(), i); err != nil {
@@ -255,9 +246,7 @@ func TestOnBuild_PanicPropagates(t *testing.T) {
 // ── Zero-alloc hot path ──────────────────────────────────────────────────────
 
 func TestOnBuild_ZeroAlloc_NoHooks(t *testing.T) {
-	act := action.New("onbuild.hot.nohooks", func(_ context.Context, n int) (int, error) {
-		return n, nil
-	}).Build()
+	act := ktest.Echo[int]("onbuild.hot.nohooks").Build()
 
 	ctx := context.Background()
 	allocs := testing.AllocsPerRun(10_000, func() {
@@ -278,9 +267,7 @@ func TestOnBuild_ZeroAlloc_AcceptedHook(t *testing.T) {
 		},
 	}
 
-	act := action.New("onbuild.hot.accepted", func(_ context.Context, n int) (int, error) {
-		return n, nil
-	}).AnyHook(hook).Build()
+	act := ktest.Echo[int]("onbuild.hot.accepted").AnyHook(hook).Build()
 
 	ctx := context.Background()
 	allocs := testing.AllocsPerRun(10_000, func() {
@@ -301,9 +288,7 @@ func TestOnBuild_ZeroAlloc_FilteredHook(t *testing.T) {
 		},
 	}
 
-	act := action.New("onbuild.hot.filtered", func(_ context.Context, n int) (int, error) {
-		return n, nil
-	}).AnyHook(hook).Build()
+	act := ktest.Echo[int]("onbuild.hot.filtered").AnyHook(hook).Build()
 
 	ctx := context.Background()
 	allocs := testing.AllocsPerRun(10_000, func() {

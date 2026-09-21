@@ -4,44 +4,32 @@ import (
 	"context"
 	"testing"
 
-	"github.com/nexssp/kernel/action"
-	"github.com/nexssp/kernel/xctx"
+	"github.com/nexssp/kernel/xerr"
+	"github.com/nexssp/kernel/xtest/ktest"
 )
 
 func TestRequireRole(t *testing.T) {
 	t.Parallel()
+	act := ktest.NewOkAction("admin.only").RequireRole("admin").Build()
 
-	act := action.New("admin.only", func(_ context.Context, _ struct{}) (string, error) {
-		return "ok", nil
-	}).RequireRole("admin").Build()
+	// Rejects unauthenticated/missing role
+	ktest.Run(t, act, context.Background(), struct{}{}).
+		ErrorKind(xerr.KindForbidden)
 
-	// 1. Without Role
-	_, err := act.Do(context.Background(), struct{}{})
-	if err == nil {
-		t.Fatal("expected forbidden error, got nil")
-	}
-
-	// 2. With Role
-	ctx := xctx.WithRoles(context.Background(), []string{"admin"})
-	res, err := act.Do(ctx, struct{}{})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if res != "ok" {
-		t.Fatalf("expected ok, got %v", res)
-	}
+	// Accepts valid role
+	ktest.Run(t, act, ktest.CtxWithRole(t, "admin"), struct{}{}).
+		NoError().
+		Equals("ok")
 }
 
 func TestRequireFeature(t *testing.T) {
 	t.Parallel()
+	act := ktest.NewOkAction("beta.feature").RequireFeature("beta-ui").Build()
 
-	act := action.New("beta.feature", func(_ context.Context, _ struct{}) (string, error) {
-		return "ok", nil
-	}).RequireFeature("beta-ui").Build()
+	ctx, scope := ktest.Ctx(t)
+	scope.Features = []string{"beta-ui"}
 
-	ctx := xctx.WithFeatures(context.Background(), []string{"beta-ui"})
-	_, err := act.Do(ctx, struct{}{})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	ktest.Run(t, act, ctx, struct{}{}).
+		NoError().
+		Equals("ok")
 }

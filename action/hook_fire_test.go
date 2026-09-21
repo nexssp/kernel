@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/nexssp/kernel/action"
+	"github.com/nexssp/kernel/xtest"
 )
 
 func TestOnRetry_HookFires(t *testing.T) {
@@ -96,41 +97,44 @@ func TestOnCoalesced_HookFires(t *testing.T) {
 	var coalescedHookCalled atomic.Bool
 
 	// Gate: release handler only after both goroutines have entered the middleware.
-	handlerStart := make(chan struct{})
+	entered := xtest.NewLatch()
+	release := make(chan struct{})
+	secondCallerEntered := make(chan struct{})
+	var keyCalls atomic.Int32
 
 	act := action.New("hook.coal", func(_ context.Context, _ string) (string, error) {
-		<-handlerStart // block until released
+		entered.Signal()
+		<-release
 		return "coalesced", nil
+	}).Coalesce(c, func(r string) string {
+		if keyCalls.Add(1) == 2 {
+			close(secondCallerEntered)
+		}
+
+		return r
 	}).
-		Coalesce(c, func(r string) string { return r }).
 		Hook(action.Hook[string, string]{
 			OnCoalesced: func(_ context.Context, _ string, _ *action.Meta) {
 				coalescedHookCalled.Store(true)
 			},
-		}).
-		Build()
+		}).Build()
 
 	var wg sync.WaitGroup
 	wg.Add(2)
+	go func() { defer wg.Done(); act.Do(context.Background(), "k") }()
+	entered.Wait(t, 2*time.Second) // caller 1 is inside the handler
+	go func() { defer wg.Done(); act.Do(context.Background(), "k") }()
+	select {
+	case <-secondCallerEntered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("second caller did not enter coalescer")
+	}
 
-	// Both goroutines start; the first grabs the coalescer, the second will join.
-	go func() {
-		defer wg.Done()
-		if _, err := act.Do(context.Background(), "k"); err != nil {
-			t.Errorf("unexpected error: %v", err)
-		}
-	}()
-	go func() {
-		defer wg.Done()
-		if _, err := act.Do(context.Background(), "k"); err != nil {
-			t.Errorf("unexpected error: %v", err)
-		}
-	}()
-
-	// Give both goroutines a chance to reach the handler (or the coalescer).
-	time.Sleep(50 * time.Millisecond)
-	close(handlerStart) // unblock the handler → both get the result
+	close(release)
 	wg.Wait()
+
+	// The hook runs after the shared result is released to the waiting caller.
+	xtest.Eventually(t, 2*time.Second, coalescedHookCalled.Load)
 
 	if !coalescedHookCalled.Load() {
 		t.Fatal("OnCoalesced hook was not called")
