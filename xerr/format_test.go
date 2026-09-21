@@ -63,17 +63,6 @@ func TestSprintProd_FindsWrappedAppError(t *testing.T) {
 	}
 }
 
-func TestSprintProd_DirectAppError_AllocBudget(t *testing.T) {
-	err := &AppError{Kind: "internal", Message: "internal error"}
-
-	allocs := testing.AllocsPerRun(1000, func() {
-		_ = sprintProd(err)
-	})
-	if allocs > 1 {
-		t.Fatalf("sprintProd(*AppError) allocs = %v, want <= 1 — fast path removed?", allocs)
-	}
-}
-
 func TestSprintProd_WrappedAppError_StillFormatted(t *testing.T) {
 	inner := &AppError{Kind: "not_found", Message: "user not found"}
 	err := fmt.Errorf("handler: %w", inner)
@@ -129,7 +118,8 @@ func TestIsUserFrame(t *testing.T) {
 		fn   string
 		want bool
 	}{
-		{"github.com/nexss/nexssp/kernel/xerr.sprintDev", true},
+		{"github.com/nexssp/kernel/xerr.sprintDev", false},
+		{"github.com/myorg/myapp/main.main", true},
 		{"main.main", false},
 		{"errors.New", false},
 		{"fmt.Errorf", false},
@@ -160,22 +150,6 @@ func TestTrimFunc_NoSlash(t *testing.T) {
 	}
 }
 
-// ── alloc budgets — łapią regresję na hot path ──────────────────────────────
-
-// sprintProd ma alokować co najwyżej raz: zwracany string.
-// Więcej = ktoś wrócił do fmt.Sprintf albo dodał map/slice.
-func TestSprintProd_AllocsBudget(t *testing.T) {
-	err := &AppError{Kind: "internal", Message: "internal error"}
-
-	allocs := testing.AllocsPerRun(1000, func() {
-		_ = sprintProd(err)
-	})
-	if allocs > 2 {
-		t.Fatalf("sprintProd allocs = %v, want ≤ 1", allocs)
-	}
-}
-
-// isUserFrame musi być zero-alloc (frameNoise jako package var).
 func TestIsUserFrame_ZeroAlloc(t *testing.T) {
 	fn := "github.com/nexss/nexssp/kernel/xerr.sprintDev"
 
@@ -208,7 +182,7 @@ func BenchmarkSprintProd_Plain(b *testing.B) {
 }
 
 func BenchmarkIsUserFrame(b *testing.B) {
-	fn := "github.com/nexss/nexssp/kernel/xerr.sprintDev"
+	fn := "github.com/nexssp/kernel/xerr.sprintDev"
 	b.ReportAllocs()
 	b.ResetTimer()
 	for range b.N {
@@ -225,11 +199,13 @@ func BenchmarkTrimPath(b *testing.B) {
 	}
 }
 
-func BenchmarkSprintProd_DirectAppError(b *testing.B) {
+func TestSprintProd_AllocBudget(t *testing.T) {
 	err := &AppError{Kind: "internal", Message: "internal error"}
-	b.ReportAllocs()
-	b.ResetTimer()
-	for range b.N {
+
+	allocs := testing.AllocsPerRun(1000, func() {
 		_ = sprintProd(err)
+	})
+	if allocs > 1 {
+		t.Fatalf("sprintProd(*AppError) allocs = %v, want <= 1", allocs)
 	}
 }

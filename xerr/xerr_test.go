@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/nexssp/kernel/xerr"
+	"github.com/nexssp/kernel/xtest/ktest"
 )
 
 func TestXerr_Taxonomy(t *testing.T) {
@@ -17,16 +18,66 @@ func TestXerr_Taxonomy(t *testing.T) {
 	if err1.Kind != xerr.KindNotFound {
 		t.Errorf("expected KindNotFound, got %s", err1.Kind)
 	}
-	if xerr.IsTransient(err1) {
-		t.Error("NotFound should not be transient")
-	}
+	ktest.RequirePermanent(t, err1)
 
 	err2 := xerr.Unavailable("db down")
 	if err2.Kind != xerr.KindUnavailable {
 		t.Errorf("expected KindUnavailable, got %s", err2.Kind)
 	}
-	if !xerr.IsTransient(err2) {
-		t.Error("Unavailable should be transient")
+	ktest.RequireTransient(t, err2)
+}
+
+// TestXerr_ClassificationIsTotalAndDisjoint pins the three-way
+// classification of every Kind: none is both transient and permanent,
+// and the six intentionally-unclassified kinds stay unclassified. This
+// test fails loudly if anyone ever collapses classTransient and
+// classPermanent to a boolean.
+func TestXerr_ClassificationIsTotalAndDisjoint(t *testing.T) {
+	t.Parallel()
+
+	unclassified := map[xerr.Kind]bool{
+		xerr.KindConflict:         true,
+		xerr.KindInternal:         true,
+		xerr.KindMethodNotAllowed: true,
+		xerr.KindCanceled:         true,
+		xerr.KindDatabase:         true,
+		xerr.KindShutdown:         true,
+	}
+
+	for _, k := range xerr.AllKinds() {
+		err := &xerr.AppError{Kind: k, Message: "test"}
+		transient := xerr.IsTransient(err)
+		permanent := xerr.IsPermanent(err)
+
+		if transient && permanent {
+			t.Errorf("kind %q is both transient and permanent", k)
+			continue
+		}
+		if unclassified[k] {
+			if transient || permanent {
+				t.Errorf("kind %q must be unclassified; transient=%v permanent=%v",
+					k, transient, permanent)
+			}
+			continue
+		}
+		if !transient && !permanent {
+			t.Errorf("kind %q must be either transient or permanent", k)
+		}
+	}
+}
+
+func TestAllKinds_ReturnsEveryKind(t *testing.T) {
+	t.Parallel()
+
+	seen := make(map[xerr.Kind]bool)
+	for _, k := range xerr.AllKinds() {
+		if seen[k] {
+			t.Errorf("AllKinds contains duplicate %q", k)
+		}
+		seen[k] = true
+	}
+	if len(seen) != 16 {
+		t.Fatalf("AllKinds returns %d unique kinds, want 16", len(seen))
 	}
 }
 
@@ -38,14 +89,10 @@ func TestMapTransportError(t *testing.T) {
 	}
 
 	mappedCancel := xerr.MapTransportError(context.Canceled)
-	if xerr.KindFrom(mappedCancel) != xerr.KindCanceled {
-		t.Errorf("expected Canceled, got %s", xerr.KindFrom(mappedCancel))
-	}
+	ktest.RequireErrorKind(t, mappedCancel, xerr.KindCanceled)
 
 	mappedTimeout := xerr.MapTransportError(context.DeadlineExceeded)
-	if xerr.KindFrom(mappedTimeout) != xerr.KindTimeout {
-		t.Errorf("expected Timeout, got %s", xerr.KindFrom(mappedTimeout))
-	}
+	ktest.RequireErrorKind(t, mappedTimeout, xerr.KindTimeout)
 }
 
 func TestValidationDetails(t *testing.T) {
@@ -56,9 +103,7 @@ func TestValidationDetails(t *testing.T) {
 		Field: "Name", Validation: "required", Value: "missing",
 	}}
 
-	if appErr.Kind != xerr.KindValidation {
-		t.Errorf("expected KindValidation, got %s", appErr.Kind)
-	}
+	ktest.RequireErrorKind(t, appErr, xerr.KindValidation)
 	if len(appErr.ValidationDetails) != 1 {
 		t.Fatalf("expected 1 detail, got %d", len(appErr.ValidationDetails))
 	}
@@ -100,29 +145,36 @@ func TestFrom(t *testing.T) {
 	baseErr := errors.New("raw standard error")
 	appErr := xerr.From(baseErr)
 
-	if appErr.Kind != xerr.KindInternal {
-		t.Errorf("raw errors should be mapped to Internal, got %s", appErr.Kind)
-	}
+	ktest.RequireErrorKind(t, appErr, xerr.KindInternal)
 	if !errors.Is(appErr.Unwrap(), baseErr) {
 		t.Error("From should preserve the original cause")
 	}
 
-	// Converting an already-converted error should return itself
-	appErr2 := xerr.From(appErr)
-	if appErr2 != appErr {
+	// From on an existing *AppError must return it unchanged.
+	if xerr.From(appErr) != appErr {
 		t.Error("From on AppError should return itself without wrapping")
 	}
+}
+
+// TestFrom_DelegatesToClassify confirms the shared classifier is used by
+// From as well as MapTransportError, so a future edit to one cannot
+// silently diverge from the other.
+func TestFrom_DelegatesToClassify(t *testing.T) {
+	t.Parallel()
+
+	ktest.RequireErrorKind(t, xerr.From(context.Canceled), xerr.KindCanceled)
+	ktest.RequireErrorKind(t, xerr.From(context.DeadlineExceeded), xerr.KindTimeout)
 }
 
 func TestMapTransportError_DNS(t *testing.T) {
 	t.Parallel()
 	dnsErr := &net.DNSError{Err: "no such host", Name: "example.invalid", IsNotFound: true}
 	got := xerr.MapTransportError(dnsErr)
-	if xerr.KindFrom(got) != xerr.KindUnavailable {
-		t.Fatalf("want Unavailable, got %s", xerr.KindFrom(got))
-	}
-	var ae *xerr.AppError
-	if !errors.As(got, &ae) || !strings.Contains(ae.Message, "DNS") {
+
+	ktest.RequireErrorKind(t, got, xerr.KindUnavailable)
+
+	ae, ok := errors.AsType[*xerr.AppError](got)
+	if !ok || !strings.Contains(ae.Message, "DNS") {
 		t.Fatalf("expected DNS-specific message, got %q", got.Error())
 	}
 }

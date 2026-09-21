@@ -9,8 +9,12 @@ import (
 	"strings"
 )
 
-// isDev is evaluated once at startup.
-// Set ENV=development (or dev) or DEBUG=1 to enable verbose output.
+// IsDev reports whether the process is running in a development
+// environment. It gates verbose output in Sprint and is evaluated once
+// at startup.
+func IsDev() bool { return isDev }
+
+// isDev is set from ENV=development|dev or DEBUG=1.
 var isDev = func() bool {
 	env := strings.ToLower(os.Getenv("ENV"))
 	return env == "development" || env == "dev" || os.Getenv("DEBUG") == "1"
@@ -21,6 +25,7 @@ var isDev = func() bool {
 var frameNoise = []string{
 	"runtime.", "reflect.", "testing.",
 	"net/http.", "golang.org/x/",
+	xerrPkgPrefix,
 }
 
 // ErrChain walks errors.Unwrap and returns the full cause chain as a slice.
