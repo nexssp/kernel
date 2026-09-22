@@ -65,7 +65,7 @@ func TestBuiltAction_ToBuilder_ErrorPathAndHookPropagation(t *testing.T) {
 	var (
 		typedErrorHookRan atomic.Bool
 		anyErrorHookRan   atomic.Bool
-		executedHookRan   atomic.Bool
+		successHookRan    atomic.Bool
 		expectedErr       = errors.New("upstream service unavailable")
 	)
 
@@ -77,8 +77,8 @@ func TestBuiltAction_ToBuilder_ErrorPathAndHookPropagation(t *testing.T) {
 			OnError: func(_ context.Context, _ string, _ error, _ *action.Meta) {
 				typedErrorHookRan.Store(true)
 			},
-			OnExecuted: func(_ context.Context, _, _ string, _ error, _ *action.Meta) {
-				executedHookRan.Store(true)
+			OnSuccess: func(_ context.Context, _, _ string, _ *action.Meta) {
+				successHookRan.Store(true)
 			},
 		}).
 		AnyHook(action.AnyHook{
@@ -104,8 +104,8 @@ func TestBuiltAction_ToBuilder_ErrorPathAndHookPropagation(t *testing.T) {
 	if !anyErrorHookRan.Load() {
 		t.Error("AnyHook OnError hook was NOT fired on rebuilt action")
 	}
-	if executedHookRan.Load() {
-		t.Error("OnExecuted hook MUST NOT fire on failure")
+	if successHookRan.Load() {
+		t.Error("OnSuccess hook MUST NOT fire on failure")
 	}
 }
 
@@ -150,8 +150,9 @@ func TestBuiltAction_ToBuilder_ContextCancellationAndTimeout(t *testing.T) {
 	t.Parallel()
 
 	var (
-		cancelHookRan atomic.Bool
-		errorHookRan  atomic.Bool
+		cancelHookRan  atomic.Bool
+		errorHookRan   atomic.Bool
+		timeoutHookRan atomic.Bool
 	)
 
 	orig := action.New("slow.node", func(ctx context.Context, _ string) (string, error) {
@@ -170,6 +171,9 @@ func TestBuiltAction_ToBuilder_ContextCancellationAndTimeout(t *testing.T) {
 			OnError: func(_ context.Context, _ string, _ error, _ *action.Meta) {
 				errorHookRan.Store(true)
 			},
+			OnTimeout: func(_ context.Context, _ string, _ *action.Meta) {
+				timeoutHookRan.Store(true)
+			},
 		}).
 		Build()
 
@@ -185,6 +189,9 @@ func TestBuiltAction_ToBuilder_ContextCancellationAndTimeout(t *testing.T) {
 	}
 	if !errorHookRan.Load() {
 		t.Error("OnError hook did not fire upon context deadline expiry")
+	}
+	if !timeoutHookRan.Load() {
+		t.Error("OnTimeout hook did not fire upon context deadline expiry")
 	}
 
 	// 2. Bad path (Cancellation): Context canceled -> context.Canceled triggers OnCancel

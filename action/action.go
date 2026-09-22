@@ -105,14 +105,14 @@ func (a *BuiltAction[Req, Res]) anyHooksSnapshot() []AnyHook {
 	return set.hooks
 }
 
-func hasOnExecutedHook[Req, Res any](hooks []Hook[Req, Res], anyHooks []AnyHook) bool {
+func hasOnSuccessHook[Req, Res any](hooks []Hook[Req, Res], anyHooks []AnyHook) bool {
 	for i := range hooks {
-		if hooks[i].OnExecuted != nil {
+		if hooks[i].OnSuccess != nil {
 			return true
 		}
 	}
 	for i := range anyHooks {
-		if anyHooks[i].OnExecuted != nil {
+		if anyHooks[i].OnSuccess != nil {
 			return true
 		}
 	}
@@ -121,7 +121,7 @@ func hasOnExecutedHook[Req, Res any](hooks []Hook[Req, Res], anyHooks []AnyHook)
 
 func (a *BuiltAction[Req, Res]) Do(ctx context.Context, req Req) (res Res, err error) {
 	anyHooks := a.anyHooksSnapshot()
-	needExecState := hasOnExecutedHook(a.hooks, anyHooks)
+	needExecState := hasOnSuccessHook(a.hooks, anyHooks)
 
 	var state *execState
 	finalCtx := setupExecutionContext(ctx, &state, needExecState)
@@ -236,6 +236,18 @@ func fireExitHooks[Req, Res any](
 	typedHooksRan, anyHooksRan int,
 	meta *Meta,
 ) {
+	if errors.Is(err, context.DeadlineExceeded) {
+		for i := typedHooksRan - 1; i >= 0; i-- {
+			if typedHooks[i].OnTimeout != nil {
+				callHook(meta, "OnTimeout", func() { typedHooks[i].OnTimeout(ctx, req, meta) })
+			}
+		}
+		for i := anyHooksRan - 1; i >= 0; i-- {
+			if anyHooks[i].OnTimeout != nil {
+				callHook(meta, "OnTimeout", func() { anyHooks[i].OnTimeout(ctx, any(req), meta) })
+			}
+		}
+	}
 	for i := typedHooksRan - 1; i >= 0; i-- {
 		fireTypedExitHook(ctx, typedHooks[i], req, res, err, state, meta)
 	}
@@ -254,6 +266,10 @@ func fireTypedExitHook[Req, Res any](
 	meta *Meta,
 ) {
 	switch {
+	case err != nil && errors.Is(err, context.DeadlineExceeded):
+		if h.OnError != nil {
+			callHook(meta, "OnError", func() { h.OnError(ctx, req, err, meta) })
+		}
 	case err != nil && errors.Is(err, context.Canceled):
 		if h.OnCancel != nil {
 			callHook(meta, "OnCancel", func() { h.OnCancel(ctx, req, meta) })
@@ -262,8 +278,8 @@ func fireTypedExitHook[Req, Res any](
 		if h.OnError != nil {
 			callHook(meta, "OnError", func() { h.OnError(ctx, req, err, meta) })
 		}
-	case h.OnExecuted != nil && state != nil && !state.fromCache:
-		callHook(meta, "OnExecuted", func() { h.OnExecuted(ctx, req, res, nil, meta) })
+	case h.OnSuccess != nil && state != nil && !state.fromCache:
+		callHook(meta, "OnSuccess", func() { h.OnSuccess(ctx, req, res, meta) })
 	}
 	if h.After != nil {
 		callHook(meta, "After", func() { h.After(ctx, req, res, err, meta) })
@@ -280,6 +296,10 @@ func fireAnyExitHook[Req, Res any](
 	meta *Meta,
 ) {
 	switch {
+	case err != nil && errors.Is(err, context.DeadlineExceeded):
+		if h.OnError != nil {
+			callHook(meta, "OnError", func() { h.OnError(ctx, any(req), err, meta) })
+		}
 	case errors.Is(err, context.Canceled):
 		if h.OnCancel != nil {
 			callHook(meta, "OnCancel", func() { h.OnCancel(ctx, any(req), meta) })
@@ -288,8 +308,8 @@ func fireAnyExitHook[Req, Res any](
 		if h.OnError != nil {
 			callHook(meta, "OnError", func() { h.OnError(ctx, any(req), err, meta) })
 		}
-	case h.OnExecuted != nil && state != nil && !state.fromCache:
-		callHook(meta, "OnExecuted", func() { h.OnExecuted(ctx, any(req), any(res), nil, meta) })
+	case h.OnSuccess != nil && state != nil && !state.fromCache:
+		callHook(meta, "OnSuccess", func() { h.OnSuccess(ctx, any(req), any(res), meta) })
 	}
 	if h.After != nil {
 		callHook(meta, "After", func() { h.After(ctx, any(req), any(res), err, meta) })

@@ -18,11 +18,11 @@ func TestSlogSink_LevelsAndFields(t *testing.T) {
 	var buf bytes.Buffer
 	sink := observe.NewSlogSink(slog.New(slog.NewTextHandler(&buf, nil)))
 	sink.Emit(context.Background(), observe.Event{
-		Kind: observe.KindExecuted, Action: "user.find",
+		Kind: observe.KindSuccess, Action: "user.find",
 		ExecutionID: "exec-1", TraceID: "trace-1", SpanID: "span-1",
 	})
 	out := buf.String()
-	for _, want := range []string{"level=INFO", "event=executed", "action=user.find", "execution_id=exec-1"} {
+	for _, want := range []string{"level=INFO", "event=success", "action=user.find", "execution_id=exec-1"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("missing %q in log: %s", want, out)
 		}
@@ -41,7 +41,7 @@ func TestSlogSink_NilLoggerUsesDefault(t *testing.T) {
 	if sink == nil {
 		t.Fatal("expected non-nil sink")
 	}
-	sink.Emit(context.Background(), observe.Event{Kind: observe.KindExecuted})
+	sink.Emit(context.Background(), observe.Event{Kind: observe.KindSuccess})
 }
 
 func TestMemorySink_RingOrderAndIsolation(t *testing.T) {
@@ -127,12 +127,12 @@ func TestMetricsSink_CountingAndIsolation(t *testing.T) {
 
 	s := observe.NewMetricsSink()
 	ctx := context.Background()
-	s.Emit(ctx, observe.Event{Action: "a", Kind: observe.KindExecuted})
-	s.Emit(ctx, observe.Event{Action: "a", Kind: observe.KindExecuted})
+	s.Emit(ctx, observe.Event{Action: "a", Kind: observe.KindSuccess})
+	s.Emit(ctx, observe.Event{Action: "a", Kind: observe.KindSuccess})
 	s.Emit(ctx, observe.Event{Action: "a", Kind: observe.KindError})
 
 	snapshot := s.Snapshot()
-	key := observe.MetricKey{Action: "a", Kind: observe.KindExecuted}
+	key := observe.MetricKey{Action: "a", Kind: observe.KindSuccess}
 	if snapshot[key] != 2 {
 		t.Fatalf("got %d executed events, want 2", snapshot[key])
 	}
@@ -151,12 +151,12 @@ func TestMetricsSink_ConcurrentEmits(t *testing.T) {
 	for range 10 {
 		wg.Go(func() {
 			for range 100 {
-				s.Emit(ctx, observe.Event{Action: "conc", Kind: observe.KindExecuted})
+				s.Emit(ctx, observe.Event{Action: "conc", Kind: observe.KindSuccess})
 			}
 		})
 	}
 	wg.Wait()
-	key := observe.MetricKey{Action: "conc", Kind: observe.KindExecuted}
+	key := observe.MetricKey{Action: "conc", Kind: observe.KindSuccess}
 	if got := s.Snapshot()[key]; got != 1000 {
 		t.Fatalf("got %d events, want 1000", got)
 	}

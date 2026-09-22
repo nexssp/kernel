@@ -35,7 +35,7 @@ func (t *Trace) Hook() action.AnyHook {
 		Before: func(ctx context.Context, _ any, _ *action.Meta) (context.Context, error) {
 			return context.WithValue(ctx, traceStartKey{}, time.Now()), nil
 		},
-		OnExecuted: func(ctx context.Context, req, res any, _ error, meta *action.Meta) {
+		OnSuccess: func(ctx context.Context, req, res any, meta *action.Meta) {
 			t.record(ctx, meta, req, res, nil)
 		},
 		OnError: func(ctx context.Context, req any, err error, meta *action.Meta) {

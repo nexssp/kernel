@@ -94,7 +94,7 @@ func TestOnDeduplicated_HookFires(t *testing.T) {
 func TestOnCoalesced_HookFires(t *testing.T) {
 	t.Parallel()
 	c := action.NewCoalescer()
-	var coalescedHookCalled atomic.Bool
+	coalescedHookCalled := make(chan struct{})
 
 	// Gate: release handler only after both goroutines have entered the middleware.
 	entered := xtest.NewLatch()
@@ -115,7 +115,7 @@ func TestOnCoalesced_HookFires(t *testing.T) {
 	}).
 		Hook(action.Hook[string, string]{
 			OnCoalesced: func(_ context.Context, _ string, _ *action.Meta) {
-				coalescedHookCalled.Store(true)
+				close(coalescedHookCalled)
 			},
 		}).Build()
 
@@ -134,9 +134,5 @@ func TestOnCoalesced_HookFires(t *testing.T) {
 	wg.Wait()
 
 	// The hook runs after the shared result is released to the waiting caller.
-	xtest.Eventually(t, 2*time.Second, coalescedHookCalled.Load)
-
-	if !coalescedHookCalled.Load() {
-		t.Fatal("OnCoalesced hook was not called")
-	}
+	xtest.WaitForSignal(t, coalescedHookCalled, 2*time.Second)
 }

@@ -77,7 +77,7 @@ func TestCache_Hit(t *testing.T) {
 				t.Errorf("expected cached value 'cached', got %q", res)
 			}
 		}).
-		HookExecuted(func(_ context.Context, _ string, _ string, _ *action.Meta) {
+		HookSuccess(func(_ context.Context, _ string, _ string, _ *action.Meta) {
 			executedHookCalled = true
 		}).
 		Build()
@@ -96,7 +96,7 @@ func TestCache_Hit(t *testing.T) {
 		t.Fatal("HookCacheHit must be called on cache hit")
 	}
 	if executedHookCalled {
-		t.Fatal("HookExecuted must be suppressed on cache hit")
+		t.Fatal("HookSuccess must be suppressed on cache hit")
 	}
 }
 
@@ -116,7 +116,7 @@ func TestCache_Miss(t *testing.T) {
 				t.Errorf("expected req 'missKey', got %q", req)
 			}
 		}).
-		HookExecuted(func(_ context.Context, _ string, _ string, _ *action.Meta) {
+		HookSuccess(func(_ context.Context, _ string, _ string, _ *action.Meta) {
 			executedHookCalled = true
 		}).
 		Build()
@@ -132,7 +132,7 @@ func TestCache_Miss(t *testing.T) {
 		t.Fatal("handler should have been called on cache miss")
 	}
 	if !executedHookCalled {
-		t.Fatal("HookExecuted must be called on cache miss (real execution)")
+		t.Fatal("HookSuccess must be called on cache miss (real execution)")
 	}
 
 	stored, ok, err := store.Get(context.Background(), "missKey")
@@ -239,6 +239,7 @@ func TestCache_Singleflight_SingleMissNotification(t *testing.T) {
 	close(block)
 	wg.Wait()
 
+	// Twarde niezmienniki biznesowe:
 	if got := handlerCalls.Load(); got != 1 {
 		t.Fatalf("CRITICAL: handler executed %d times, expected exactly 1", got)
 	}

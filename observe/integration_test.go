@@ -53,7 +53,7 @@ func TestObserveHook_WithRetry(t *testing.T) {
 		t.Fatal(err)
 	}
 	kinds := sink.kinds()
-	if !contains(kinds, observe.KindRetry) || !contains(kinds, observe.KindExecuted) {
+	if !contains(kinds, observe.KindRetry) || !contains(kinds, observe.KindSuccess) {
 		t.Fatalf("expected retry and executed events, got %v", kinds)
 	}
 	if contains(kinds, observe.KindError) {

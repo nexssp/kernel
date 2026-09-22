@@ -17,7 +17,7 @@ type AuditLogger interface {
 
 // Audited attaches a generic audit hook invoked after successful action execution.
 func (b *Builder[Req, Res]) Audited(logger AuditLogger, category string, detailsFn func(req Req, res Res) string) *Builder[Req, Res] {
-	return b.HookExecuted(func(ctx context.Context, req Req, res Res, meta *Meta) {
+	return b.HookSuccess(func(ctx context.Context, req Req, res Res, meta *Meta) {
 		if logger == nil {
 			return
 		}
@@ -37,7 +37,7 @@ type PIITracker interface {
 
 // TrackPIIAccess attaches a non-blocking hook recording the purpose of PII data access.
 func (b *Builder[Req, Res]) TrackPIIAccess(tracker PIITracker, purpose string) *Builder[Req, Res] {
-	return b.HookExecuted(func(ctx context.Context, _ Req, _ Res, meta *Meta) {
+	return b.HookSuccess(func(ctx context.Context, _ Req, _ Res, meta *Meta) {
 		if tracker == nil {
 			return
 		}

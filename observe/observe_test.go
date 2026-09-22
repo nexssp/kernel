@@ -39,7 +39,7 @@ func TestHook_AllLifecycleCallbacks(t *testing.T) {
 		"trace-1", "span-1",
 	)
 
-	h.OnExecuted(ctx, "req", "res", nil, meta)
+	h.OnSuccess(ctx, "req", "res", meta)
 	h.OnError(ctx, "req", errors.New("boom"), meta)
 	h.OnRetry(ctx, "req", 2, errors.New("retry"), meta)
 	h.OnCacheHit(ctx, "req", "cached", meta)
@@ -63,7 +63,7 @@ func TestHook_AllLifecycleCallbacks(t *testing.T) {
 		}
 	}
 
-	assertEvent(0, observe.KindExecuted, 0, false)
+	assertEvent(0, observe.KindSuccess, 0, false)
 	assertEvent(1, observe.KindError, 0, true)
 	assertEvent(2, observe.KindRetry, 2, true)
 	assertEvent(3, observe.KindCacheHit, 0, false)
@@ -74,7 +74,7 @@ func TestHook_NilSinkReturnsNoop(t *testing.T) {
 	t.Parallel()
 
 	h := observe.Hook(nil)
-	if h.OnExecuted != nil || h.OnError != nil || h.OnRetry != nil ||
+	if h.OnSuccess != nil || h.OnError != nil || h.OnRetry != nil ||
 		h.OnCacheHit != nil || h.OnCacheMiss != nil || h.OnCancel != nil {
 		t.Fatal("nil sink must produce an empty action.AnyHook")
 	}
@@ -85,7 +85,7 @@ func TestHook_MissingMetaUsesEmptyAction(t *testing.T) {
 
 	collector := &eventCollector{}
 	h := observe.Hook(collector)
-	h.OnExecuted(context.Background(), "req", "res", nil, nil)
+	h.OnSuccess(context.Background(), "req", "res", nil)
 
 	events := collector.snapshot()
 	if len(events) != 1 || events[0].Action != "" {

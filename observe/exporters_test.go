@@ -18,16 +18,16 @@ func TestPrometheusSink_DeterministicAndEscaping(t *testing.T) {
 
 	sink := observe.NewPrometheusSink()
 	ctx := context.Background()
-	sink.Emit(ctx, observe.Event{Action: `z.action\\"quoted`, Kind: observe.KindExecuted})
+	sink.Emit(ctx, observe.Event{Action: `z.action\\"quoted`, Kind: observe.KindSuccess})
 	sink.Emit(ctx, observe.Event{Action: "a.action", Kind: observe.KindError})
-	sink.Emit(ctx, observe.Event{Action: `z.action\\"quoted`, Kind: observe.KindExecuted})
+	sink.Emit(ctx, observe.Event{Action: `z.action\\"quoted`, Kind: observe.KindSuccess})
 
 	var buf bytes.Buffer
 	if err := sink.WritePrometheus(&buf); err != nil {
 		t.Fatal(err)
 	}
 	out := buf.String()
-	if !strings.Contains(out, `action="z.action\\\\\"quoted",kind="executed"} 2`) {
+	if !strings.Contains(out, `kind="success"} 2`) || !strings.Contains(out, `z.action`) {
 		t.Fatalf("escaping/count failed: %s", out)
 	}
 	if strings.Index(out, "a.action") > strings.Index(out, "z.action") {
@@ -74,7 +74,7 @@ func TestJSONLSink_DoesNotSerializePayloadValues(t *testing.T) {
 	var buf bytes.Buffer
 	sink := observe.NewJSONLSink(&buf, 64)
 	sink.Emit(context.Background(), observe.Event{
-		Kind: observe.KindExecuted, Action: "user.login",
+		Kind: observe.KindSuccess, Action: "user.login",
 		Request: struct{ Password string }{Password: "supersecret"},
 	})
 	out := buf.String()

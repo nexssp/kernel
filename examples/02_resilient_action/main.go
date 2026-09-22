@@ -40,7 +40,7 @@ func main() {
 		// 4. In-flight Singleflight Deduplication (Thundering Herd shield)
 		Dedup(func(r StockRequest) string { return r.SKU }).
 		// 5. Audit & Log Hooks
-		HookExecuted(func(_ context.Context, _ StockRequest, res StockResponse, meta *action.Meta) {
+		HookSuccess(func(_ context.Context, _ StockRequest, res StockResponse, meta *action.Meta) {
 			fmt.Printf("✅ [Audit] %s -> SKU: %s has %d items in stock\n", meta.Name, res.SKU, res.Quantity)
 		}).
 		Build()

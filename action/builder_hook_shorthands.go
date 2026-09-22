@@ -31,33 +31,37 @@ func (b *Builder[Req, Res]) HookError(fn func(ctx context.Context, req Req, err 
 	return b.Hook(Hook[Req, Res]{OnError: fn})
 }
 
-// HookExecuted runs fn only on successful execution (err == nil).
-// The fn signature omits err for convenience — it is always nil here.
+// HookSuccess runs fn only after a successful real execution.
 // Use for domain-event publishing, analytics, cache warming.
-func (b *Builder[Req, Res]) HookExecuted(fn func(ctx context.Context, req Req, res Res, meta *Meta)) *Builder[Req, Res] {
+func (b *Builder[Req, Res]) HookSuccess(fn func(ctx context.Context, req Req, res Res, meta *Meta)) *Builder[Req, Res] {
 	return b.Hook(Hook[Req, Res]{
-		OnExecuted: func(ctx context.Context, req Req, res Res, err error, meta *Meta) {
-			if err == nil {
-				fn(ctx, req, res, meta)
-			}
-		},
+		OnSuccess: fn,
 	})
 }
 
-// HookExecutedEvent runs fn after a successful action completion, except when
-// the result is served directly from Cache. Idempotency replays are action
-// completions and therefore also fire this event. Use it when the observer
-// needs no request, response, context, or metadata.
-func (b *Builder[Req, Res]) HookExecutedEvent(fn func()) *Builder[Req, Res] {
+// HookSuccessEvent runs fn after a successful real execution, except when the
+// result is served directly from cache.
+func (b *Builder[Req, Res]) HookSuccessEvent(fn func()) *Builder[Req, Res] {
 	if fn == nil {
 		return b
 	}
 	return b.Hook(Hook[Req, Res]{
-		OnExecuted: func(_ context.Context, _ Req, _ Res, err error, _ *Meta) {
-			if err == nil {
-				fn()
-			}
-		},
+		OnSuccess: func(context.Context, Req, Res, *Meta) { fn() },
+	})
+}
+
+// HookTimeout runs fn when execution returns context.DeadlineExceeded.
+func (b *Builder[Req, Res]) HookTimeout(fn func(ctx context.Context, req Req, meta *Meta)) *Builder[Req, Res] {
+	return b.Hook(Hook[Req, Res]{OnTimeout: fn})
+}
+
+// HookTimeoutEvent runs fn when execution returns context.DeadlineExceeded.
+func (b *Builder[Req, Res]) HookTimeoutEvent(fn func()) *Builder[Req, Res] {
+	if fn == nil {
+		return b
+	}
+	return b.Hook(Hook[Req, Res]{
+		OnTimeout: func(context.Context, Req, *Meta) { fn() },
 	})
 }
 

@@ -25,7 +25,7 @@ func TestBuiltAction_Do_LifecycleOrder(t *testing.T) {
 		HookAfter(func(_ context.Context, _, _ string, _ error, _ *action.Meta) {
 			steps = append(steps, "after")
 		}).
-		HookExecuted(func(_ context.Context, _, _ string, _ *action.Meta) {
+		HookSuccess(func(_ context.Context, _, _ string, _ *action.Meta) {
 			steps = append(steps, "executed")
 		}).
 		Build()
@@ -59,7 +59,7 @@ func TestBuiltAction_Do_ErrorLifecycle(t *testing.T) {
 		HookError(func(_ context.Context, _ string, _ error, _ *action.Meta) {
 			errorHookCalled = true
 		}).
-		HookExecuted(func(_ context.Context, _, _ string, _ *action.Meta) {
+		HookSuccess(func(_ context.Context, _, _ string, _ *action.Meta) {
 			executedHookCalled = true
 		}).
 		Build()
@@ -72,7 +72,7 @@ func TestBuiltAction_Do_ErrorLifecycle(t *testing.T) {
 		t.Fatal("expected HookError to be called")
 	}
 	if executedHookCalled {
-		t.Fatal("HookExecuted must not be called when execution fails")
+		t.Fatal("HookSuccess must not be called when execution fails")
 	}
 }
 

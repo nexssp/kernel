@@ -9,7 +9,7 @@ import (
 	"github.com/nexssp/kernel/xerr"
 )
 
-func TestBuilderEventShorthands_ExecutedAndError(t *testing.T) {
+func TestBuilderEventShorthands_SuccessAndError(t *testing.T) {
 	t.Parallel()
 
 	var executed, errors int
@@ -17,7 +17,7 @@ func TestBuilderEventShorthands_ExecutedAndError(t *testing.T) {
 	ok := action.New("events.ok", func(_ context.Context, value string) (string, error) {
 		return value, nil
 	}).
-		HookExecutedEvent(func() { executed++ }).
+		HookSuccessEvent(func() { executed++ }).
 		HookErrorEvent(func(error) { errors++ }).
 		Build()
 
@@ -28,7 +28,7 @@ func TestBuilderEventShorthands_ExecutedAndError(t *testing.T) {
 	failed := action.New("events.failed", func(_ context.Context, _ string) (string, error) {
 		return "", xerr.Unavailable("temporary")
 	}).
-		HookExecutedEvent(func() { executed++ }).
+		HookSuccessEvent(func() { executed++ }).
 		HookErrorEvent(func(err error) {
 			if xerr.KindFrom(err) != xerr.KindUnavailable {
 				t.Errorf("unexpected error kind: %v", err)
@@ -46,6 +46,27 @@ func TestBuilderEventShorthands_ExecutedAndError(t *testing.T) {
 	}
 	if errors != 1 {
 		t.Fatalf("error events = %d, want 1", errors)
+	}
+}
+
+func TestBuilderEventShorthands_TimeoutBeforeError(t *testing.T) {
+	t.Parallel()
+
+	var events []string
+	act := action.New("events.timeout", func(ctx context.Context, _ string) (string, error) {
+		<-ctx.Done()
+		return "", ctx.Err()
+	}).
+		Timeout(time.Millisecond).
+		HookTimeoutEvent(func() { events = append(events, "timeout") }).
+		HookErrorEvent(func(error) { events = append(events, "error") }).
+		Build()
+
+	if _, err := act.Do(t.Context(), "request"); err == nil {
+		t.Fatal("expected timeout error")
+	}
+	if len(events) != 2 || events[0] != "timeout" || events[1] != "error" {
+		t.Fatalf("events = %v, want [timeout error]", events)
 	}
 }
 
@@ -118,8 +139,9 @@ func TestBuilderEventShorthands_NilCallbacksAreNoOps(t *testing.T) {
 	act := action.New("events.nil", func(_ context.Context, value string) (string, error) {
 		return value, nil
 	}).
-		HookExecutedEvent(nil).
+		HookSuccessEvent(nil).
 		HookErrorEvent(nil).
+		HookTimeoutEvent(nil).
 		HookRetryEvent(nil).
 		HookCacheHitEvent(nil).
 		HookCacheMissEvent(nil).

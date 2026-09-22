@@ -19,8 +19,8 @@ func TestHook_NilSink_ZeroAlloc(t *testing.T) {
 	ctx := context.Background()
 	meta := &action.Meta{Name: "bench.action"}
 	allocs := testing.AllocsPerRun(1000, func() {
-		if h.OnExecuted != nil {
-			h.OnExecuted(ctx, "req", "res", nil, meta)
+		if h.OnSuccess != nil {
+			h.OnSuccess(ctx, "req", "res", meta)
 		}
 	})
 	if allocs != 0 {
@@ -35,8 +35,8 @@ func BenchmarkHook_NilSink(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for range b.N {
-		if h.OnExecuted != nil {
-			h.OnExecuted(ctx, "req", "res", nil, meta)
+		if h.OnSuccess != nil {
+			h.OnSuccess(ctx, "req", "res", meta)
 		}
 	}
 }
@@ -48,13 +48,13 @@ func BenchmarkHook_NoopSink(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for range b.N {
-		h.OnExecuted(ctx, "req", "res", nil, meta)
+		h.OnSuccess(ctx, "req", "res", meta)
 	}
 }
 
 func BenchmarkMetricsSink_Emit(b *testing.B) {
 	sink := observe.NewMetricsSink()
-	event := observe.Event{Action: "orders.create", Kind: observe.KindExecuted}
+	event := observe.Event{Action: "orders.create", Kind: observe.KindSuccess}
 	b.ReportAllocs()
 	b.ResetTimer()
 	for range b.N {
@@ -64,7 +64,7 @@ func BenchmarkMetricsSink_Emit(b *testing.B) {
 
 func BenchmarkMemorySink_Emit(b *testing.B) {
 	sink := observe.NewMemorySink(100)
-	event := observe.Event{Action: "orders.create", Kind: observe.KindExecuted}
+	event := observe.Event{Action: "orders.create", Kind: observe.KindSuccess}
 	b.ReportAllocs()
 	b.ResetTimer()
 	for range b.N {
@@ -74,7 +74,7 @@ func BenchmarkMemorySink_Emit(b *testing.B) {
 
 func BenchmarkJSONLSink_Emit(b *testing.B) {
 	sink := observe.NewJSONLSink(io.Discard, 4096)
-	event := observe.Event{Action: "orders.create", Kind: observe.KindExecuted}
+	event := observe.Event{Action: "orders.create", Kind: observe.KindSuccess}
 	b.ReportAllocs()
 	b.ResetTimer()
 	for range b.N {
@@ -85,7 +85,7 @@ func BenchmarkJSONLSink_Emit(b *testing.B) {
 func BenchmarkPrometheusSink_Write(b *testing.B) {
 	sink := observe.NewPrometheusSink()
 	for range 10 {
-		sink.Emit(context.Background(), observe.Event{Action: "bench", Kind: observe.KindExecuted})
+		sink.Emit(context.Background(), observe.Event{Action: "bench", Kind: observe.KindSuccess})
 	}
 	b.ReportAllocs()
 	b.ResetTimer()

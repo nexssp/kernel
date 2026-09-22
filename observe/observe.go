@@ -9,8 +9,9 @@ import (
 )
 
 const (
-	KindExecuted     = "executed"
+	KindSuccess      = "success"
 	KindError        = "error"
+	KindTimeout      = "timeout"
 	KindRetry        = "retry"
 	KindCacheHit     = "cache_hit"
 	KindCacheMiss    = "cache_miss"
@@ -67,10 +68,15 @@ func Hook(sink Sink) action.AnyHook {
 		Before: func(ctx context.Context, _ any, _ *action.Meta) (context.Context, error) {
 			return context.WithValue(ctx, observationStartKey{}, time.Now()), nil
 		},
-		OnExecuted: func(ctx context.Context, req, res any, _ error, meta *action.Meta) {
-			ev := baseEvent(ctx, KindExecuted, meta)
+		OnSuccess: func(ctx context.Context, req, res any, meta *action.Meta) {
+			ev := baseEvent(ctx, KindSuccess, meta)
 			ev.Request = req
 			ev.Response = res
+			sink.Emit(ctx, ev)
+		},
+		OnTimeout: func(ctx context.Context, req any, meta *action.Meta) {
+			ev := baseEvent(ctx, KindTimeout, meta)
+			ev.Request = req
 			sink.Emit(ctx, ev)
 		},
 		OnError: func(ctx context.Context, req any, err error, meta *action.Meta) {
