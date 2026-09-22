@@ -41,7 +41,6 @@ func TestOnRetry_HookFires(t *testing.T) {
 	}
 }
 
-// transientError implements IsTransient; xerr.IsTransient relies on this dynamic interface.
 type transientError struct{}
 
 func (t *transientError) Error() string     { return "transient" }
@@ -55,12 +54,17 @@ func TestOnDeduplicated_HookFires(t *testing.T) {
 	handlerStart := make(chan struct{})
 
 	var handlerCalls atomic.Int32
+	var keyCalls atomic.Int32
+
 	act := action.New("hook.dedup", func(_ context.Context, _ string) (string, error) {
 		handlerCalls.Add(1)
 		<-handlerStart // block to ensure overlap
 		return "shared", nil
 	}).
-		Dedup(func(r string) string { return r }).
+		Dedup(func(r string) string {
+			keyCalls.Add(1)
+			return r
+		}).
 		Hook(action.Hook[string, string]{
 			OnDeduplicated: func(_ context.Context, _ string, _ *action.Meta) {
 				dedupCalled.Done()
@@ -80,8 +84,10 @@ func TestOnDeduplicated_HookFires(t *testing.T) {
 		}()
 	}
 
-	// Ensure both goroutines hit the middleware and queue up
-	time.Sleep(50 * time.Millisecond)
+	// Wait deterministically for both callers to reach keyFn
+	xtest.Eventually(t, 2*time.Second, func() bool { return keyCalls.Load() == 2 })
+	time.Sleep(20 * time.Millisecond) // ensure both reach deduplicate lock
+
 	close(handlerStart) // Release the handler
 
 	wg.Wait()
@@ -99,7 +105,6 @@ func TestOnCoalesced_HookFires(t *testing.T) {
 	// Gate: release handler only after both goroutines have entered the middleware.
 	entered := xtest.NewLatch()
 	release := make(chan struct{})
-	secondCallerEntered := make(chan struct{})
 	var keyCalls atomic.Int32
 
 	act := action.New("hook.coal", func(_ context.Context, _ string) (string, error) {
@@ -107,10 +112,7 @@ func TestOnCoalesced_HookFires(t *testing.T) {
 		<-release
 		return "coalesced", nil
 	}).Coalesce(c, func(r string) string {
-		if keyCalls.Add(1) == 2 {
-			close(secondCallerEntered)
-		}
-
+		keyCalls.Add(1)
 		return r
 	}).
 		Hook(action.Hook[string, string]{
@@ -123,12 +125,12 @@ func TestOnCoalesced_HookFires(t *testing.T) {
 	wg.Add(2)
 	go func() { defer wg.Done(); act.Do(context.Background(), "k") }()
 	entered.Wait(t, 2*time.Second) // caller 1 is inside the handler
+
 	go func() { defer wg.Done(); act.Do(context.Background(), "k") }()
-	select {
-	case <-secondCallerEntered:
-	case <-time.After(2 * time.Second):
-		t.Fatal("second caller did not enter coalescer")
-	}
+
+	// Wait deterministically for the second caller to reach keyFn
+	xtest.Eventually(t, 2*time.Second, func() bool { return keyCalls.Load() == 2 })
+	time.Sleep(20 * time.Millisecond) // ensure caller 2 reaches coalescer.Do
 
 	close(release)
 	wg.Wait()

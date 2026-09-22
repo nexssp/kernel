@@ -184,6 +184,7 @@ func TestCache_Singleflight_SingleMissNotification(t *testing.T) {
 	var handlerCalls atomic.Int32
 	var missCount atomic.Int32
 	var coalesceCount atomic.Int32
+	var keyCalls atomic.Int32
 
 	act := action.New("cache.concurrent_miss", func(ctx context.Context, _ string) (string, error) {
 		handlerCalls.Add(1)
@@ -195,7 +196,10 @@ func TestCache_Singleflight_SingleMissNotification(t *testing.T) {
 			return "flight_value", nil
 		}
 	}).
-		Cache(10*time.Minute, func(r string) string { return r }, store).
+		Cache(10*time.Minute, func(r string) string {
+			keyCalls.Add(1)
+			return r
+		}, store).
 		HookCacheMiss(func(_ context.Context, _ string, _ *action.Meta) {
 			missCount.Add(1)
 		}).
@@ -231,15 +235,13 @@ func TestCache_Singleflight_SingleMissNotification(t *testing.T) {
 		}()
 	}
 
-	// The public hook reports coalescing only after the shared flight completes;
-	// allow waiters to reach singleflight before releasing the blocked leader.
-	time.Sleep(20 * time.Millisecond)
+	xtest.Eventually(t, 2*time.Second, func() bool { return keyCalls.Load() == 10 })
+	time.Sleep(20 * time.Millisecond) // allow waiters to reach singleflight
 
 	// Hard business invariants:
 	close(block)
 	wg.Wait()
 
-	// Twarde niezmienniki biznesowe:
 	if got := handlerCalls.Load(); got != 1 {
 		t.Fatalf("CRITICAL: handler executed %d times, expected exactly 1", got)
 	}

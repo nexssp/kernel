@@ -110,11 +110,14 @@ func TestAdaptive_CancelledProbe_LeavesBreakerPermanentlyHalfOpen(t *testing.T) 
 	// 1 = block until ctx is done (used to simulate a probe that is canceled)
 	// 2 = succeed (used to prove the breaker recovers)
 
+	probeEntered := make(chan struct{})
+
 	act := action.New("cb.halfopen.cancel", func(ctx context.Context, _ string) (string, error) {
 		switch mode.Load() {
 		case 0:
 			return "", xerr.Internal("upstream down")
 		case 1:
+			close(probeEntered)
 			<-ctx.Done()
 			return "", ctx.Err()
 		default:
@@ -146,7 +149,8 @@ func TestAdaptive_CancelledProbe_LeavesBreakerPermanentlyHalfOpen(t *testing.T) 
 		defer close(probeDone)
 		_, _ = act.Do(probeCtx, "req")
 	}()
-	time.Sleep(15 * time.Millisecond) // let the probe transition Open -> HalfOpen
+
+	<-probeEntered // deterministic wait!
 	cancel()
 	<-probeDone
 
