@@ -3,6 +3,7 @@ package action_test
 import (
 	"context"
 	"iter"
+	"reflect"
 	"sync/atomic"
 	"testing"
 
@@ -54,6 +55,51 @@ func TestStream_HappyPath(t *testing.T) {
 	}
 	if !beforeCalled.Load() || !afterCalled.Load() {
 		t.Fatal("expected both Before and After hooks to execute")
+	}
+}
+
+func TestStream_AnyStreamActionBoundary(t *testing.T) {
+	t.Parallel()
+
+	stream := action.NewStream("search.documents", func(_ context.Context, query string) (iter.Seq2[int, error], error) {
+		return func(yield func(int, error) bool) {
+			for i := range 3 {
+				if !yield(len(query)+i, nil) {
+					return
+				}
+			}
+		}, nil
+	}).Route("GET /search")
+
+	var mounted action.AnyStreamAction = stream
+	if mounted.Describe().Name != "search.documents" {
+		t.Fatalf("unexpected stream name: %q", mounted.Describe().Name)
+	}
+	if len(mounted.GetBindings()) != 1 {
+		t.Fatalf("bindings = %d, want 1", len(mounted.GetBindings()))
+	}
+	if got := reflect.TypeOf(mounted.ReqPayload()); got != reflect.TypeFor[string]() {
+		t.Fatalf("request payload type = %v, want string", got)
+	}
+	if got := reflect.TypeOf(mounted.ResPayload()); got != reflect.TypeFor[int]() {
+		t.Fatalf("item payload type = %v, want int", got)
+	}
+
+	anyStream, err := mounted.DoStreamAny(context.Background(), "go")
+	if err != nil {
+		t.Fatalf("DoStreamAny failed: %v", err)
+	}
+	var got []any
+	anyStream(func(item any, err error) bool {
+		if err != nil {
+			t.Errorf("unexpected item error: %v", err)
+			return false
+		}
+		got = append(got, item)
+		return true
+	})
+	if len(got) != 3 || got[0] != 2 || got[2] != 4 {
+		t.Fatalf("items = %v, want [2 3 4]", got)
 	}
 }
 

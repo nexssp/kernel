@@ -62,6 +62,21 @@ type AnyAction interface {
 	CloneWithHooks(hooks ...AnyHook) AnyAction
 }
 
+// AnyStream is the type-erased stream returned at integration boundaries.
+// Each yielded value is an item; a non-nil item error terminates the stream's
+// current consumer according to the hosting Flow/transport policy.
+type AnyStream func(yield func(item any, err error) bool)
+
+// AnyStreamAction is the cold-path contract for stream actions. It is
+// intentionally separate from AnyAction: a stream is lazy, can fail during
+// iteration, and must not be coerced into a unary response.
+type AnyStreamAction interface {
+	Describable
+	TypedPayload
+	GetBindings() []Binding
+	DoStreamAny(ctx context.Context, req any) (AnyStream, error)
+}
+
 // TypedPayload allows plugins (like OpenAPI) to discover the underlying Request and Response
 // types at boot time without storing them in metadata or using reflection during execution.
 type TypedPayload interface {
