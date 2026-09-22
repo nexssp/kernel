@@ -2,145 +2,161 @@ package action
 
 import (
 	"fmt"
-	"sort"
+	"slices"
 )
 
-// NewRegistry assembles a set of libraries into a single immutable
-// lookup table.
-//
-// Registries never mutate actions. Every hook and every binding an
-// action will ever have must be attached before Build(). This keeps
-// NewRegistry pure and makes an action safe to reuse in any number of
-// registries.
+// Registry is an immutable lookup table assembled from one or more
+// Library values. It never mutates actions: hooks and bindings must be
+// attached before Build(), and library-level hooks are applied via
+// CloneWithHooks so originals stay clean.
+type Registry struct {
+	byName     map[string]AnyAction
+	byStream   map[string]AnyStreamAction
+	byOperator map[string]NamedOperator
+	actions    []AnyAction
+}
+
+// NewRegistry assembles the given libraries into a single Registry.
 func NewRegistry(libs ...Library) (*Registry, error) {
-	if len(libs) == 0 {
-		return &Registry{byName: make(map[string]AnyAction)}, nil
+	r := &Registry{
+		byName:     make(map[string]AnyAction),
+		byStream:   make(map[string]AnyStreamAction),
+		byOperator: make(map[string]NamedOperator),
 	}
 
-	allowed, err := buildOverridesMap(libs)
-	if err != nil {
-		return nil, err
-	}
+	actionOwners := make(map[string]string)
+	sourceOwners := make(map[string]string)
+	operatorOwners := make(map[string]string)
 
-	winners, err := collectWinners(libs, allowed)
-	if err != nil {
-		return nil, err
-	}
-
-	byName := indexWinners(winners)
-	applyAliases(byName, libs)
-
-	return &Registry{
-		byName:  byName,
-		actions: sortedWinners(winners),
-	}, nil
-}
-
-func buildOverridesMap(libs []Library) (map[string]string, error) {
-	allowed := make(map[string]string, 16)
 	for i := range libs {
 		lib := &libs[i]
-		for _, name := range lib.Overrides {
-			if previous, duplicate := allowed[name]; duplicate {
-				return nil, fmt.Errorf(
-					"action: %q and %q both declare Overrides for %q",
-					previous, lib.Name, name,
-				)
+		if err := r.registerActions(lib, actionOwners); err != nil {
+			return nil, err
+		}
+		if err := r.registerSources(lib, sourceOwners); err != nil {
+			return nil, err
+		}
+		if err := r.registerOperators(lib, operatorOwners); err != nil {
+			return nil, err
+		}
+	}
+
+	r.resolveAliases(libs)
+
+	return r, nil
+}
+
+func (r *Registry) registerActions(lib *Library, owners map[string]string) error {
+	seen := make(map[string]bool, len(lib.Actions))
+	for _, rawAct := range lib.Actions {
+		if rawAct == nil {
+			continue
+		}
+		act := rawAct
+		if len(lib.Hooks) > 0 {
+			act = act.CloneWithHooks(lib.Hooks...)
+		}
+		meta := act.Describe()
+		if meta == nil || meta.Name == "" {
+			return fmt.Errorf("library %q contains an action with no name", lib.Name)
+		}
+		if seen[meta.Name] {
+			return fmt.Errorf("library %q declares %q more than once", lib.Name, meta.Name)
+		}
+
+		isOverride := slices.Contains(lib.Overrides, meta.Name)
+		if !isOverride {
+			if owner, dup := owners[meta.Name]; dup {
+				return fmt.Errorf("action: %q declared by both %q and %q", meta.Name, owner, lib.Name)
 			}
-			allowed[name] = lib.Name
 		}
-	}
-	return allowed, nil
-}
 
-type winnerClaim struct {
-	library string
-	action  AnyAction
-}
+		seen[meta.Name] = true
+		owners[meta.Name] = lib.Name
+		r.byName[meta.Name] = act
 
-func collectWinners(libs []Library, allowed map[string]string) (map[string]winnerClaim, error) {
-	winners := make(map[string]winnerClaim, 64)
-	for i := range libs {
-		lib := &libs[i]
-		seen := make(map[string]bool, len(lib.Actions))
-		for _, act := range lib.Actions {
-			if err := collectOneAction(lib.Name, act, seen, winners, allowed); err != nil {
-				return nil, err
+		if isOverride {
+			for i, existing := range r.actions {
+				if existing != nil && existing.Describe() != nil && existing.Describe().Name == meta.Name {
+					r.actions[i] = act
+					break
+				}
 			}
+		} else {
+			r.actions = append(r.actions, act)
 		}
 	}
-	return winners, nil
-}
-
-func collectOneAction(
-	libName string,
-	act AnyAction,
-	seen map[string]bool,
-	winners map[string]winnerClaim,
-	allowed map[string]string,
-) error {
-	if act == nil {
-		return nil
-	}
-	meta := act.Describe()
-	if meta == nil || meta.Name == "" {
-		return fmt.Errorf("action: library %q contains an action with no name", libName)
-	}
-	if seen[meta.Name] {
-		return fmt.Errorf("action: library %q declares %q more than once", libName, meta.Name)
-	}
-	seen[meta.Name] = true
-
-	if previous, duplicate := winners[meta.Name]; duplicate {
-		if allowed[meta.Name] != libName {
-			return fmt.Errorf(
-				"action: %q declared by both %q and %q; add %q to %s.Overrides to accept",
-				meta.Name, previous.library, libName, meta.Name, libName,
-			)
-		}
-	}
-	winners[meta.Name] = winnerClaim{library: libName, action: act}
 	return nil
 }
 
-func indexWinners(winners map[string]winnerClaim) map[string]AnyAction {
-	byName := make(map[string]AnyAction, len(winners)*2)
-	for name, c := range winners {
-		byName[name] = c.action
+func (r *Registry) registerSources(lib *Library, owners map[string]string) error {
+	seen := make(map[string]bool, len(lib.Sources))
+	for _, rawSrc := range lib.Sources {
+		if rawSrc == nil {
+			continue
+		}
+		src := rawSrc
+		if len(lib.Hooks) > 0 {
+			src = src.CloneWithHooks(lib.Hooks...)
+		}
+		meta := src.Describe()
+		if meta == nil || meta.Name == "" {
+			return fmt.Errorf("library %q contains a source with no name", lib.Name)
+		}
+		if seen[meta.Name] {
+			return fmt.Errorf("library %q declares source %q more than once", lib.Name, meta.Name)
+		}
+		if owner, dup := owners[meta.Name]; dup {
+			return fmt.Errorf("source: %q declared by both %q and %q", meta.Name, owner, lib.Name)
+		}
+		seen[meta.Name] = true
+		owners[meta.Name] = lib.Name
+		r.byStream[meta.Name] = src
 	}
-	return byName
+	return nil
 }
 
-func applyAliases(byName map[string]AnyAction, libs []Library) {
+func (r *Registry) registerOperators(lib *Library, owners map[string]string) error {
+	seen := make(map[string]bool, len(lib.Operators))
+	for _, op := range lib.Operators {
+		if err := ValidateOperatorDeclaration(op); err != nil {
+			return fmt.Errorf("library %q: %w", lib.Name, err)
+		}
+		if seen[op.Name] {
+			return fmt.Errorf("library %q declares operator %q more than once", lib.Name, op.Name)
+		}
+		if owner, dup := owners[op.Name]; dup {
+			return fmt.Errorf("operator: %q declared by both %q and %q", op.Name, owner, lib.Name)
+		}
+		seen[op.Name] = true
+		owners[op.Name] = lib.Name
+		r.byOperator[op.Name] = op.Clone()
+	}
+	return nil
+}
+
+func (r *Registry) resolveAliases(libs []Library) {
 	for i := range libs {
 		lib := &libs[i]
 		for _, alias := range lib.Aliases {
-			canonical, exists := byName[alias.Canonical]
-			if !exists {
+			if alias.Canonical == "" || len(alias.Short) == 0 {
+				continue
+			}
+			target, ok := r.lookupAny(alias.Canonical)
+			if !ok {
 				continue
 			}
 			for _, short := range alias.Short {
 				if short == "" || short == alias.Canonical {
 					continue
 				}
-				if _, taken := byName[short]; taken {
+				if _, exists := r.lookupAny(short); exists {
 					continue
 				}
-				byName[short] = canonical
+				r.registerAlias(short, target)
 			}
 		}
 	}
-}
-
-func sortedWinners(winners map[string]winnerClaim) []AnyAction {
-	actions := make([]AnyAction, 0, len(winners))
-	for _, c := range winners {
-		actions = append(actions, c.action)
-	}
-	sort.Slice(actions, func(i, j int) bool {
-		return actions[i].Describe().Name < actions[j].Describe().Name
-	})
-	return actions
 }
 
 func MustNewRegistry(libs ...Library) *Registry {
@@ -151,39 +167,31 @@ func MustNewRegistry(libs ...Library) *Registry {
 	return reg
 }
 
-// Library is a named group of actions.
-//
-// There is no Hooks field. Cross-cutting behavior is attached to each
-// action before Build() via .AnyHook(...). This keeps registries pure
-// and lets the same action appear in any number of registries.
-type Library struct {
-	Name        string
-	Description string
-	Actions     []AnyAction
-	Aliases     []Alias
-	Overrides   []string
-}
-
-type Alias struct {
-	Canonical string
-	Short     []string
-}
-
-func Of(actions ...AnyAction) Library {
-	return Library{Name: "inline", Actions: actions}
-}
-
-type Registry struct {
-	byName  map[string]AnyAction
-	actions []AnyAction
-}
-
 func (r *Registry) Get(name string) (AnyAction, bool) {
 	if r == nil {
 		return nil, false
 	}
 	act, ok := r.byName[name]
 	return act, ok
+}
+
+func (r *Registry) GetStream(name string) (AnyStreamAction, bool) {
+	if r == nil {
+		return nil, false
+	}
+	src, ok := r.byStream[name]
+	return src, ok
+}
+
+func (r *Registry) GetOperator(name string) (NamedOperator, bool) {
+	if r == nil {
+		return NamedOperator{}, false
+	}
+	op, ok := r.byOperator[name]
+	if !ok {
+		return NamedOperator{}, false
+	}
+	return op.Clone(), true
 }
 
 func (r *Registry) Actions() []AnyAction {
@@ -198,4 +206,53 @@ func (r *Registry) Len() int {
 		return 0
 	}
 	return len(r.actions)
+}
+
+func (r *Registry) lookupAny(name string) (any, bool) {
+	if a, ok := r.byName[name]; ok {
+		return a, true
+	}
+	if s, ok := r.byStream[name]; ok {
+		return s, true
+	}
+	if op, ok := r.byOperator[name]; ok {
+		return op, true
+	}
+	return nil, false
+}
+
+func (r *Registry) registerAlias(short string, target any) {
+	switch v := target.(type) {
+	case AnyAction:
+		r.byName[short] = v
+	case AnyStreamAction:
+		r.byStream[short] = v
+	case NamedOperator:
+		r.byOperator[short] = v
+	}
+}
+
+func (r *Registry) Names() []string {
+	if r == nil {
+		return nil
+	}
+
+	seen := make(map[string]struct{})
+	for n := range r.byName {
+		seen[n] = struct{}{}
+	}
+	for n := range r.byStream {
+		seen[n] = struct{}{}
+	}
+	for n := range r.byOperator {
+		seen[n] = struct{}{}
+	}
+
+	out := make([]string, 0, len(seen))
+	for n := range seen {
+		out = append(out, n)
+	}
+	slices.Sort(out)
+
+	return out
 }

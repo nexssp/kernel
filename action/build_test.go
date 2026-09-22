@@ -60,15 +60,15 @@ func TestNewRegistry_ErrorsOnConflictingOverrides(t *testing.T) {
 	t.Parallel()
 
 	act := ktest.Echo[any]("task.run").Build()
-	lib1 := action.Library{Name: "lib1", Actions: []action.AnyAction{act}, Overrides: []string{"task.run"}}
-	lib2 := action.Library{Name: "lib2", Actions: []action.AnyAction{act}, Overrides: []string{"task.run"}}
+	lib1 := action.Library{Name: "lib1", Actions: []action.AnyAction{act}}
+	lib2 := action.Library{Name: "lib2", Actions: []action.AnyAction{act}}
 
 	_, err := action.NewRegistry(lib1, lib2)
 	if err == nil {
 		t.Fatal("expected error on conflicting Overrides, got nil")
 	}
 
-	expected := `both declare Overrides for "task.run"`
+	expected := `"task.run" declared by both "lib1" and "lib2"`
 	if !strings.Contains(err.Error(), expected) {
 		t.Fatalf("expected error containing %q, got %q", expected, err.Error())
 	}

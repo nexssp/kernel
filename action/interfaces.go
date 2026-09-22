@@ -68,12 +68,20 @@ type AnyAction interface {
 type AnyStream func(yield func(item any, err error) bool)
 
 // AnyStreamAction is the cold-path contract for stream actions. It is
-// intentionally separate from AnyAction: a stream is lazy, can fail during
-// iteration, and must not be coerced into a unary response.
+// intentionally separate from AnyAction: a stream is lazy, can fail
+// during iteration, and must not be coerced into a unary response.
+//
+// Hook lifecycle: Before fires when DoStreamAny is called; After and
+// OnError fire when the stream is exhausted, errored, or the consumer
+// stops early via yield(false). OnRetry/OnCacheHit/OnCacheMiss are
+// reserved for future middleware and are not yet fired by StreamAction.
 type AnyStreamAction interface {
 	Describable
 	TypedPayload
 	GetBindings() []Binding
+	GetAnyHooks() []AnyHook
+	AddAnyHook(h ...AnyHook)
+	CloneWithHooks(h ...AnyHook) AnyStreamAction
 	DoStreamAny(ctx context.Context, req any) (AnyStream, error)
 }
 
