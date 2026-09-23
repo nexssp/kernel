@@ -29,8 +29,6 @@ func TestErrChain_Unwrap(t *testing.T) {
 	}
 }
 
-// ── sprintProd — brak wycieków Cause na prod ────────────────────────────────
-
 func TestSprintProd_DoesNotLeakCause(t *testing.T) {
 	secret := errors.New("pq: password authentication failed for user admin")
 	err := &AppError{
