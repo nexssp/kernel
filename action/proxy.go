@@ -16,38 +16,38 @@ var (
 	_ Composite = (*Proxy)(nil)
 )
 
+type proxyHolder struct {
+	action AnyAction
+}
+
 // Proxy wraps an AnyAction and allows it to be atomically hot-swapped at runtime
-// with zero downtime and zero locks on the hot path.
+// with zero downtime, zero locks, and zero restrictions on concrete types.
 type Proxy struct {
-	active atomic.Value
+	active atomic.Pointer[proxyHolder]
 }
 
 // NewProxy creates a new hot-swappable proxy initialized with a starting action.
 func NewProxy(initial AnyAction) *Proxy {
 	p := &Proxy{}
 	if initial != nil {
-		p.active.Store(initial)
+		p.active.Store(&proxyHolder{action: initial})
 	}
 	return p
 }
 
 // Current returns the active action or nil if uninitialized.
 func (p *Proxy) Current() AnyAction {
-	v := p.active.Load()
-	if v == nil {
+	holder := p.active.Load()
+	if holder == nil {
 		return nil
 	}
-	act, ok := v.(AnyAction)
-	if !ok {
-		return nil
-	}
-	return act
+	return holder.action
 }
 
 // Swap atomically replaces the underlying action with a new one.
 func (p *Proxy) Swap(newAction AnyAction) {
 	if newAction != nil {
-		p.active.Store(newAction)
+		p.active.Store(&proxyHolder{action: newAction})
 	}
 }
 
