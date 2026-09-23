@@ -27,6 +27,13 @@ func secureJitterFloat() float64 {
 // Usage: .Retry(3, action.ExponentialBackoff(100*time.Millisecond, 5*time.Second))
 func ExponentialBackoff(base, maxDuration time.Duration) func(attempt int) time.Duration {
 	return func(attempt int) time.Duration {
+		if attempt <= 1 {
+			return base
+		}
+		// 2^30 nanoseconds exceeds any realistic maxDuration and prevents float64 -> int64 overflow.
+		if attempt > 30 {
+			return maxDuration
+		}
 		d := time.Duration(float64(base) * math.Pow(2, float64(attempt-1)))
 		if d > maxDuration {
 			return maxDuration
@@ -38,18 +45,24 @@ func ExponentialBackoff(base, maxDuration time.Duration) func(attempt int) time.
 // ExponentialJitter adds ±30% random jitter to ExponentialBackoff.
 // Prevents thundering-herd on simultaneous retries.
 //
+// The result is always capped at maxDuration. Jitter is applied to
+// the exponential value and then the whole result is clamped.
+//
 // Usage: .Retry(3, action.ExponentialJitter(100*time.Millisecond, 5*time.Second))
 func ExponentialJitter(base, maxDuration time.Duration) func(attempt int) time.Duration {
 	exp := ExponentialBackoff(base, maxDuration)
 	return func(attempt int) time.Duration {
 		d := float64(exp(attempt))
-		// ±30% jitter
 		jitter := d * 0.3 * (secureJitterFloat()*2 - 1)
 		result := time.Duration(d + jitter)
-		if result < 0 {
+		switch {
+		case result < base:
 			return base
+		case result > maxDuration:
+			return maxDuration
+		default:
+			return result
 		}
-		return result
 	}
 }
 

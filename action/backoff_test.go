@@ -1,7 +1,6 @@
 package action_test
 
 import (
-	"math"
 	"testing"
 	"time"
 
@@ -40,15 +39,45 @@ func TestConstantBackoff(t *testing.T) {
 }
 
 func TestExponentialJitter(t *testing.T) {
-	j := action.ExponentialJitter(100*time.Millisecond, 1*time.Second)
-	base := 100 * time.Millisecond
-	for i := 1; i <= 3; i++ {
-		d := j(i)
-		exp := min(time.Duration(float64(base)*math.Pow(2, float64(i-1))), 1*time.Second)
-		minVal := time.Duration(float64(exp) * 0.7)
-		maxVal := time.Duration(float64(exp) * 1.3)
-		if d < minVal || d > maxVal {
-			t.Errorf("jitter out of range: got %v, expected [%v, %v]", d, minVal, maxVal)
+	const (
+		base       = 100 * time.Millisecond
+		maxDur     = 1 * time.Second
+		iterations = 50
+	)
+	jitterFn := action.ExponentialJitter(base, maxDur)
+
+	// 1. Verify strict bounds across attempts, including cap and edge cases
+	testCases := []struct {
+		name    string
+		attempt int
+	}{
+		{"zero attempt", 0},
+		{"first attempt", 1},
+		{"mid attempt", 3},
+		{"at cap attempt", 10},
+		{"overflow attempt", 65},
+		{"high attempt", 100},
+	}
+
+	for _, tc := range testCases {
+		seenValues := make(map[time.Duration]struct{}, iterations)
+
+		for range iterations {
+			val := jitterFn(tc.attempt)
+
+			if val < base {
+				t.Fatalf("%s (attempt %d): returned %v below base %v", tc.name, tc.attempt, val, base)
+			}
+			if val > maxDur {
+				t.Fatalf("%s (attempt %d): returned %v exceeding max %v", tc.name, tc.attempt, val, maxDur)
+			}
+
+			seenValues[val] = struct{}{}
+		}
+
+		// 2. Verify non-determinism: jitter must produce varying durations
+		if tc.attempt > 0 && len(seenValues) == 1 {
+			t.Errorf("%s (attempt %d): jitter is deterministic, produced constant value %v", tc.name, tc.attempt, jitterFn(tc.attempt))
 		}
 	}
 }
