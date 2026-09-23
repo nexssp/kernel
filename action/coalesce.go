@@ -8,14 +8,16 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 
 	"github.com/nexssp/kernel/xerr"
 )
 
 type coalesceEntry struct {
-	result any
-	err    error
-	ready  chan struct{}
+	result  any
+	err     error
+	ready   chan struct{}
+	waiters atomic.Int32
 }
 
 // Coalescer coordinates in-flight request sharing across different actions or callers.
@@ -32,6 +34,8 @@ func NewCoalescer() *Coalescer {
 func (c *Coalescer) Do(ctx context.Context, key string, fn func(context.Context) (any, error)) (val any, shared bool, err error) {
 	c.mu.Lock()
 	if entry, ok := c.pending[key]; ok {
+		entry.waiters.Add(1)
+		defer entry.waiters.Add(-1)
 		c.mu.Unlock()
 		select {
 		case <-ctx.Done():
@@ -73,6 +77,15 @@ func (c *Coalescer) Do(ctx context.Context, key string, fn func(context.Context)
 	c.mu.Unlock()
 
 	return result, false, execErr
+}
+
+func (c *Coalescer) Waiters(key string) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if entry, ok := c.pending[key]; ok {
+		return int(entry.waiters.Load())
+	}
+	return 0
 }
 
 // CoalesceMiddleware wraps an action with shared request coalescing.

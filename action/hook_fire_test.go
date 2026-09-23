@@ -41,6 +41,7 @@ func TestOnRetry_HookFires(t *testing.T) {
 	}
 }
 
+// transientError implements IsTransient; xerr.IsTransient relies on this dynamic interface.
 type transientError struct{}
 
 func (t *transientError) Error() string     { return "transient" }
@@ -54,17 +55,12 @@ func TestOnDeduplicated_HookFires(t *testing.T) {
 	handlerStart := make(chan struct{})
 
 	var handlerCalls atomic.Int32
-	var keyCalls atomic.Int32
-
 	act := action.New("hook.dedup", func(_ context.Context, _ string) (string, error) {
 		handlerCalls.Add(1)
 		<-handlerStart // block to ensure overlap
 		return "shared", nil
 	}).
-		Dedup(func(r string) string {
-			keyCalls.Add(1)
-			return r
-		}).
+		Dedup(func(r string) string { return r }).
 		Hook(action.Hook[string, string]{
 			OnDeduplicated: func(_ context.Context, _ string, _ *action.Meta) {
 				dedupCalled.Done()
@@ -84,10 +80,8 @@ func TestOnDeduplicated_HookFires(t *testing.T) {
 		}()
 	}
 
-	// Wait deterministically for both callers to reach keyFn
-	xtest.Eventually(t, 2*time.Second, func() bool { return keyCalls.Load() == 2 })
-	time.Sleep(20 * time.Millisecond) // ensure both reach deduplicate lock
-
+	// Ensure both goroutines hit the middleware and queue up
+	time.Sleep(50 * time.Millisecond)
 	close(handlerStart) // Release the handler
 
 	wg.Wait()
@@ -99,42 +93,39 @@ func TestOnDeduplicated_HookFires(t *testing.T) {
 
 func TestOnCoalesced_HookFires(t *testing.T) {
 	t.Parallel()
+
 	c := action.NewCoalescer()
 	coalescedHookCalled := make(chan struct{})
 
-	// Gate: release handler only after both goroutines have entered the middleware.
 	entered := xtest.NewLatch()
 	release := make(chan struct{})
-	var keyCalls atomic.Int32
 
 	act := action.New("hook.coal", func(_ context.Context, _ string) (string, error) {
 		entered.Signal()
 		<-release
 		return "coalesced", nil
 	}).Coalesce(c, func(r string) string {
-		keyCalls.Add(1)
 		return r
-	}).
-		Hook(action.Hook[string, string]{
-			OnCoalesced: func(_ context.Context, _ string, _ *action.Meta) {
-				close(coalescedHookCalled)
-			},
-		}).Build()
+	}).Hook(action.Hook[string, string]{
+		OnCoalesced: func(_ context.Context, _ string, _ *action.Meta) {
+			close(coalescedHookCalled)
+		},
+	}).Build()
 
 	var wg sync.WaitGroup
 	wg.Add(2)
-	go func() { defer wg.Done(); act.Do(context.Background(), "k") }()
-	entered.Wait(t, 2*time.Second) // caller 1 is inside the handler
 
-	go func() { defer wg.Done(); act.Do(context.Background(), "k") }()
+	go func() { defer wg.Done(); _, _ = act.Do(context.Background(), "k") }()
+	entered.Wait(t, 2*time.Second)
 
-	// Wait deterministically for the second caller to reach keyFn
-	xtest.Eventually(t, 2*time.Second, func() bool { return keyCalls.Load() == 2 })
-	time.Sleep(20 * time.Millisecond) // ensure caller 2 reaches coalescer.Do
+	go func() { defer wg.Done(); _, _ = act.Do(context.Background(), "k") }()
+
+	xtest.Eventually(t, 2*time.Second, func() bool {
+		return c.Waiters("hook.coal:k") >= 1
+	})
 
 	close(release)
 	wg.Wait()
 
-	// The hook runs after the shared result is released to the waiting caller.
 	xtest.WaitForSignal(t, coalescedHookCalled, 2*time.Second)
 }
