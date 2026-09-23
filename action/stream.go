@@ -48,9 +48,18 @@ func (a *StreamAction[Req, T]) ResPayload() any {
 	return item
 }
 
-// DoStreamAny is the dynamic integration boundary used by Flow and transports.
+// DoStreamAny is the dynamic integration boundary used by Flow and
+// transports. When req's type already matches Req, the assertion is a
+// single CPU cycle. Otherwise the request is coerced through the same
+// JSON-tag-driven decoder that DoAny uses, so a map produced by the
+// flow compiler (e.g. {dir: "/tmp/x", ext: "txt"}) lands in the typed
+// Req struct instead of being silently dropped.
 func (a *StreamAction[Req, T]) DoStreamAny(ctx context.Context, req any) (AnyStream, error) {
-	seq, err := a.Do(ctx, assertTo[Req](req))
+	typedReq, err := coerceStreamReq[Req](req)
+	if err != nil {
+		return nil, err
+	}
+	seq, err := a.Do(ctx, typedReq)
 	if err != nil {
 		return nil, err
 	}
@@ -61,6 +70,21 @@ func (a *StreamAction[Req, T]) DoStreamAny(ctx context.Context, req any) (AnyStr
 			}
 		}
 	}, nil
+}
+
+// coerceStreamReq is the stream-boundary sibling of Coerce. It is
+// identical in behavior but returns an explicit error instead of
+// swallowing it, so a malformed request fails the stream source with
+// a clear message instead of silently running with a zero value.
+func coerceStreamReq[Req any](v any) (Req, error) {
+	if t, ok := v.(Req); ok {
+		return t, nil
+	}
+	var target Req
+	if err := Assign(&target, v); err != nil {
+		return target, err
+	}
+	return target, nil
 }
 
 func (a *StreamAction[Req, T]) Use(h ...Hook[Req, iter.Seq2[T, error]]) *StreamAction[Req, T] {
