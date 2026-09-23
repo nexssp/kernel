@@ -6,20 +6,25 @@ package action
 
 import (
 	"context"
-	"iter"
 )
 
-// HookSuccessEvent runs fn when the stream completes successfully.
+// HookStartEvent runs fn when the stream execution begins.
+func (a *StreamAction[Req, T]) HookStartEvent(fn func()) *StreamAction[Req, T] {
+	if fn == nil {
+		return a
+	}
+	return a.UseStream(StreamHook[Req, T]{
+		OnStart: func(_ context.Context, _ Req, _ *Meta) { fn() },
+	})
+}
+
+// HookSuccessEvent runs fn when the stream completes successfully (EOF).
 func (a *StreamAction[Req, T]) HookSuccessEvent(fn func()) *StreamAction[Req, T] {
 	if fn == nil {
 		return a
 	}
-	return a.Use(Hook[Req, iter.Seq2[T, error]]{
-		After: func(_ context.Context, _ Req, _ iter.Seq2[T, error], err error, _ *Meta) {
-			if err == nil {
-				fn()
-			}
-		},
+	return a.UseStream(StreamHook[Req, T]{
+		OnSuccess: func(_ context.Context, _ Req, _ *Meta) { fn() },
 	})
 }
 
@@ -28,22 +33,38 @@ func (a *StreamAction[Req, T]) HookErrorEvent(fn func(error)) *StreamAction[Req,
 	if fn == nil {
 		return a
 	}
-	return a.Use(Hook[Req, iter.Seq2[T, error]]{
-		After: func(_ context.Context, _ Req, _ iter.Seq2[T, error], err error, _ *Meta) {
-			if err != nil {
-				fn(err)
-			}
-		},
+	return a.UseStream(StreamHook[Req, T]{
+		OnError: func(_ context.Context, _ Req, err error, _ *Meta) { fn(err) },
 	})
 }
 
-// HookCancelEvent runs fn when the stream context is canceled.
+// HookTimeoutEvent runs fn when the stream context exceeds its deadline.
+func (a *StreamAction[Req, T]) HookTimeoutEvent(fn func()) *StreamAction[Req, T] {
+	if fn == nil {
+		return a
+	}
+	return a.UseStream(StreamHook[Req, T]{
+		OnTimeout: func(_ context.Context, _ Req, _ *Meta) { fn() },
+	})
+}
+
+// HookCancelEvent runs fn when the stream context is explicitly canceled.
 func (a *StreamAction[Req, T]) HookCancelEvent(fn func()) *StreamAction[Req, T] {
 	if fn == nil {
 		return a
 	}
-	return a.Use(Hook[Req, iter.Seq2[T, error]]{
+	return a.UseStream(StreamHook[Req, T]{
 		OnCancel: func(_ context.Context, _ Req, _ *Meta) { fn() },
+	})
+}
+
+// HookAfterEvent runs fn unconditionally when the stream is fully closed.
+func (a *StreamAction[Req, T]) HookAfterEvent(fn func()) *StreamAction[Req, T] {
+	if fn == nil {
+		return a
+	}
+	return a.UseStream(StreamHook[Req, T]{
+		After: func(_ context.Context, _ Req, _ error, _ *Meta) { fn() },
 	})
 }
 

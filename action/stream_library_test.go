@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"iter"
-	"reflect"
 	"testing"
 
 	"github.com/nexssp/kernel/action"
@@ -38,17 +37,10 @@ func intSource(name string, n int) *action.StreamAction[struct{}, int] {
 	})
 }
 
-func noopOperator(name string) action.NamedOperator {
-	return action.NamedOperator{
-		Name:    name,
-		InType:  reflect.TypeFor[int](),
-		OutType: reflect.TypeFor[int](),
-		Build: func(_ map[string]any) (action.StreamOperator, error) {
-			return action.NewTypedStreamOperator[int, int](name,
-				func(up iter.Seq2[int, error]) iter.Seq2[int, error] { return up },
-			), nil
-		},
-	}
+func noopOperator[T any](name string) action.NamedOperator {
+	return action.NewSimpleOperator(name, func(up iter.Seq2[T, error]) iter.Seq2[T, error] {
+		return up
+	})
 }
 
 // ── StreamAction anyHooks ───────────────────────────────────────────────
@@ -264,7 +256,7 @@ func TestLibrary_Hooks_NotAppliedToOperators(t *testing.T) {
 
 	reg, err := action.NewRegistry(action.Library{
 		Name:      "test",
-		Operators: []action.NamedOperator{noopOperator("op")},
+		Operators: []action.NamedOperator{noopOperator[int]("op")},
 		Hooks: []action.AnyHook{
 			{
 				Before: func(ctx context.Context, _ any, _ *action.Meta) (context.Context, error) {

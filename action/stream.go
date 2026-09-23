@@ -2,19 +2,23 @@ package action
 
 import (
 	"context"
+	"errors"
 	"iter"
+	"reflect"
 
+	"github.com/nexssp/kernel/stream"
 	"github.com/nexssp/kernel/xerr"
 )
 
 type StreamHandler[Req, T any] func(context.Context, Req) (iter.Seq2[T, error], error)
 
 type StreamAction[Req, T any] struct {
-	meta     *Meta
-	bindings []Binding
-	handler  StreamHandler[Req, T]
-	hooks    []Hook[Req, iter.Seq2[T, error]]
-	anyHooks []AnyHook
+	meta        *Meta
+	bindings    []Binding
+	handler     StreamHandler[Req, T]
+	hooks       []Hook[Req, iter.Seq2[T, error]]
+	anyHooks    []AnyHook
+	streamHooks []StreamHook[Req, T]
 }
 
 func NewStream[Req, T any](name string, h StreamHandler[Req, T]) *StreamAction[Req, T] {
@@ -22,8 +26,6 @@ func NewStream[Req, T any](name string, h StreamHandler[Req, T]) *StreamAction[R
 }
 
 var _ AnyStreamAction = (*StreamAction[struct{}, struct{}])(nil)
-
-// ── Metadata ────────────────────────────────────────────────────────────
 
 func (a *StreamAction[Req, T]) Describe() *Meta { return a.meta }
 
@@ -46,64 +48,7 @@ func (a *StreamAction[Req, T]) ResPayload() any {
 	return item
 }
 
-// ── Hook registration ───────────────────────────────────────────────────
-
-// Use attaches typed hooks. The typed hook signature differs from
-// AnyAction: the "response" side is the iterator itself, not a single
-// value. Lifecycle events fire when the stream is exhausted, errored,
-// or the consumer stops early via yield(false).
-func (a *StreamAction[Req, T]) Use(h ...Hook[Req, iter.Seq2[T, error]]) *StreamAction[Req, T] {
-	a.hooks = append(a.hooks, h...)
-	return a
-}
-
-// GetAnyHooks returns a snapshot of both typed and erased hooks, with
-// typed hooks adapted through Adapt so the caller sees a uniform slice.
-func (a *StreamAction[Req, T]) GetAnyHooks() []AnyHook {
-	if a == nil {
-		return nil
-	}
-	out := make([]AnyHook, 0, len(a.hooks)+len(a.anyHooks))
-	for _, h := range a.hooks {
-		out = append(out, Adapt(h))
-	}
-	out = append(out, a.anyHooks...)
-	return out
-}
-
-// AddAnyHook appends erased hooks. They fire with the stream's input
-// request and the resulting iterator as the "response".
-func (a *StreamAction[Req, T]) AddAnyHook(h ...AnyHook) {
-	if a == nil || len(h) == 0 {
-		return
-	}
-	a.anyHooks = append(a.anyHooks, h...)
-}
-
-// CloneWithHooks returns a new StreamAction carrying the same handler,
-// bindings, and existing hooks, plus the ones passed in. The receiver
-// is never modified. Used by registries to apply library-level hooks
-// without mutating originals.
-func (a *StreamAction[Req, T]) CloneWithHooks(hooks ...AnyHook) AnyStreamAction {
-	if a == nil {
-		return nil
-	}
-	clone := &StreamAction[Req, T]{
-		meta:     a.meta,
-		bindings: append([]Binding(nil), a.bindings...),
-		handler:  a.handler,
-		hooks:    append([]Hook[Req, iter.Seq2[T, error]](nil), a.hooks...),
-	}
-	clone.anyHooks = append(clone.anyHooks, a.anyHooks...)
-	clone.anyHooks = append(clone.anyHooks, hooks...)
-	return clone
-}
-
-// ── Execution ───────────────────────────────────────────────────────────
-
-// DoStreamAny is the dynamic integration boundary used by Flow and
-// transports. A mismatched request is converted to the zero value
-// rather than panicking, matching the kernel's other dynamic boundaries.
+// DoStreamAny is the dynamic integration boundary used by Flow and transports.
 func (a *StreamAction[Req, T]) DoStreamAny(ctx context.Context, req any) (AnyStream, error) {
 	seq, err := a.Do(ctx, assertTo[Req](req))
 	if err != nil {
@@ -118,57 +63,115 @@ func (a *StreamAction[Req, T]) DoStreamAny(ctx context.Context, req any) (AnyStr
 	}, nil
 }
 
+func (a *StreamAction[Req, T]) Use(h ...Hook[Req, iter.Seq2[T, error]]) *StreamAction[Req, T] {
+	a.hooks = append(a.hooks, h...)
+	return a
+}
+
+// UseStream adds typed stream lifecycle hooks. OnItem is deliberately opt-in.
+func (a *StreamAction[Req, T]) UseStream(h ...StreamHook[Req, T]) *StreamAction[Req, T] {
+	a.streamHooks = append(a.streamHooks, h...)
+	return a
+}
+
+func (a *StreamAction[Req, T]) GetAnyHooks() []AnyHook {
+	if a == nil {
+		return nil
+	}
+	out := make([]AnyHook, 0, len(a.hooks)+len(a.anyHooks))
+	for _, h := range a.hooks {
+		out = append(out, Adapt(h))
+	}
+	out = append(out, a.anyHooks...)
+	return out
+}
+
+func (a *StreamAction[Req, T]) AddAnyHook(h ...AnyHook) {
+	if a == nil || len(h) == 0 {
+		return
+	}
+	reqType := reflect.TypeFor[Req]()
+	resType := reflect.TypeFor[iter.Seq2[T, error]]()
+	for _, hook := range h {
+		if hook.OnBuild != nil && !hook.OnBuild(a.meta, reqType, resType) {
+			continue
+		}
+		a.anyHooks = append(a.anyHooks, hook)
+	}
+}
+
+func (a *StreamAction[Req, T]) CloneWithHooks(hooks ...AnyHook) AnyStreamAction {
+	if a == nil {
+		return nil
+	}
+	clone := &StreamAction[Req, T]{
+		meta:        a.meta,
+		bindings:    append([]Binding(nil), a.bindings...),
+		handler:     a.handler,
+		hooks:       append([]Hook[Req, iter.Seq2[T, error]](nil), a.hooks...),
+		streamHooks: append([]StreamHook[Req, T](nil), a.streamHooks...),
+	}
+	clone.anyHooks = append(append([]AnyHook(nil), a.anyHooks...), hooks...)
+	return clone
+}
+
 func (a *StreamAction[Req, T]) Do(ctx context.Context, req Req) (seq iter.Seq2[T, error], err error) {
 	meta := a.meta
-	var typedHooksRan, anyHooksRan int
+	var hooksRan, anyHooksRan int
+	fireStreamStart(ctx, a.streamHooks, req, meta)
 
 	defer func() {
 		if r := recover(); r != nil {
 			err = xerr.PanicRecovery(r)
-			fireStreamAfterHooks(ctx, a.hooks, typedHooksRan, req, nil, err, meta)
-			fireStreamAnyAfterHooks(ctx, a.anyHooks, anyHooksRan, req, nil, err, meta)
+			fireStreamTerminal(ctx, a.streamHooks, req, err, meta)
+			fireStreamAfterHooks(ctx, a.hooks, a.anyHooks, hooksRan, anyHooksRan, req, nil, err, meta)
 		}
 	}()
 
-	// ── Before: anyHooks first (outermost layer), then typed hooks ──
-	var beforeErr error
-
-	ctx, anyHooksRan, beforeErr = runStreamAnyBeforeHooks(ctx, a.anyHooks, req, meta)
-	if beforeErr != nil {
-		return func(yield func(T, error) bool) {
-			var zero T
-			yield(zero, beforeErr)
-		}, beforeErr
+	for i, h := range a.anyHooks {
+		if h.Before != nil {
+			var beforeErr error
+			//nolint:fatcontext // bounded hook slice
+			ctx, beforeErr = h.Before(ctx, any(req), meta)
+			if beforeErr != nil {
+				fireStreamTerminal(ctx, a.streamHooks, req, beforeErr, meta)
+				fireStreamAfterHooks(ctx, a.hooks, a.anyHooks, hooksRan, i, req, nil, beforeErr, meta)
+				return errorIterator[T](beforeErr), beforeErr
+			}
+		}
+		anyHooksRan++
 	}
 
-	ctx, typedHooksRan, beforeErr = runStreamTypedBeforeHooks(ctx, a.hooks, req, meta)
-	if beforeErr != nil {
-		return func(yield func(T, error) bool) {
-			var zero T
-			yield(zero, beforeErr)
-		}, beforeErr
+	for i, h := range a.hooks {
+		if h.Before != nil {
+			var beforeErr error
+			//nolint:fatcontext // bounded hook slice
+			ctx, beforeErr = h.Before(ctx, req, meta)
+			if beforeErr != nil {
+				fireStreamTerminal(ctx, a.streamHooks, req, beforeErr, meta)
+				fireStreamAfterHooks(ctx, a.hooks, a.anyHooks, i, anyHooksRan, req, nil, beforeErr, meta)
+				return errorIterator[T](beforeErr), beforeErr
+			}
+		}
+		hooksRan++
 	}
 
 	rawSeq, err := a.handler(ctx, req)
 	if err != nil {
-		fireStreamAfterHooks(ctx, a.hooks, typedHooksRan, req, nil, err, meta)
-		fireStreamAnyAfterHooks(ctx, a.anyHooks, anyHooksRan, req, nil, err, meta)
-		return func(yield func(T, error) bool) {
-			var zero T
-			yield(zero, err)
-		}, err
+		fireStreamTerminal(ctx, a.streamHooks, req, err, meta)
+		fireStreamAfterHooks(ctx, a.hooks, a.anyHooks, hooksRan, anyHooksRan, req, nil, err, meta)
+		return errorIterator[T](err), err
 	}
 
 	wrappedSeq := func(yield func(T, error) bool) {
 		var lastErr error
-
 		defer func() {
 			r := recover()
 			if r != nil {
 				lastErr = xerr.PanicRecovery(r)
 			}
-			fireStreamAfterHooks(ctx, a.hooks, typedHooksRan, req, rawSeq, lastErr, meta)
-			fireStreamAnyAfterHooks(ctx, a.anyHooks, anyHooksRan, req, rawSeq, lastErr, meta)
+			fireStreamTerminal(ctx, a.streamHooks, req, lastErr, meta)
+			fireStreamAfterHooks(ctx, a.hooks, a.anyHooks, hooksRan, anyHooksRan, req, rawSeq, lastErr, meta)
 			if r != nil {
 				panic(r)
 			}
@@ -181,100 +184,91 @@ func (a *StreamAction[Req, T]) Do(ctx context.Context, req Req) (seq iter.Seq2[T
 			if !yield(item, itemErr) {
 				return
 			}
+			fireStreamItem(ctx, a.streamHooks, req, item, itemErr, meta)
 		}
 	}
-
 	return wrappedSeq, nil
 }
 
-// ── Before helpers ──────────────────────────────────────────────────────
-
-func runStreamTypedBeforeHooks[Req, T any](
-	ctx context.Context,
-	hooks []Hook[Req, iter.Seq2[T, error]],
-	req Req,
-	meta *Meta,
-) (context.Context, int, error) {
-	for i, h := range hooks {
-		if h.Before == nil {
-			continue
-		}
-		var err error
-		//nolint:fatcontext // bounded hook slice requires sequential context propagation
-		ctx, err = h.Before(ctx, req, meta)
-		if err != nil {
-			return ctx, i, err
-		}
+func errorIterator[T any](err error) iter.Seq2[T, error] {
+	return func(yield func(T, error) bool) {
+		var zero T
+		yield(zero, err)
 	}
-	return ctx, len(hooks), nil
 }
-
-// runStreamAnyBeforeHooks takes only Req: T is not used anywhere in
-// the body, so the compiler cannot infer it from the call site.
-func runStreamAnyBeforeHooks[Req any](
-	ctx context.Context,
-	hooks []AnyHook,
-	req Req,
-	meta *Meta,
-) (context.Context, int, error) {
-	for i, h := range hooks {
-		if h.Before == nil {
-			continue
-		}
-		var err error
-		//nolint:fatcontext // bounded hook slice requires sequential context propagation
-		ctx, err = h.Before(ctx, any(req), meta)
-		if err != nil {
-			return ctx, i, err
-		}
-	}
-	return ctx, len(hooks), nil
-}
-
-// ── After helpers ───────────────────────────────────────────────────────
 
 func fireStreamAfterHooks[Req, T any](
 	ctx context.Context,
 	hooks []Hook[Req, iter.Seq2[T, error]],
-	hooksRan int,
+	anyHooks []AnyHook,
+	hooksRan, anyHooksRan int,
 	req Req,
 	seq iter.Seq2[T, error],
 	err error,
 	meta *Meta,
 ) {
+	isTimeout := errors.Is(err, context.DeadlineExceeded)
+	isCancel := errors.Is(err, context.Canceled)
+
+	for i := anyHooksRan - 1; i >= 0; i-- {
+		fireAnyStreamExitHook(ctx, anyHooks[i], req, seq, err, isTimeout, isCancel, meta)
+	}
 	for i := hooksRan - 1; i >= 0; i-- {
-		if hooks[i].After != nil {
-			callHook(meta, "After", func() {
-				hooks[i].After(ctx, req, seq, err, meta)
-			})
-		}
+		fireTypedStreamExitHook(ctx, hooks[i], req, seq, err, isTimeout, isCancel, meta)
 	}
 }
 
-// fireStreamAnyAfterHooks takes [Req any] and seq as `any`. T was
-// dropped because the compiler cannot infer it from call sites where
-// seq is nil (panic-path and handler-error-path), and the hook
-// signature already accepts `any` for both request and response.
-func fireStreamAnyAfterHooks[Req any](
+func fireAnyStreamExitHook[Req, T any](
 	ctx context.Context,
-	hooks []AnyHook,
-	hooksRan int,
+	h AnyHook,
 	req Req,
-	seq any,
+	seq iter.Seq2[T, error],
 	err error,
+	isTimeout, isCancel bool,
 	meta *Meta,
 ) {
-	for i := hooksRan - 1; i >= 0; i-- {
-		h := hooks[i]
-		if h.After != nil {
-			callHook(meta, "After", func() {
-				h.After(ctx, any(req), seq, err, meta)
-			})
-		}
+	if isTimeout && h.OnTimeout != nil {
+		callHook(meta, "OnTimeout", func() { h.OnTimeout(ctx, any(req), meta) })
+	}
+	if isCancel && h.OnCancel != nil {
+		callHook(meta, "OnCancel", func() { h.OnCancel(ctx, any(req), meta) })
+	}
+	if err != nil && h.OnError != nil {
+		callHook(meta, "OnError", func() { h.OnError(ctx, any(req), err, meta) })
+	}
+	if err == nil && h.OnSuccess != nil {
+		callHook(meta, "OnSuccess", func() { h.OnSuccess(ctx, any(req), any(seq), meta) })
+	}
+	if h.After != nil {
+		callHook(meta, "After", func() { h.After(ctx, any(req), any(seq), err, meta) })
 	}
 }
 
-// ── Convenience ─────────────────────────────────────────────────────────
+func fireTypedStreamExitHook[Req, T any](
+	ctx context.Context,
+	h Hook[Req, iter.Seq2[T, error]],
+	req Req,
+	seq iter.Seq2[T, error],
+	err error,
+	isTimeout, isCancel bool,
+	meta *Meta,
+) {
+	if isTimeout && h.OnTimeout != nil {
+		callHook(meta, "OnTimeout", func() { h.OnTimeout(ctx, req, meta) })
+	}
+	if isCancel && h.OnCancel != nil {
+		callHook(meta, "OnCancel", func() { h.OnCancel(ctx, req, meta) })
+	}
+	if err != nil && h.OnError != nil {
+		callHook(meta, "OnError", func() { h.OnError(ctx, req, err, meta) })
+	}
+	if err == nil && h.OnSuccess != nil {
+		callHook(meta, "OnSuccess", func() { h.OnSuccess(ctx, req, seq, meta) })
+	}
+	if h.After != nil {
+		callHook(meta, "After", func() { h.After(ctx, req, seq, err, meta) })
+	}
+}
 
 func CollectStream[Req, T any](ctx context.Context, a *StreamAction[Req, T], req Req) (out []T, err error) {
 	defer func() {
@@ -282,7 +276,6 @@ func CollectStream[Req, T any](ctx context.Context, a *StreamAction[Req, T], req
 			err = xerr.PanicRecovery(r)
 		}
 	}()
-
 	seq, err := a.Do(ctx, req)
 	if err != nil {
 		return out, err
@@ -294,4 +287,14 @@ func CollectStream[Req, T any](ctx context.Context, a *StreamAction[Req, T], req
 		out = append(out, item)
 	}
 	return out, nil
+}
+
+func NewStreamOp[Req, In, Out any](name string, source *StreamAction[Req, In], op stream.StreamOp[In, Out]) *StreamAction[Req, Out] {
+	return NewStream(name, func(ctx context.Context, req Req) (iter.Seq2[Out, error], error) {
+		up, err := source.Do(ctx, req)
+		if err != nil {
+			return nil, err
+		}
+		return op(up), nil
+	})
 }

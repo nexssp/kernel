@@ -6,6 +6,7 @@ import (
 	"io"
 	"iter"
 
+	"github.com/nexssp/kernel/stream"
 	"github.com/nexssp/kernel/xerr"
 )
 
@@ -80,7 +81,7 @@ func StreamFromFunc[T any](next func() (T, error)) iter.Seq2[T, error] {
 // The predicate must be pure: no I/O, no mutation of shared state.
 // For side-effecting transforms that may fail, use a StreamMapAction
 // (planned for F1) instead.
-func StreamFilter[T any](pred func(T) bool) StreamOp[T, T] {
+func StreamFilter[T any](pred func(T) bool) stream.StreamOp[T, T] {
 	return func(up iter.Seq2[T, error]) iter.Seq2[T, error] {
 		return func(yield func(T, error) bool) {
 			for item, err := range up {
@@ -108,7 +109,7 @@ func StreamFilter[T any](pred func(T) bool) StreamOp[T, T] {
 //
 // The buffer is grown dynamically. On upstream error, the error is yielded
 // and no partial slice is produced.
-func StreamCollect[T any]() StreamOp[T, []T] {
+func StreamCollect[T any]() stream.StreamOp[T, []T] {
 	return func(up iter.Seq2[T, error]) iter.Seq2[[]T, error] {
 		return func(yield func([]T, error) bool) {
 			var buf []T
@@ -134,7 +135,7 @@ func StreamCollect[T any]() StreamOp[T, []T] {
 // is emitted and the stream terminates. Partial results are never returned.
 // If the upstream yields exactly maxItems items, they are returned without
 // error.
-func StreamCollectN[T any](maxItems int) StreamOp[T, []T] {
+func StreamCollectN[T any](maxItems int) stream.StreamOp[T, []T] {
 	if maxItems <= 0 {
 		panic("action.StreamCollectN: maxItems must be > 0")
 	}

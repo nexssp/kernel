@@ -1,18 +1,24 @@
+// Copyright 2018-2026 Marcin Polak. All rights reserved.
+// Use of this source code is governed by an Apache-2.0 license
+// that can be found in the LICENSE file.
+
 package action
 
 import (
 	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/nexssp/kernel/stream"
 )
 
 type typedStreamOperator[In, Out any] struct {
 	name string
-	op   StreamOp[In, Out]
+	op   stream.StreamOp[In, Out]
 }
 
 // NewTypedStreamOperator wraps a typed StreamOp as an erased StreamOperator.
-func NewTypedStreamOperator[In, Out any](name string, op StreamOp[In, Out]) StreamOperator {
+func NewTypedStreamOperator[In, Out any](name string, op stream.StreamOp[In, Out]) StreamOperator {
 	return &typedStreamOperator[In, Out]{name: name, op: op}
 }
 
