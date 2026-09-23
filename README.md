@@ -38,6 +38,8 @@ The Kernel owns the lifecycle, concurrency safety, and execution semantics of an
 | `ai/dag` | Typed directed acyclic graphs with deterministic compilation, layered parallel execution, nested graphs, state snapshots, Mermaid rendering, and durable checkpoint/resume (HIL) semantics. |
 | `xctx` | Typed request context values, request scopes, correlation data, trace data, roles, permissions, features, and scope pooling. |
 | `xerr` | Categorized errors for validation, authorization, conflicts, not-found cases, transient failures, internal failures, and panic recovery. |
+| `stream` | Domain-neutral, typed lazy stream operators (Map, Filter, Take, Batch, Reduce, FlatMap, WithContext). No per-item allocation. |
+| `ringbuf` | Cache-line-aligned lock-free MPMC ring buffer for bounded telemetry, hot-path metrics, and lifecycle events. |
 
 ---
 
@@ -405,6 +407,8 @@ The Kernel provides execution semantics and safety contracts; applications suppl
 ## Performance Model and Verification
 
 The Kernel avoids reflection on execution paths, relies on immutable structures post-build, and compiles middleware chains at initialization time.
+
+Streaming is O(1) in memory: StreamAction[Req, T] wraps Go 1.23 iter.Seq2[T, error] under action lifecycle management. Per-item cost is zero allocations; only a constant per-call overhead is paid (iterator closure, hook wrappers, panic recovery).
 
 ### Benchmark and Quality Verification
 
