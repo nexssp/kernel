@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"sync"
 	"time"
 
@@ -234,13 +235,64 @@ func extractIdempotencyKey[Req any](ctx context.Context, req Req, cfg Idempotenc
 	return hashPayload(req)
 }
 
+// hashPayload computes a SHA-256 hash of the request payload for
+// idempotency-key collision detection.
+//
+// Hot path: for common primitive types (int, int64, uint, uint64, string,
+// []byte), this is zero-allocation — the hash is computed on stack buffers.
+// For complex types, it falls back to encoding/json (which allocates).
+//
+// The returned string is a hex-encoded SHA-256. To eliminate the final
+// string allocation, callers can use bytes.Equal on the raw [32]byte
+// (see hashPayloadBytes below).
 func hashPayload(v any) string {
-	b, err := json.Marshal(v)
-	if err != nil {
+	sum := hashPayloadBytes(v)
+	if sum == ([32]byte{}) {
 		return ""
 	}
-	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:])
+}
+
+// hashPayloadBytes returns the raw [32]byte SHA-256 of the request payload.
+// Zero-allocation for primitive types. Falls back to json.Marshal for
+// complex types (which allocates).
+//
+// Direct byte comparison via [32]byte is the preferred hot-path API:
+//
+//	if entry.RequestHashBytes != [32]byte{} && reqHashBytes != [32]byte{} &&
+//	    entry.RequestHashBytes != reqHashBytes { ... conflict }
+func hashPayloadBytes(v any) [32]byte {
+	switch x := v.(type) {
+	case nil:
+		return [32]byte{}
+	case string:
+		return sha256.Sum256([]byte(x)) // ← Go runtime: zero-alloc for string→[]byte in this context
+	case []byte:
+		return sha256.Sum256(x)
+	case int:
+		// strconv.AppendInt reuses a stack buffer via strconv.Itoa fast path.
+		buf := make([]byte, 0, 20)
+		buf = strconv.AppendInt(buf, int64(x), 10)
+		return sha256.Sum256(buf)
+	case int64:
+		buf := make([]byte, 0, 20)
+		buf = strconv.AppendInt(buf, x, 10)
+		return sha256.Sum256(buf)
+	case uint:
+		buf := make([]byte, 0, 20)
+		buf = strconv.AppendUint(buf, uint64(x), 10)
+		return sha256.Sum256(buf)
+	case uint64:
+		buf := make([]byte, 0, 20)
+		buf = strconv.AppendUint(buf, x, 10)
+		return sha256.Sum256(buf)
+	}
+	// Fallback for complex types — uses json.Marshal which allocates.
+	b, err := json.Marshal(v)
+	if err != nil {
+		return [32]byte{}
+	}
+	return sha256.Sum256(b)
 }
 
 type memEntry struct {

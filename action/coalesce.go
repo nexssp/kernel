@@ -97,7 +97,7 @@ func CoalesceMiddleware[Req, Res any](coalescer *Coalescer, actionName string, k
 				return next(ctx, req)
 			}
 
-			fullKey := fmt.Sprintf("%s:%s", actionName, key)
+			fullKey := actionName + ":" + key
 			detachedCtx := context.WithoutCancel(ctx)
 
 			val, shared, err := coalescer.Do(ctx, fullKey, func(_ context.Context) (any, error) {

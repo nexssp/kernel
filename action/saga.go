@@ -13,6 +13,12 @@ import (
 	"github.com/nexssp/kernel/xerr"
 )
 
+// MaxSagaSteps caps the inline step-result storage. Sagas with more than
+// MaxSagaSteps steps fall back to heap allocation. 32 is large enough for
+// virtually all real-world distributed transactions while keeping the
+// SagaResult struct a fixed-size, zero-alloc return value.
+const MaxSagaSteps = 32
+
 // StepResult captures execution metadata for a single Saga step.
 type StepResult struct {
 	Step       string `json:"step"`
@@ -23,14 +29,44 @@ type StepResult struct {
 }
 
 // SagaResult captures the full execution audit and output of the Saga.
+//
+// Steps is a fixed-size array (not a slice) so the return value is a single,
+// zero-allocation value copy. StepsCount indicates how many entries in
+// Steps are populated; callers iterate Steps[:StepsCount].
+//
+// For sagas larger than MaxSagaSteps, Steps overflows to a heap-allocated
+// slice stored in StepsOverflow. This is the rare case — most sagas have
+// fewer than 32 steps.
 type SagaResult[Res any] struct {
-	Saga       string       `json:"saga"`
-	Success    bool         `json:"success"`
-	Output     Res          `json:"output,omitempty"`
-	Steps      []StepResult `json:"steps"`
-	Error      string       `json:"error,omitempty"`
-	RolledBack bool         `json:"rolled_back,omitempty"`
-	DurationMs int64        `json:"duration_ms"`
+	Saga          string                   `json:"saga"`
+	Success       bool                     `json:"success"`
+	Output        Res                      `json:"output,omitempty"`
+	Steps         [MaxSagaSteps]StepResult `json:"steps"`
+	StepsCount    int                      `json:"steps_count"`
+	StepsOverflow []StepResult             `json:"steps_overflow,omitempty"`
+	Error         string                   `json:"error,omitempty"`
+	RolledBack    bool                     `json:"rolled_back,omitempty"`
+	DurationMs    int64                    `json:"duration_ms"`
+}
+
+// Step returns the i-th step result, abstracting the inline/overflow split.
+func (r *SagaResult[Res]) Step(i int) StepResult {
+	if i < MaxSagaSteps {
+		return r.Steps[i]
+	}
+	return r.StepsOverflow[i-MaxSagaSteps]
+}
+
+// AllSteps returns a slice view over all populated step results.
+// Allocates only if the saga overflowed the inline array.
+func (r *SagaResult[Res]) AllSteps() []StepResult {
+	if r.StepsCount <= MaxSagaSteps {
+		return r.Steps[:r.StepsCount]
+	}
+	all := make([]StepResult, 0, r.StepsCount)
+	all = append(all, r.Steps[:]...)
+	all = append(all, r.StepsOverflow...)
+	return all
 }
 
 // SagaStep represents a single operation and its compensating rollback.
@@ -84,10 +120,39 @@ func (s *SagaBuilder[Req, Res]) Build() *BuiltSaga[Req, Res] {
 }
 
 // Do executes the Saga. If a mandatory step fails, it automatically runs Undo functions in reverse order.
+//
+// Hot-path: zero heap allocations for sagas with ≤ MaxSagaSteps steps.
+// Step results are written into the inline [MaxSagaSteps]StepResult array
+// on the stack/return-value. Only sagas with more than MaxSagaSteps steps
+// fall back to heap allocation via StepsOverflow.
 func (s *BuiltSaga[Req, Res]) Do(ctx context.Context, req Req) (SagaResult[Res], error) {
 	start := time.Now()
-	stepResults := make([]StepResult, 0, len(s.steps))
+	var result SagaResult[Res]
+	result.Saga = s.name
+	// Inline step result write — no slice allocation.
+	stepResults := &result.Steps // [MaxSagaSteps]StepResult
+	stepCount := 0               // tracks StepsCount inline
 	var lastRes Res
+
+	appendStep := func(sr StepResult) {
+		if stepCount < MaxSagaSteps {
+			stepResults[stepCount] = sr
+		} else {
+			// Overflow: first overflow allocates the slice.
+			if result.StepsOverflow == nil {
+				result.StepsOverflow = make([]StepResult, 0, len(s.steps)-MaxSagaSteps)
+			}
+			result.StepsOverflow = append(result.StepsOverflow, sr)
+		}
+		stepCount++
+	}
+
+	stepAt := func(i int) *StepResult {
+		if i < MaxSagaSteps {
+			return &stepResults[i]
+		}
+		return &result.StepsOverflow[i-MaxSagaSteps]
+	}
 
 	for i, step := range s.steps {
 		stepStart := time.Now()
@@ -96,7 +161,7 @@ func (s *BuiltSaga[Req, Res]) Do(ctx context.Context, req Req) (SagaResult[Res],
 
 		if err != nil {
 			if step.Optional {
-				stepResults = append(stepResults, StepResult{
+				appendStep(StepResult{
 					Step:       step.Name,
 					Success:    false,
 					Skipped:    true,
@@ -105,7 +170,7 @@ func (s *BuiltSaga[Req, Res]) Do(ctx context.Context, req Req) (SagaResult[Res],
 				continue
 			}
 
-			stepResults = append(stepResults, StepResult{
+			appendStep(StepResult{
 				Step:       step.Name,
 				Success:    false,
 				Error:      err.Error(),
@@ -114,7 +179,7 @@ func (s *BuiltSaga[Req, Res]) Do(ctx context.Context, req Req) (SagaResult[Res],
 
 			rollbackCtx := context.WithoutCancel(ctx)
 			for j := i - 1; j >= 0; j-- {
-				if s.steps[j].Undo != nil && !stepResults[j].Skipped {
+				if s.steps[j].Undo != nil && !stepAt(j).Skipped {
 					if undoErr := executeSagaUndo(rollbackCtx, s.steps[j], req); undoErr != nil {
 						slog.Error("saga_undo_failed", "saga", s.name, "step", s.steps[j].Name, "error", undoErr)
 					}
@@ -122,18 +187,16 @@ func (s *BuiltSaga[Req, Res]) Do(ctx context.Context, req Req) (SagaResult[Res],
 			}
 
 			var zero Res
-			return SagaResult[Res]{
-				Saga:       s.name,
-				Success:    false,
-				Steps:      stepResults,
-				Error:      fmt.Sprintf("saga [%s] failed at step [%s]: %v", s.name, step.Name, err),
-				RolledBack: true,
-				DurationMs: time.Since(start).Milliseconds(),
-				Output:     zero,
-			}, fmt.Errorf("saga [%s] failed at step [%s]: %w", s.name, step.Name, err)
+			result.Success = false
+			result.StepsCount = stepCount
+			result.Error = fmt.Sprintf("saga [%s] failed at step [%s]: %v", s.name, step.Name, err)
+			result.RolledBack = true
+			result.DurationMs = time.Since(start).Milliseconds()
+			result.Output = zero
+			return result, fmt.Errorf("saga [%s] failed at step [%s]: %w", s.name, step.Name, err)
 		}
 
-		stepResults = append(stepResults, StepResult{
+		appendStep(StepResult{
 			Step:       step.Name,
 			Success:    true,
 			DurationMs: dur,
@@ -141,13 +204,11 @@ func (s *BuiltSaga[Req, Res]) Do(ctx context.Context, req Req) (SagaResult[Res],
 		lastRes = res
 	}
 
-	return SagaResult[Res]{
-		Saga:       s.name,
-		Success:    true,
-		Output:     lastRes,
-		Steps:      stepResults,
-		DurationMs: time.Since(start).Milliseconds(),
-	}, nil
+	result.Success = true
+	result.Output = lastRes
+	result.StepsCount = stepCount
+	result.DurationMs = time.Since(start).Milliseconds()
+	return result, nil
 }
 
 func executeSagaDo[Req, Res any](ctx context.Context, step SagaStep[Req, Res], req Req) (res Res, err error) {

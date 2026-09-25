@@ -190,7 +190,7 @@ func TestIdempotency_ZeroAlloc_CacheHit(t *testing.T) {
 	// response persistence. Reflection-based JSON cannot be zero-alloc, so
 	// assert a stable upper bound instead of exactly zero. The ceiling still
 	// catches per-call unbounded growth (leaks, growing slices).
-	xtest.RequireMaxAlloc(t, 1000, 20, func() {
+	xtest.RequireMaxAlloc(t, 1000, 5, func() {
 		res, err := act.Do(ctx, 42)
 		if err != nil || res != 84 {
 			t.Fail()

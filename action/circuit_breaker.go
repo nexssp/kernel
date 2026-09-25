@@ -31,6 +31,14 @@ type adaptiveState struct {
 	name        string
 }
 
+func timeoutCtx(ctx context.Context, d time.Duration) (context.Context, context.CancelFunc) {
+	if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) <= d {
+		// Parent context already has a stricter or equal deadline — skip wrapper allocation.
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, d)
+}
+
 // Adaptive wraps an action with a dynamic timeout and a stateful circuit breaker.
 func Adaptive[Req, Res any](name string, cfg AdaptiveConfig) Middleware[Req, Res] {
 	cfg.SetDefaults()
@@ -48,7 +56,7 @@ func Adaptive[Req, Res any](name string, cfg AdaptiveConfig) Middleware[Req, Res
 				return zero, xerr.CircuitBreaker("adaptive: circuit open")
 			}
 
-			tCtx, cancel := context.WithTimeout(ctx, state.CurrentTimeout())
+			tCtx, cancel := timeoutCtx(ctx, state.CurrentTimeout())
 			defer cancel()
 
 			res, err := next(tCtx, req)

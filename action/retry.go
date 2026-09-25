@@ -6,6 +6,7 @@ package action
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/nexssp/kernel/xerr"
@@ -31,6 +32,20 @@ func DefaultRetryPredicate(err error) bool {
 // AlwaysRetryPredicate retries any non-nil error.
 func AlwaysRetryPredicate(err error) bool {
 	return err != nil
+}
+
+// timerPool reuses *time.Timer instances across retry attempts to avoid
+// the 2 allocations (timer struct + channel) per attempt that time.NewTimer
+// would otherwise incur.
+//
+// Each timer is Reset before use and Stop()'d before returning to the pool.
+// Stopped timers can be Reset() safely per Go 1.23+ semantics.
+var timerPool = sync.Pool{
+	New: func() any {
+		t := time.NewTimer(0)
+		t.Stop()
+		return t
+	},
 }
 
 // RetryWithPredicateMiddleware retries errors when predicate returns true.
@@ -70,12 +85,25 @@ func RetryWithPredicateMiddleware[Req, Res any](
 						hooks.OnRetry(ctx, req, attempt+1, err)
 					}
 
-					timer := time.NewTimer(backoff(attempt + 1))
+					// Use pooled timer to avoid time.NewTimer's 2 allocations
+					// (timer struct + channel) per retry attempt.
+					timer, ok := timerPool.Get().(*time.Timer)
+					if !ok || timer == nil {
+						timer = time.NewTimer(backoff(attempt + 1))
+					} else {
+						timer.Reset(backoff(attempt + 1))
+					}
 					select {
 					case <-ctx.Done():
 						timer.Stop()
+						select {
+						case <-timer.C:
+						default:
+						}
+						timerPool.Put(timer)
 						return res, ctx.Err()
 					case <-timer.C:
+						timerPool.Put(timer)
 					}
 				}
 			}
