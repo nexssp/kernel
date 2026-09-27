@@ -7,6 +7,8 @@ import (
 )
 
 // RequireNoGoroutineLeak waits until the goroutine count returns to baseline.
+// Capture baseline before the code under test spawns: baseline := runtime.NumGoroutine().
+// Because runtime.NumGoroutine is process-global, do not use this in tests running with t.Parallel.
 func RequireNoGoroutineLeak(tb testing.TB, baseline int, timeout time.Duration) {
 	tb.Helper()
 	RequireGoroutinesAtMost(tb, baseline, timeout, 0)

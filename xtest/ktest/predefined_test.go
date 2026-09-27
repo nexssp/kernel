@@ -45,7 +45,7 @@ func TestPredefined_FlakyRecoversAfterConfiguredFailures(t *testing.T) {
 func TestPredefined_FactoriesReturnBuilders(_ *testing.T) {
 	_ = ktest.Echo[string]("echo")
 	_ = ktest.Returns[string, string]("returns", "ok")
-	_ = ktest.Fails[string, string]("fails", nil)
+	_ = ktest.Fails[string, string]("fails", xerr.Internal("fail"))
 	_ = ktest.Sequence[string, string]("sequence", "ok")
 	_ = ktest.Flaky[string, string]("flaky", 0, nil, "ok")
 }

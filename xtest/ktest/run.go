@@ -3,7 +3,6 @@ package ktest
 import (
 	"context"
 	"fmt"
-	"reflect"
 	"strings"
 	"testing"
 
@@ -50,9 +49,7 @@ func (r *RunResult[Res]) IsError(target error) *RunResult[Res] {
 
 func (r *RunResult[Res]) Equals(want Res) *RunResult[Res] {
 	r.tb.Helper()
-	if !reflect.DeepEqual(r.res, want) {
-		r.tb.Fatalf("result mismatch\nwant: %+v\ngot:  %+v", want, r.res)
-	}
+	RequireEqual(r.tb, r.res, want)
 	return r
 }
 

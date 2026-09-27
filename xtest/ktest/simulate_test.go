@@ -4,7 +4,6 @@ import (
 	"context"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/nexssp/kernel/action"
 	"github.com/nexssp/kernel/xtest"
@@ -14,7 +13,10 @@ import (
 func TestSimulate_ThunderingHerdBarrier(t *testing.T) {
 	t.Parallel()
 
+	const workers = 50
+
 	var activeWorkers, peakConcurrency, totalExecutions atomic.Int32
+	release := make(chan struct{})
 
 	act := action.New("barrier.test", func(_ context.Context, req int) (int, error) {
 		totalExecutions.Add(1)
@@ -27,27 +29,28 @@ func TestSimulate_ThunderingHerdBarrier(t *testing.T) {
 			}
 		}
 
-		time.Sleep(10 * time.Millisecond)
+		if cur == workers {
+			close(release)
+		}
+		<-release
 		activeWorkers.Add(-1)
 		return req * 2, nil
 	}).Build()
 
-	const workers = 50
-
-	ktest.Simulate(t, act, 10, workers, func(t testing.TB, res int, err error) {
+	ktest.Simulate(t, act, 10, workers, func(tb testing.TB, res int, err error) {
 		if err != nil {
-			t.Errorf("unexpected error: %v", err)
+			tb.Errorf("unexpected error: %v", err)
 		}
 		if res != 20 {
-			t.Errorf("expected 20, got %d", res)
+			tb.Errorf("expected 20, got %d", res)
 		}
 	})
 
 	if totalExecutions.Load() != workers {
 		t.Fatalf("executions = %d, want %d", totalExecutions.Load(), workers)
 	}
-	if peakConcurrency.Load() < 10 {
-		t.Fatalf("barrier failed: peak concurrency was %d (want >= 10)", peakConcurrency.Load())
+	if peakConcurrency.Load() != workers {
+		t.Fatalf("barrier failed: peak concurrency was %d (want %d)", peakConcurrency.Load(), workers)
 	}
 }
 

@@ -50,7 +50,10 @@ func (t *Trace) record(ctx context.Context, meta *action.Meta, req, res any, err
 	if meta == nil {
 		return
 	}
-	start, _ := ctx.Value(traceStartKey{}).(time.Time)
+	var duration time.Duration
+	if start, ok := ctx.Value(traceStartKey{}).(time.Time); ok && !start.IsZero() {
+		duration = time.Since(start)
+	}
 
 	t.mu.Lock()
 	t.seq++
@@ -60,7 +63,7 @@ func (t *Trace) record(ctx context.Context, meta *action.Meta, req, res any, err
 		Request:  req,
 		Response: res,
 		Err:      err,
-		Duration: time.Since(start),
+		Duration: duration,
 		When:     time.Now(),
 	})
 	t.mu.Unlock()
@@ -149,7 +152,6 @@ func (t *Trace) RequireOrder(tb testing.TB, first, second string) {
 				}
 			}
 			tb.Fatalf("action %q never appears before %q", first, second)
-			return
 		}
 	}
 	tb.Fatalf("action %q was never called; trace: %v", first, t.Names())

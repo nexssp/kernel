@@ -23,6 +23,9 @@ func Returns[Req, Res any](name string, value Res) *action.Builder[Req, Res] {
 
 // Fails returns a typed action that always returns err and the zero response.
 func Fails[Req, Res any](name string, err error) *action.Builder[Req, Res] {
+	if err == nil {
+		panic("ktest.Fails: err must not be nil")
+	}
 	return action.New(name, func(_ context.Context, _ Req) (Res, error) {
 		var zero Res
 		return zero, err

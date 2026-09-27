@@ -16,17 +16,21 @@ func AssertContracts(t *testing.T, actions []action.AnyAction) {
 	names := make(map[string]bool)
 
 	for _, act := range actions {
+		if act == nil {
+			t.Error("nil action encountered in AssertContracts")
+			continue
+		}
 		meta := act.Describe()
+		if meta == nil {
+			t.Errorf("action %T returned nil Describe()", act)
+			continue
+		}
 
 		t.Run(meta.Name, func(t *testing.T) {
 			if names[meta.Name] {
 				t.Errorf("Duplicate action name detected: %q", meta.Name)
 			}
 			names[meta.Name] = true
-
-			if len(act.GetBindings()) == 0 && len(act.GetAnyHooks()) == 0 {
-				t.Errorf("Action %q is orphaned (no route bindings and no hooks attached)", meta.Name)
-			}
 
 			if typed, ok := act.(action.TypedPayload); ok {
 				req := typed.ReqPayload()

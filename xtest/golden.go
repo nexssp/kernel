@@ -3,6 +3,7 @@ package xtest
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"flag"
 	"os"
 	"path/filepath"
@@ -38,6 +39,9 @@ func goldenJSON(tb testing.TB, name string, got any, update bool) {
 	}
 
 	existing, readErr := os.ReadFile(path)
+	if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
+		tb.Fatalf("xtest.GoldenJSON: read %s: %v", path, readErr)
+	}
 	if readErr == nil && bytes.Equal(existing, gotCanon) {
 		return
 	}
