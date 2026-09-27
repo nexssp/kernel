@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"reflect"
 	"slices"
+	"strings"
+	"sync"
 )
 
 // InvokeAny executes an action with an in-memory input payload.
@@ -126,7 +128,9 @@ func Assign(target, source any) error {
 	if assignBytes(targetVal, source) {
 		return nil
 	}
-
+	if assignReflect(targetVal, sourceVal) {
+		return nil
+	}
 	return assignJSON(target, source)
 }
 
@@ -189,6 +193,262 @@ func assignBytes(target reflect.Value, source any) bool {
 	return false
 }
 
+func assignReflect(target, source reflect.Value) bool {
+	return assignValue(target.Elem(), source)
+}
+
+func assignValue(dst, src reflect.Value) bool {
+	src = indirect(src)
+	if !src.IsValid() {
+		return false
+	}
+
+	if dst.Kind() == reflect.Interface {
+		dst.Set(src)
+		return true
+	}
+	if dst.Kind() == reflect.Pointer {
+		if dst.IsNil() {
+			dst.Set(reflect.New(dst.Type().Elem()))
+		}
+		return assignValue(dst.Elem(), src)
+	}
+
+	if src.Type().AssignableTo(dst.Type()) {
+		dst.Set(src)
+		return true
+	}
+
+	return assignByKind(dst, src)
+}
+
+// indirect unwraps pointers and interfaces, returning the zero Value for a nil chain.
+func indirect(src reflect.Value) reflect.Value {
+	for src.Kind() == reflect.Pointer || src.Kind() == reflect.Interface {
+		if src.IsNil() {
+			return reflect.Value{}
+		}
+		src = src.Elem()
+	}
+	return src
+}
+
+func assignByKind(dst, src reflect.Value) bool {
+	//nolint:exhaustive // only kinds routable via reflection are handled; others fall through to false
+	switch dst.Kind() {
+	case reflect.Struct:
+		return assignStruct(dst, src)
+	case reflect.Slice:
+		return assignSlice(dst, src)
+	case reflect.Map:
+		return assignMap(dst, src)
+	case reflect.String:
+		if s, ok := stringFromValue(src); ok {
+			dst.SetString(s)
+			return true
+		}
+	case reflect.Bool:
+		if src.Kind() == reflect.Bool {
+			dst.SetBool(src.Bool())
+			return true
+		}
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		if isNumericKind(src.Kind()) {
+			dst.SetInt(toInt64(src))
+			return true
+		}
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		if isNumericKind(src.Kind()) {
+			n := toInt64(src)
+			if n < 0 {
+				return false
+			}
+			dst.SetUint(uint64(n))
+			return true
+		}
+	case reflect.Float32, reflect.Float64:
+		if isNumericKind(src.Kind()) {
+			dst.SetFloat(toFloat64(src))
+			return true
+		}
+	default:
+		return false
+	}
+	return false
+}
+
+type structIndex struct {
+	byJSONKey map[string]int
+	byName    map[string]int
+}
+
+var structIndexCache sync.Map
+
+func lookupStructIndex(t reflect.Type) *structIndex {
+	if v, ok := structIndexCache.Load(t); ok {
+		if idx, ok := v.(*structIndex); ok {
+			return idx
+		}
+	}
+	idx := &structIndex{
+		byJSONKey: make(map[string]int, t.NumField()),
+		byName:    make(map[string]int, t.NumField()),
+	}
+	for i := range t.NumField() {
+		f := t.Field(i)
+		if !f.IsExported() {
+			continue
+		}
+		idx.byName[f.Name] = i
+		tag := f.Tag.Get("json")
+		if tag == "" || tag == "-" {
+			continue
+		}
+		if comma := strings.IndexByte(tag, ','); comma >= 0 {
+			tag = tag[:comma]
+		}
+		if tag != "" {
+			idx.byJSONKey[tag] = i
+		}
+	}
+	structIndexCache.Store(t, idx)
+	return idx
+}
+
+func assignStruct(dst, src reflect.Value) bool {
+	if src.Kind() != reflect.Map || src.Type().Key().Kind() != reflect.String {
+		return false
+	}
+	idx := lookupStructIndex(dst.Type())
+	iter := src.MapRange()
+	for iter.Next() {
+		key := iter.Key().String()
+		fieldIdx, ok := idx.byJSONKey[key]
+		if !ok {
+			fieldIdx, ok = idx.byName[key]
+			if !ok {
+				continue
+			}
+		}
+		field := dst.Field(fieldIdx)
+		if !field.CanSet() {
+			continue
+		}
+		if !assignValue(field, iter.Value()) {
+			return false
+		}
+	}
+	return true
+}
+
+func assignSlice(dst, src reflect.Value) bool {
+	if src.Kind() != reflect.Slice && src.Kind() != reflect.Array {
+		return false
+	}
+	n := src.Len()
+	out := reflect.MakeSlice(dst.Type(), n, n)
+	elemType := dst.Type().Elem()
+	for i := range n {
+		sv := src.Index(i)
+		ev := out.Index(i)
+		if assignValue(ev, sv) {
+			continue
+		}
+		for sv.Kind() == reflect.Interface && !sv.IsNil() {
+			sv = sv.Elem()
+		}
+		if !sv.Type().AssignableTo(elemType) {
+			return false
+		}
+		ev.Set(sv)
+	}
+	dst.Set(out)
+	return true
+}
+
+func assignMap(dst, src reflect.Value) bool {
+	if src.Kind() != reflect.Map || src.Type().Key().Kind() != reflect.String {
+		return false
+	}
+	if dst.Type().Key().Kind() != reflect.String {
+		return false
+	}
+	out := reflect.MakeMap(dst.Type())
+	elemType := dst.Type().Elem()
+	iter := src.MapRange()
+	for iter.Next() {
+		elemPtr := reflect.New(elemType)
+		if !assignValue(elemPtr.Elem(), iter.Value()) {
+			sv := iter.Value()
+			for sv.Kind() == reflect.Interface && !sv.IsNil() {
+				sv = sv.Elem()
+			}
+			if !sv.Type().AssignableTo(elemType) {
+				return false
+			}
+			elemPtr.Elem().Set(sv)
+		}
+		out.SetMapIndex(iter.Key(), elemPtr.Elem())
+	}
+	dst.Set(out)
+	return true
+}
+
+func isNumericKind(k reflect.Kind) bool {
+	//nolint:exhaustive // only numeric kinds are recognized; everything else is not numeric
+	switch k {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64,
+		reflect.Float32, reflect.Float64:
+		return true
+	default:
+		return false
+	}
+}
+
+func toInt64(v reflect.Value) int64 {
+	//nolint:exhaustive // only numeric kinds are converted; everything else returns 0
+	switch v.Kind() {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return v.Int()
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		return int64(v.Uint()) //nolint:gosec // best-effort numeric coercion; large uint64 truncates, same as encoding/json
+	case reflect.Float32, reflect.Float64:
+		return int64(v.Float())
+	default:
+		return 0
+	}
+}
+
+func toFloat64(v reflect.Value) float64 {
+	//nolint:exhaustive // only numeric kinds are converted; everything else returns 0
+	switch v.Kind() {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return float64(v.Int())
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		return float64(v.Uint())
+	case reflect.Float32, reflect.Float64:
+		return v.Float()
+	default:
+		return 0
+	}
+}
+
+func stringFromValue(v reflect.Value) (string, bool) {
+	//nolint:exhaustive // only string and []byte are convertible; everything else returns false
+	switch v.Kind() {
+	case reflect.String:
+		return v.String(), true
+	case reflect.Slice:
+		if v.Type().Elem().Kind() == reflect.Uint8 {
+			return string(v.Bytes()), true
+		}
+	default:
+		return "", false
+	}
+	return "", false
+}
+
 func assignJSON(target, source any) error {
 	data, err := json.Marshal(source)
 	if err != nil {
@@ -198,15 +458,4 @@ func assignJSON(target, source any) error {
 		return fmt.Errorf("coerce: unmarshal into %T: %w", target, err)
 	}
 	return nil
-}
-
-// assertTo converts any to T, falling back to the zero value when the type
-// assertion fails. Adapt relies on this so hooks stay resilient to nil or
-// mismatched payloads instead of panicking.
-func assertTo[T any](v any) T {
-	if t, ok := v.(T); ok {
-		return t
-	}
-	var zero T
-	return zero
 }

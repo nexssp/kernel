@@ -127,3 +127,14 @@ func Adapt[Req, Res any](h Hook[Req, Res]) AnyHook {
 	}
 	return ah
 }
+
+// assertTo converts any to T, falling back to the zero value when the type
+// assertion fails. Adapt relies on this so hooks stay resilient to nil or
+// mismatched payloads instead of panicking.
+func assertTo[T any](v any) T {
+	if t, ok := v.(T); ok {
+		return t
+	}
+	var zero T
+	return zero
+}
