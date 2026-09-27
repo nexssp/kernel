@@ -330,14 +330,20 @@ func TestCleanup_Cache_ContextCancelDoesNotCorruptState(t *testing.T) {
 func TestCleanup_Dedup_HandlerErrorDoesNotLeaveWaitersStuck(t *testing.T) {
 	t.Parallel()
 
-	var entered atomic.Int32
+	var (
+		entered  atomic.Int32
+		keyCalls atomic.Int32
+	)
 	release := make(chan struct{})
 
 	act := action.New("cleanup.dedup.err", func(_ context.Context, _ string) (string, error) {
 		entered.Add(1)
 		<-release
 		return "", xerr.Internal("handler exploded")
-	}).Dedup(func(r string) string { return r }).Build()
+	}).Dedup(func(r string) string {
+		keyCalls.Add(1)
+		return r
+	}).Build()
 
 	// Launch 10 concurrent callers — all with the SAME key.
 	const N = 10
@@ -354,8 +360,11 @@ func TestCleanup_Dedup_HandlerErrorDoesNotLeaveWaitersStuck(t *testing.T) {
 	}
 	close(start)
 
-	// Wait for the executor to enter, then release it to return the error.
-	xtest.Eventually(t, 2*time.Second, func() bool { return entered.Load() == 1 })
+	// Wait for all callers to queue in Dedup and the executor to enter the handler.
+	xtest.Eventually(t, 2*time.Second, func() bool {
+		return entered.Load() == 1 && keyCalls.Load() == N
+	})
+	time.Sleep(20 * time.Millisecond)
 	close(release)
 	wg.Wait()
 
