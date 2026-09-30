@@ -108,7 +108,8 @@ func TestFanOut_ContextCancel(t *testing.T) {
 	results := <-done
 
 	foundCanceled := false
-	for _, r := range results {
+	for i := range results {
+		r := &results[i]
 		if errors.Is(r.Err, context.Canceled) {
 			foundCanceled = true
 			break

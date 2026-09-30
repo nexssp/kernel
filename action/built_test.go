@@ -371,3 +371,33 @@ func TestBuiltAction_ApplyDSL_HappyAndBadPath(t *testing.T) {
 		t.Fatalf("unexpected result: %v", res)
 	}
 }
+
+func TestBuiltAction_ToBuilder_RebuildsMiddlewareFromBaseExec(t *testing.T) {
+	t.Parallel()
+
+	var retries atomic.Int32
+	act := action.New("tobuilder.retry", func(_ context.Context, _ string) (string, error) {
+		return "", xerr.Unavailable("transient")
+	}).
+		Retry(3, action.ConstantBackoff(0)).
+		HookRetry(func(_ context.Context, _ string, _ int, _ error, _ *action.Meta) {
+			retries.Add(1)
+		}).
+		Build()
+
+	// First run: 4 attempts (1 + 3 retries) → 3 OnRetry events.
+	_, _ = act.Do(context.Background(), "x")
+	if got := retries.Load(); got != 3 {
+		t.Fatalf("first run: OnRetry fired %d times, want 3", got)
+	}
+
+	// Rebuild from ToBuilder and run again.
+	rebuilt := act.ToBuilder().Build()
+	retries.Store(0)
+	_, _ = rebuilt.Do(context.Background(), "x")
+
+	// If ToBuilder had nested Retry twice, we would see 6+ OnRetry events.
+	if got := retries.Load(); got != 3 {
+		t.Fatalf("rebuilt: OnRetry fired %d times, want 3 (retry middleware was duplicated)", got)
+	}
+}

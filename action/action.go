@@ -21,8 +21,10 @@ type execState struct {
 }
 
 type BuiltAction[Req, Res any] struct {
-	meta *Meta
-	exec Fn[Req, Res]
+	meta        *Meta
+	exec        Fn[Req, Res]
+	baseExec    Fn[Req, Res]
+	middlewares []DispatcherMiddleware[Req, Res]
 
 	hooks    []Hook[Req, Res]
 	anyHooks atomic.Pointer[anyHookSet]

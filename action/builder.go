@@ -36,12 +36,13 @@ func (b *BuiltAction[Req, Res]) ToBuilder() *Builder[Req, Res] {
 	}
 
 	return &Builder[Req, Res]{
-		meta:     metaCopy,
-		exec:     b.exec,
-		bindings: append([]Binding(nil), b.bindings...),
-		hooks:    append([]Hook[Req, Res](nil), b.hooks...),
-		anyHooks: append([]AnyHook(nil), b.anyHooksSnapshot()...),
-		history:  b.history,
+		meta:        metaCopy,
+		exec:        b.baseExec,
+		middlewares: slices.Clone(b.middlewares),
+		bindings:    append([]Binding(nil), b.bindings...),
+		hooks:       append([]Hook[Req, Res](nil), b.hooks...),
+		anyHooks:    append([]AnyHook(nil), b.anyHooksSnapshot()...),
+		history:     b.history,
 	}
 }
 
@@ -199,9 +200,11 @@ func (b *Builder[Req, Res]) Build() *BuiltAction[Req, Res] {
 	metaCopy.RequiredFeatures = slices.Clone(b.meta.RequiredFeatures)
 
 	act := &BuiltAction[Req, Res]{
-		meta:     &metaCopy,
-		bindings: append([]Binding(nil), b.bindings...),
-		history:  b.history,
+		meta:        &metaCopy,
+		baseExec:    b.exec,
+		middlewares: slices.Clone(b.middlewares),
+		bindings:    append([]Binding(nil), b.bindings...),
+		history:     b.history,
 	}
 
 	reqType := reflect.TypeFor[Req]()
