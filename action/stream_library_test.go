@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"iter"
+	"strings"
 	"testing"
 
 	"github.com/nexssp/kernel/action"
@@ -277,47 +278,50 @@ func TestLibrary_Hooks_NotAppliedToOperators(t *testing.T) {
 	fired.Require(t, 0)
 }
 
-// ── Alias precedence ────────────────────────────────────────────────────
+// ── Strict alias validation ──────────────────────────────────────────────
 
-func TestRegistry_AliasDoesNotOverrideExistingAction(t *testing.T) {
+func TestRegistry_AliasCollidingWithCanonicalErrors(t *testing.T) {
 	t.Parallel()
 
 	canonical := action.New("execute", func(_ context.Context, in string) (string, error) {
 		return "execute:" + in, nil
 	}).Build()
-
 	other := action.New("other", func(_ context.Context, in string) (string, error) {
 		return "other:" + in, nil
 	}).Build()
-
 	reg, err := action.NewRegistry(
 		action.Library{Name: "L1", Actions: []action.AnyAction{canonical, other}},
-		action.Library{
-			Name:    "L2",
-			Aliases: []action.Alias{{Canonical: "other", Short: []string{"execute"}}},
-		},
+		action.Library{Name: "L2", Aliases: []action.Alias{{Canonical: "other", Short: []string{"execute"}}}},
 	)
-	ktest.RequireNoError(t, err)
-
-	got, ok := reg.Get("execute")
-	ktest.RequireCondition(t, ok, "execute not registered")
-
-	out, err := got.DoAny(context.Background(), "x")
-	ktest.RequireNoError(t, err)
-	ktest.RequireEqual(t, out, "execute:x")
+	if err == nil {
+		t.Fatal("expected alias-vs-canonical collision")
+	}
+	if reg != nil {
+		t.Fatal("collision returned a partially built registry")
+	}
+	for _, part := range []string{`name "execute"`, "kind alias", `owner "L2"`, "kind action", `owner "L1"`} {
+		if !strings.Contains(err.Error(), part) {
+			t.Errorf("error %q does not contain %q", err, part)
+		}
+	}
 }
 
-func TestRegistry_AliasSkippedWhenCanonicalMissing(t *testing.T) {
+func TestRegistry_AliasMissingCanonicalErrors(t *testing.T) {
 	t.Parallel()
 
 	reg, err := action.NewRegistry(action.Library{
 		Name:    "L1",
 		Aliases: []action.Alias{{Canonical: "missing", Short: []string{"x"}}},
 	})
-	ktest.RequireNoError(t, err)
-
-	_, ok := reg.Get("x")
-	ktest.RequireCondition(t, !ok, "alias registered despite missing canonical")
+	if err == nil {
+		t.Fatal("expected missing canonical target error")
+	}
+	if reg != nil {
+		t.Fatal("missing target returned a partially built registry")
+	}
+	if !strings.Contains(err.Error(), `missing canonical "missing"`) {
+		t.Fatalf("unexpected error: %v", err)
+	}
 }
 
 // ── Concurrency smoke test ──────────────────────────────────────────────

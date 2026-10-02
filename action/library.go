@@ -13,13 +13,18 @@ type Library struct {
 	Sources     []AnyStreamAction
 	Operators   []NamedOperator
 	Hooks       []AnyHook
-	Aliases     []Alias
-	Overrides   []string // Used by test harnesses to shadow existing actions
+	// Aliases is retained for compatibility with sibling packages. Registry
+	// construction validates declarations and rejects malformed entries,
+	// missing targets, duplicate names, and collisions.
+	Aliases []Alias
+	// Overrides names actions this library replaces. Each override must name an
+	// action declared by this library and an action registered earlier.
+	Overrides []string
 }
 
-// Alias maps a short name to a canonical name. Canonical must already
-// resolve to a registered action, source, or operator; Short names are
-// registered as aliases pointing at the same entry.
+// Alias maps one or more short names to a canonical action, source, or
+// operator. The target and every short name must be unique in the completed
+// registry; invalid or colliding aliases make construction fail.
 type Alias struct {
 	Canonical string
 	Short     []string

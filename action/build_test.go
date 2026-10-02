@@ -231,7 +231,7 @@ func TestNewRegistry_SkipsNilAction(t *testing.T) {
 	}
 }
 
-func TestNewRegistry_IgnoresDeadAlias(t *testing.T) {
+func TestNewRegistry_ErrorsOnMissingAliasTarget(t *testing.T) {
 	t.Parallel()
 
 	act := action.New("real.op", dummyHandler).Build()
@@ -244,15 +244,20 @@ func TestNewRegistry_IgnoresDeadAlias(t *testing.T) {
 	}
 
 	reg, err := action.NewRegistry(lib)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	if err == nil {
+		t.Fatal("expected missing alias target error")
 	}
-	if _, ok := reg.Get("ghost"); ok {
-		t.Errorf("ghost alias should not resolve to anything")
+	if reg != nil {
+		t.Fatal("invalid alias must not return a partially built registry")
+	}
+	for _, part := range []string{`missing canonical "non.existent.op"`, `kind canonical`, `owner unknown`} {
+		if !strings.Contains(err.Error(), part) {
+			t.Errorf("error %q does not contain %q", err, part)
+		}
 	}
 }
 
-func TestNewRegistry_AliasPrecedence(t *testing.T) {
+func TestNewRegistry_ErrorsOnDuplicateAliasNames(t *testing.T) {
 	t.Parallel()
 
 	act1 := action.New("canonical.first", dummyHandler).Build()
@@ -269,11 +274,104 @@ func TestNewRegistry_AliasPrecedence(t *testing.T) {
 		Aliases: []action.Alias{{Canonical: "canonical.second", Short: []string{"run"}}},
 	}
 
-	reg := action.MustNewRegistry(lib1, lib2)
+	reg, err := action.NewRegistry(lib1, lib2)
+	if err == nil {
+		t.Fatal("expected duplicate alias name error")
+	}
+	if reg != nil {
+		t.Fatal("duplicate aliases must not return a partially built registry")
+	}
+	for _, part := range []string{`duplicate alias name "run"`, `"L1"`, `"L2"`, `action`} {
+		if !strings.Contains(err.Error(), part) {
+			t.Errorf("error %q does not contain %q", err, part)
+		}
+	}
+}
 
-	got, ok := reg.Get("run")
-	if !ok || got != act1 {
-		t.Errorf("expected earlier library (L1) to win alias resolution for 'run'")
+func TestNewRegistry_AllowsDeclaredActionOverride(t *testing.T) {
+	t.Parallel()
+	original := action.New("task.run", func(_ context.Context, in string) (string, error) {
+		return "original:" + in, nil
+	}).Build()
+	replacement := action.New("task.run", func(_ context.Context, in string) (string, error) {
+		return "replacement:" + in, nil
+	}).Build()
+	reg, err := action.NewRegistry(
+		action.Library{Name: "base", Actions: []action.AnyAction{original}},
+		action.Library{Name: "test_override", Actions: []action.AnyAction{replacement}, Overrides: []string{"task.run"}},
+	)
+	if err != nil {
+		t.Fatalf("declared action override: %v", err)
+	}
+	got, ok := reg.Get("task.run")
+	if !ok || got != replacement {
+		t.Fatal("registry did not select the explicitly overridden action")
+	}
+	if reg.Len() != 1 {
+		t.Fatalf("override created a duplicate action entry: Len() = %d", reg.Len())
+	}
+	actions := reg.Actions()
+	if len(actions) != 1 || actions[0] != replacement {
+		t.Fatalf("Actions() is inconsistent with Get(): %#v", actions)
+	}
+}
+
+func TestNewRegistry_RejectsUnmatchedActionOverride(t *testing.T) {
+	t.Parallel()
+
+	replacement := action.New("task.run", func(_ context.Context, in string) (string, error) {
+		return "replacement:" + in, nil
+	}).Build()
+	tests := []struct {
+		name      string
+		libraries []action.Library
+		want      string
+	}{
+		{
+			name: "target is not registered",
+			libraries: []action.Library{{
+				Name: "test_override", Actions: []action.AnyAction{replacement}, Overrides: []string{"task.run"},
+			}},
+			want: `overrides action "task.run" without a previously registered target`,
+		},
+		{
+			name: "replacement action is not declared",
+			libraries: []action.Library{{
+				Name: "test_override", Overrides: []string{"task.run"},
+			}},
+			want: `declares override for action "task.run" but does not declare that action`,
+		},
+		{
+			name: "target is not an action",
+			libraries: []action.Library{
+				{Name: "base", Sources: []action.AnyStreamAction{intSource("task.run", 1)}},
+				{Name: "test_override", Actions: []action.AnyAction{replacement}, Overrides: []string{"task.run"}},
+			},
+			want: `kind action owner "test_override" conflicts with kind source owner "base"`,
+		},
+		{
+			name: "override is declared more than once",
+			libraries: []action.Library{
+				{Name: "base", Actions: []action.AnyAction{action.New("task.run", dummyHandler).Build()}},
+				{Name: "test_override", Actions: []action.AnyAction{replacement}, Overrides: []string{"task.run", "task.run"}},
+			},
+			want: `declares override for action "task.run" more than once`,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			reg, err := action.NewRegistry(test.libraries...)
+			if err == nil {
+				t.Fatal("expected an error for an unmatched override")
+			}
+			if reg != nil {
+				t.Fatal("invalid override returned a partially built registry")
+			}
+			if !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("error %q does not contain %q", err, test.want)
+			}
+		})
 	}
 }
 

@@ -18,6 +18,9 @@ type Registry struct {
 
 // NewRegistry assembles the given libraries into a single Registry.
 func NewRegistry(libs ...Library) (*Registry, error) {
+	if err := validateRegistryLibraries(libs); err != nil {
+		return nil, err
+	}
 	r := &Registry{
 		byName:     make(map[string]AnyAction),
 		byStream:   make(map[string]AnyStreamAction),
@@ -41,7 +44,9 @@ func NewRegistry(libs ...Library) (*Registry, error) {
 		}
 	}
 
-	r.resolveAliases(libs)
+	if err := r.resolveAliases(libs); err != nil {
+		return nil, err
+	}
 
 	return r, nil
 }
@@ -65,9 +70,20 @@ func (r *Registry) registerActions(lib *Library, owners map[string]string) error
 		}
 
 		isOverride := slices.Contains(lib.Overrides, meta.Name)
+		replaceIndex := -1
 		if !isOverride {
 			if owner, dup := owners[meta.Name]; dup {
 				return fmt.Errorf("action: %q declared by both %q and %q", meta.Name, owner, lib.Name)
+			}
+		} else {
+			for i, existing := range r.actions {
+				if existing != nil && existing.Describe() != nil && existing.Describe().Name == meta.Name {
+					replaceIndex = i
+					break
+				}
+			}
+			if replaceIndex == -1 {
+				return fmt.Errorf("library %q overrides action %q without a registered target", lib.Name, meta.Name)
 			}
 		}
 
@@ -76,12 +92,7 @@ func (r *Registry) registerActions(lib *Library, owners map[string]string) error
 		r.byName[meta.Name] = act
 
 		if isOverride {
-			for i, existing := range r.actions {
-				if existing != nil && existing.Describe() != nil && existing.Describe().Name == meta.Name {
-					r.actions[i] = act
-					break
-				}
-			}
+			r.actions[replaceIndex] = act
 		} else {
 			r.actions = append(r.actions, act)
 		}
@@ -135,28 +146,26 @@ func (r *Registry) registerOperators(lib *Library, owners map[string]string) err
 	return nil
 }
 
-func (r *Registry) resolveAliases(libs []Library) {
+func (r *Registry) resolveAliases(libs []Library) error {
 	for i := range libs {
 		lib := &libs[i]
 		for _, alias := range lib.Aliases {
-			if alias.Canonical == "" || len(alias.Short) == 0 {
-				continue
-			}
 			target, ok := r.lookupAny(alias.Canonical)
 			if !ok {
-				continue
+				return fmt.Errorf("alias in library %q targets missing canonical %q (kind canonical, owner unknown)", lib.Name, alias.Canonical)
 			}
 			for _, short := range alias.Short {
-				if short == "" || short == alias.Canonical {
-					continue
+				if !validRegistryName(short) || short == alias.Canonical {
+					return fmt.Errorf("malformed alias name %q in library %q for canonical %q", short, lib.Name, alias.Canonical)
 				}
 				if _, exists := r.lookupAny(short); exists {
-					continue
+					return fmt.Errorf("alias collision: name %q kind alias owner %q conflicts with an existing canonical or alias name", short, lib.Name)
 				}
 				r.registerAlias(short, target)
 			}
 		}
 	}
+	return nil
 }
 
 func MustNewRegistry(libs ...Library) *Registry {
