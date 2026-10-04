@@ -74,7 +74,7 @@ func goldenJSON(tb testing.TB, name string, got any, update bool) {
 func writeGolden(tb testing.TB, path string, data []byte) {
 	tb.Helper()
 	if err := os.WriteFile(path, data, 0o600); err != nil {
-		tb.Fatalf("xtest.GoldenJSON: write %s: %v", path, err)
+		tb.Fatalf("xtest: write golden %s: %v", path, err)
 	}
 }
 
@@ -103,4 +103,49 @@ func canonicalJSON(v any) ([]byte, error) {
 		return nil, err
 	}
 	return append(out, '\n'), nil
+}
+
+// GoldenText compares got against testdata/<name>.golden. The
+// -xtest.update flag rewrites the file.
+func GoldenText(tb testing.TB, name, got string) {
+	tb.Helper()
+	GoldenTextWithUpdate(tb, name, got, *UpdateGolden)
+}
+
+func GoldenTextWithUpdate(tb testing.TB, name, got string, update bool) {
+	tb.Helper()
+	if name == "" {
+		tb.Fatal("xtest.GoldenText: empty name")
+	}
+
+	path := filepath.Join("testdata", name+".golden")
+
+	if mkErr := os.MkdirAll(filepath.Dir(path), 0o755); mkErr != nil {
+		tb.Fatalf("xtest.GoldenText: mkdir: %v", mkErr)
+	}
+
+	existing, readErr := os.ReadFile(path)
+	if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
+		tb.Fatalf("xtest.GoldenText: read %s: %v", path, readErr)
+	}
+
+	gotBytes := []byte(got)
+	if readErr == nil && bytes.Equal(existing, gotBytes) {
+		return
+	}
+
+	if readErr != nil {
+		writeGolden(tb, path, gotBytes)
+		tb.Logf("xtest.GoldenText: created initial golden file %s", path)
+		return
+	}
+
+	if update {
+		writeGolden(tb, path, gotBytes)
+		tb.Logf("xtest.GoldenText: updated %s", path)
+		return
+	}
+
+	tb.Fatalf("xtest.GoldenText: %s mismatch\n--- want ---\n%s\n--- got ---\n%s\n(run with -xtest.update to rewrite)",
+		path, string(existing), got)
 }
