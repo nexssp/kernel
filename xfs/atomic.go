@@ -10,6 +10,8 @@ import (
 	"github.com/nexssp/kernel/xerr"
 )
 
+const goosWindows = "windows"
+
 // WriteFile writes data to path non-atomically. A crash mid-write
 // leaves path truncated or partially written.
 //
@@ -69,11 +71,13 @@ func WriteFileAtomic(path string, data []byte, perm os.FileMode) error {
 		return xerr.Internal("atomic write: rename", err)
 	}
 
-	if d, err := os.Open(dir); err == nil {
-		if err := d.Sync(); err != nil {
-			slog.Warn("xfs_dir_fsync_failed", "dir", dir, "error", err)
+	if runtime.GOOS != goosWindows {
+		if d, err := os.Open(dir); err == nil {
+			if err := d.Sync(); err != nil {
+				slog.Warn("xfs_dir_fsync_failed", "dir", dir, "error", err)
+			}
+			_ = d.Close()
 		}
-		_ = d.Close()
 	}
 	return nil
 }
@@ -89,7 +93,7 @@ func renameWithRetry(oldName, newName string) error {
 			return nil
 		}
 		lastErr = err
-		if runtime.GOOS != "windows" {
+		if runtime.GOOS != goosWindows {
 			break
 		}
 		time.Sleep(time.Duration(10*(i+1)) * time.Millisecond)

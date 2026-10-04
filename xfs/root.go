@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"runtime"
 	"time"
 
@@ -114,17 +115,15 @@ func (r *Root) WriteFile(p string, data []byte, perm os.FileMode) error {
 	return r.r.WriteFile(clean, data, perm)
 }
 
-// WriteFileAtomic writes data to p atomically: a crash mid-write
-// leaves p either at its previous content or at the new content, never
-// in between. Costs one extra file create + fsync + rename.
+// WriteFileAtomic writes data to p atomically and, on POSIX, durably.
+// A crash leaves p either at its old content or its new content, never
+// in between; on POSIX a crash after the rename cannot lose the rename
+// itself. Windows has no directory fsync, so the rename is atomic but not
+// durable across power loss.
 //
-// The temp file is created inside the root with O_EXCL so a
-// pre-created file (attacker-controlled symlink, sibling race) cannot
-// hijack the write. Symlink escapes are blocked by os.Root.
-//
-// On Windows, the final rename retries up to 5 times to survive
-// transient sharing violations (AV scanners, indexers) — mirroring the
-// behavior of xfs.WriteFileAtomic.
+// p is validated by Rel and every I/O goes through os.Root, so path
+// traversal is rejected before the first syscall and symlinks cannot
+// escape.
 func (r *Root) WriteFileAtomic(p string, data []byte, perm os.FileMode) error {
 	clean, err := Rel(p)
 	if err != nil {
@@ -144,6 +143,18 @@ func (r *Root) WriteFileAtomic(p string, data []byte, perm os.FileMode) error {
 	if err := r.renameWithRetry(tmpName, clean); err != nil {
 		r.cleanupTemp(tmpName)
 		return xerr.Internal("atomic write: rename", err)
+	}
+
+	// Directory fsync is POSIX-only. Windows does not expose it, and the
+	// rename is atomic but not durable across power loss.
+	if runtime.GOOS != goosWindows {
+		dir := filepath.Dir(clean)
+		if d, openErr := r.r.Open(dir); openErr == nil {
+			if syncErr := d.Sync(); syncErr != nil {
+				slog.Warn("xfs_dir_fsync_failed", "dir", dir, "error", syncErr)
+			}
+			_ = d.Close()
+		}
 	}
 	return nil
 }
@@ -196,7 +207,7 @@ func (r *Root) renameWithRetry(oldName, newName string) error {
 		if lastErr = r.r.Rename(oldName, newName); lastErr == nil {
 			return nil
 		}
-		if runtime.GOOS != "windows" {
+		if runtime.GOOS != goosWindows {
 			break
 		}
 		time.Sleep(time.Duration(10*(i+1)) * time.Millisecond)
