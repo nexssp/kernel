@@ -115,3 +115,43 @@ func normalizeInterval(interval time.Duration) time.Duration {
 	}
 	return interval
 }
+
+// EventuallyT polls probe until it returns (value, true), or fails the
+// test at timeout. Returns the accepted value.
+func EventuallyT[T any](tb testing.TB, timeout time.Duration, probe func() (T, bool)) T {
+	tb.Helper()
+	return EventuallyEveryT(tb, timeout, DefaultPollInterval, probe)
+}
+
+func EventuallyEveryT[T any](
+	tb testing.TB, timeout, interval time.Duration, probe func() (T, bool),
+) T {
+	tb.Helper()
+	if probe == nil {
+		tb.Fatal("xtest.EventuallyEveryT: nil probe")
+	}
+	if v, ok := probe(); ok {
+		return v
+	}
+	if timeout <= 0 {
+		var zero T
+		tb.Fatalf("xtest.EventuallyEveryT: probe never succeeded (timeout=%s)", timeout)
+		return zero
+	}
+
+	interval = normalizeInterval(interval)
+	deadline := time.Now().Add(timeout)
+
+	for {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			var zero T
+			tb.Fatalf("xtest.EventuallyEveryT: probe never succeeded within %s", timeout)
+			return zero
+		}
+		time.Sleep(min(interval, remaining))
+		if v, ok := probe(); ok {
+			return v
+		}
+	}
+}
