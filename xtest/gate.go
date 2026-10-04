@@ -1,12 +1,14 @@
 package xtest
 
 import (
+	"sync"
 	"sync/atomic"
 )
 
 // Gate provides a concurrent barrier for thundering-herd tests.
 type Gate struct {
 	ready  chan struct{}
+	once   sync.Once
 	active atomic.Int32
 }
 
@@ -23,7 +25,7 @@ func (g *Gate) Enter() {
 
 // Release unblocks all goroutines waiting in Enter.
 func (g *Gate) Release() {
-	close(g.ready)
+	g.once.Do(func() { close(g.ready) })
 }
 
 // Active returns the number of goroutines that have called Enter.
