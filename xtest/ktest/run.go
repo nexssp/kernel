@@ -90,3 +90,7 @@ func (r *RunResult[Res]) ErrorContains(substr string) *RunResult[Res] {
 	RequireErrorContains(r.tb, r.err, substr)
 	return r
 }
+
+// Err returns the action's raw error, or nil on success. It does not
+// fail the test; use it when a custom assertion needs the error value.
+func (r *RunResult[Res]) Err() error { return r.err }

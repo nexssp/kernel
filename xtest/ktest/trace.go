@@ -192,3 +192,23 @@ func (t *Trace) Dump(tb testing.TB) {
 	}
 	tb.Log(sb.String())
 }
+
+// RequireCount fails unless action was called exactly want times.
+func (t *Trace) RequireCount(tb testing.TB, name string, want int) {
+	tb.Helper()
+	if got := t.Count(name); got != want {
+		tb.Fatalf("action %q called %d time(s), want %d; trace: %v",
+			name, got, want, t.Names())
+	}
+}
+
+// Last returns the most recent call, or (zero, false) when the trace
+// is empty.
+func (t *Trace) Last() (Call, bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if len(t.calls) == 0 {
+		return Call{}, false
+	}
+	return t.calls[len(t.calls)-1], true
+}

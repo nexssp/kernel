@@ -26,3 +26,23 @@ func (c *Counter) Require(tb testing.TB, want int64) {
 		tb.Fatalf("execution count = %d, want %d", got, want)
 	}
 }
+
+// Reset returns the counter to zero.
+func (c *Counter) Reset() { c.calls.Store(0) }
+
+// RequireAtLeast fails unless the counter is >= want.
+func (c *Counter) RequireAtLeast(tb testing.TB, want int64) {
+	tb.Helper()
+	if got := c.Load(); got < want {
+		tb.Fatalf("execution count = %d, want >= %d", got, want)
+	}
+}
+
+// RequireAtMost fails unless the counter is <= want. Common in cache and
+// coalesce tests where the assertion is an upper bound, not exact.
+func (c *Counter) RequireAtMost(tb testing.TB, want int64) {
+	tb.Helper()
+	if got := c.Load(); got > want {
+		tb.Fatalf("execution count = %d, want <= %d", got, want)
+	}
+}
