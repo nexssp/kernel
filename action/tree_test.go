@@ -2,6 +2,7 @@ package action_test
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -72,8 +73,10 @@ func (m *mockFixedHookNode) ResetHooks() {
 }
 
 func (m *mockGraphNode) CloneWithHooks(hooks ...action.AnyHook) action.AnyAction {
-	m.AddAnyHook(hooks...)
-	return m
+	return &mockGraphNode{
+		AnyAction: m.AnyAction.CloneWithHooks(hooks...),
+		children:  slices.Clone(m.children),
+	}
 }
 
 func TestApplyTreeHook_Deduplication_DiamondDAG(t *testing.T) {
@@ -217,24 +220,28 @@ func TestApplyTreeHook_NestedProxyChains(t *testing.T) {
 }
 
 func BenchmarkApplyTreeHook_DeepLinearDAG(b *testing.B) {
-	var current action.AnyAction = action.New("leaf", func(_ context.Context, _ any) (string, error) {
-		return "", nil
-	}).Build()
-
-	for range 16 {
-		current = &mockGraphNode{
-			AnyAction: action.New("step", func(_ context.Context, _ any) (string, error) { return "", nil }).Build(),
-			children:  []action.AnyAction{current},
+	nodes := make([]mockFixedHookNode, 17)
+	for i := range 16 {
+		nodes[i] = mockFixedHookNode{
+			name:     "step",
+			children: []action.AnyAction{&nodes[i+1]},
 		}
 	}
+	nodes[16] = mockFixedHookNode{name: "leaf"}
 
-	hook := action.AnyHook{}
+	hookSlice := []action.AnyHook{{}}
+	opts := action.TreeHookOptions{MaxDepth: action.DefaultMaxTreeDepth}
 
 	b.ReportAllocs()
 	b.ResetTimer()
 
 	for range b.N {
-		_ = action.ApplyTreeHook(current, hook)
+		if err := action.ApplyTreeHookOpts(&nodes[0], opts, hookSlice...); err != nil {
+			b.Fatal(err)
+		}
+		for j := range nodes {
+			nodes[j].ResetHooks()
+		}
 	}
 }
 
