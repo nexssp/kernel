@@ -43,19 +43,23 @@ func (s *PrometheusSink) WritePrometheus(w io.Writer) error {
 	}
 	snapshot := s.Snapshot()
 	keys := sortedMetricKeys(snapshot)
-	if _, err := io.WriteString(w, "# TYPE nexss_action_events_total counter\n"); err != nil {
-		return err
-	}
+
+	var sb strings.Builder
+	sb.Grow(64 + len(keys)*64)
+	sb.WriteString("# TYPE nexss_action_events_total counter\n")
+
 	for _, key := range keys {
-		line := "nexss_action_events_total{" +
-			"action=\"" + escapeLabel(key.Action) + "\"," +
-			"kind=\"" + escapeLabel(key.Kind) + "\"} " +
-			strconv.FormatUint(snapshot[key], 10) + "\n"
-		if _, err := io.WriteString(w, line); err != nil {
-			return err
-		}
+		sb.WriteString("nexss_action_events_total{action=\"")
+		sb.WriteString(escapeLabel(key.Action))
+		sb.WriteString("\",kind=\"")
+		sb.WriteString(escapeLabel(key.Kind))
+		sb.WriteString("\"} ")
+		sb.WriteString(strconv.FormatUint(snapshot[key], 10))
+		sb.WriteByte('\n')
 	}
-	return nil
+
+	_, err := io.WriteString(w, sb.String())
+	return err
 }
 
 type JSONLSink struct {
@@ -150,8 +154,17 @@ func boundedValue(value any, maxBytes int) string {
 	return text
 }
 
+// labelEscaper is hoisted: a *strings.Replacer is a small trie that is
+// expensive to construct and cheap to use, so it must be built once.
+// The fast path in escapeLabel skips it entirely when no escapable byte
+// is present — the common case for canonical action names.
+var labelEscaper = strings.NewReplacer("\\", "\\\\", "\"", "\\\"", "\n", "\\n")
+
 func escapeLabel(value string) string {
-	return strings.NewReplacer("\\", "\\\\", "\"", "\\\"", "\n", "\\n").Replace(value)
+	if !strings.ContainsAny(value, "\\\"\n") {
+		return value
+	}
+	return labelEscaper.Replace(value)
 }
 
 func sortedMetricKeys(values map[MetricKey]uint64) []MetricKey {
