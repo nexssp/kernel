@@ -1,0 +1,70 @@
+version: '3'
+
+tasks:
+  default:
+    desc: Show every available task
+    cmds:
+      - task --list
+
+  build:
+    desc: Build every Go package
+    cmds:
+      - go build ./...
+
+  test:
+    desc: Fast Go test pass in short mode
+    cmds:
+      - go test -short ./...
+
+  test:race:
+    desc: Full Go test suite with the race detector
+    cmds:
+      - go test ./... -race
+
+  bench:
+    desc: Run action benchmarks
+    cmds:
+      - go test ./action/... -run '^$' -bench=. -benchmem
+
+  fmt:
+    desc: Apply configured gofumpt and goimports formatters
+    cmds:
+      - golangci-lint fmt
+
+  fmt:check:
+    desc: Check gofumpt and goimports formatting without editing files
+    cmds:
+      - golangci-lint fmt --diff
+
+  lint:
+    desc: Run configured golangci-lint checks
+    cmds:
+      - golangci-lint run ./...
+
+  lint:new:
+    desc: Run golangci-lint only on code changed since origin/main
+    cmds:
+      - golangci-lint run --new-from-rev=origin/main
+
+  lint:fix:
+    desc: Run golangci-lint with auto-fix only on code changed since origin/main
+    cmds:
+      - golangci-lint run --fix --new-from-rev=origin/main
+
+  check:
+    desc: Full local gate — format check, lint, and race tests
+    cmds:
+      - task: fmt:check
+      - task: lint
+      - task: test:race
+
+  pre-push:
+    desc: Fast pre-push gate — lint of new code and short tests, run in parallel
+    deps:
+      - lint:new
+      - test
+
+  tidy:
+    desc: Tidy this module
+    cmds:
+      - go mod tidy
