@@ -480,7 +480,9 @@ func BenchmarkRegistry_Actions(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for range b.N {
-		_ = reg.Actions()
+		// Sink: Actions() returns a stored slice and is trivially inlinable —
+		// without a sink the compiler deletes the call (measured 0.27 ns/op).
+		*benchSinkActionsP = reg.Actions()
 	}
 }
 

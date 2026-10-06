@@ -66,13 +66,16 @@ func BenchmarkResilience_Retry_RecoversAfter2(b *testing.B) {
 }
 
 // ─── Backoff strategies ────────────────────────────────────────────────────
+// All backoff results are written to a package-level sink. Without it the
+// compiler dead-code-eliminates inlinable closures (Constant/Linear measured
+// 0.27 ns/op — the cost of an empty loop, not of the backoff function).
 
 func BenchmarkResilience_Backoff_Constant(b *testing.B) {
 	fn := action.ConstantBackoff(time.Millisecond)
 	b.ReportAllocs()
 	b.ResetTimer()
 	for range b.N {
-		_ = fn(5)
+		*benchSinkDurationP = fn(5)
 	}
 }
 
@@ -81,7 +84,7 @@ func BenchmarkResilience_Backoff_Linear(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for range b.N {
-		_ = fn(5)
+		*benchSinkDurationP = fn(5)
 	}
 }
 
@@ -90,7 +93,7 @@ func BenchmarkResilience_Backoff_Exponential(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for range b.N {
-		_ = fn(5)
+		*benchSinkDurationP = fn(5)
 	}
 }
 
@@ -100,7 +103,7 @@ func BenchmarkResilience_Backoff_ExponentialJitter(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for range b.N {
-		_ = fn(5)
+		*benchSinkDurationP = fn(5)
 	}
 }
 

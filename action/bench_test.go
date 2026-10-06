@@ -30,7 +30,13 @@ func BenchmarkAction_Overhead(b *testing.B) {
 		b.ReportAllocs()
 		b.ResetTimer()
 		for i := range b.N {
-			if _, err := rawHandler(ctx, i); err != nil {
+			// Sink prevents dead-code elimination: rawHandler is
+			// trivially inlinable, so a discarded result lets the
+			// compiler remove the call entirely (measured 0.27 ns/op
+			// — the cost of an empty loop, not of the handler).
+			res, err := rawHandler(ctx, i)
+			*benchSinkIntP = res
+			if err != nil {
 				b.Fatal(err)
 			}
 		}
