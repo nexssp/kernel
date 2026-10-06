@@ -5,11 +5,17 @@ import (
 	"slices"
 )
 
+var (
+	executionIDKey     = NewKey[string]("xctx.execution_id")
+	rootExecutionIDKey = NewKey[string]("xctx.root_execution_id")
+)
+
 // ── Setters ──────────────────────────────────────────────────────────────────
 //
-// Each With* returns ctx with the field set on the request's scope. If no
-// scope exists yet, one is created. Setters that accept an id are no-ops
-// for empty strings, so callers can safely thread optional values through.
+// Each With* returns ctx with the field set. Setters that accept an id are
+// no-ops for empty strings, so callers can safely thread optional values
+// through. Execution identity setters write to context keys; the rest
+// write to the RequestScope.
 
 func WithRequestID(ctx context.Context, id string) context.Context {
 	if id == "" {
@@ -20,12 +26,16 @@ func WithRequestID(ctx context.Context, id string) context.Context {
 	return ctx
 }
 
+// WithExecutionID stores the id in context keys, not in a RequestScope.
+// The root id is set only when no root exists yet in the context tree.
 func WithExecutionID(ctx context.Context, id string) context.Context {
 	if id == "" {
 		return ctx
 	}
-	ctx, s := ensureScope(ctx)
-	s.ExecutionID = id
+	ctx = executionIDKey.With(ctx, id)
+	if RootExecutionIDFrom(ctx) == "" {
+		ctx = rootExecutionIDKey.With(ctx, id)
+	}
 	return ctx
 }
 
@@ -33,9 +43,7 @@ func WithRootExecutionID(ctx context.Context, id string) context.Context {
 	if id == "" {
 		return ctx
 	}
-	ctx, s := ensureScope(ctx)
-	s.RootExecutionID = id
-	return ctx
+	return rootExecutionIDKey.With(ctx, id)
 }
 
 func WithTraceID(ctx context.Context, id string) context.Context {
@@ -131,20 +139,17 @@ func RequestIDFrom(ctx context.Context) string {
 	return ""
 }
 
+// ExecutionIDFrom returns the active execution ID from context keys.
 func ExecutionIDFrom(ctx context.Context) string {
-	if s := ScopeFrom(ctx); s != nil {
-		return s.ExecutionID
-	}
-	return ""
+	id, _ := executionIDKey.From(ctx)
+	return id
 }
 
 // RootExecutionIDFrom returns the top-level execution ID recorded by
 // WithRootExecutionID, or "" when none was set.
 func RootExecutionIDFrom(ctx context.Context) string {
-	if s := ScopeFrom(ctx); s != nil {
-		return s.RootExecutionID
-	}
-	return ""
+	id, _ := rootExecutionIDKey.From(ctx)
+	return id
 }
 
 func TenantIDFrom(ctx context.Context) string {

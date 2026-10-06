@@ -14,26 +14,26 @@ type (
 var globalGeneration atomic.Uint64
 
 // RequestScope carries per-request metadata.
+//
+// Execution identity (execution id, root execution id) does not live
+// here — it is stored in typed context keys by WithExecutionID. Only
+// fields that are inherently mutable-per-request and cheap to reset
+// live on the scope.
 type RequestScope struct {
-	generation      atomic.Uint64
-	RequestID       string
-	ExecutionID     string
-	RootExecutionID string
-	TraceID         string
-	SpanID          string
-	Endpoint        string
-	UserID          string
-	TenantID        string
-	Role            string
-	ClientIP        string
-	Roles           []string
-	Permissions     []string
-	Features        []string
-	TraceEvents     []string
+	generation  atomic.Uint64
+	RequestID   string
+	TraceID     string
+	SpanID      string
+	Endpoint    string
+	UserID      string
+	TenantID    string
+	Role        string
+	ClientIP    string
+	Roles       []string
+	Permissions []string
+	Features    []string
+	TraceEvents []string
 
-	// traceMu guards TraceEvents. Held only by AddTrace. All other
-	// readers and writers of TraceEvents run after the request has
-	// fully unwound (Reset, CloneForAsync) and take no lock.
 	traceMu sync.Mutex
 }
 
@@ -42,8 +42,6 @@ type RequestScope struct {
 // does not touch generation; that is the pool's responsibility.
 func (s *RequestScope) Reset() {
 	s.RequestID = ""
-	s.ExecutionID = ""
-	s.RootExecutionID = ""
 	s.TraceID = ""
 	s.SpanID = ""
 	s.Endpoint = ""

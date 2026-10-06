@@ -8,22 +8,46 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-// Execute runs DAG layers sequentially, executing nodes within each layer
-// concurrently.
+// Execute runs the DAG.
 //
-// Resume-from-failure: any node whose output key is already present in
-// initialState is skipped. Re-execute with a persisted state to run only
-// the nodes that did not complete.
+// Two execution modes, selected by the compiled graph's shape:
 //
-// Layer callback: attach with WithLayerCallback. Fired after each layer
-// with the accumulated state. A callback error aborts execution and is
-// returned wrapped in *ExecutionError, unless the callback returned
-// ErrSuspended (preserved as the sentinel). The callback is consumed by
-// the outermost DAG that sees it, so nested DAGs never fire it twice.
+//   - Layer mode (default). Nodes are grouped into topological layers
+//     by the compiler. Each layer runs concurrently with errgroup;
+//     layers run sequentially. Resume-from-failure skips any node
+//     whose output key is already present in initialState.
 //
-// On any error the returned *State is non-nil and owns every node output
-// produced so far. The caller must Release it.
+//   - Dynamic mode (when the DAG has at least one conditional edge).
+//     The engine walks from entryID, one node per step, following
+//     RouterFunc decisions until a router returns "" or "end", or
+//     until maxSteps is exceeded. Layers are ignored; resume state is
+//     honored the same way (nodes whose output key exists are not
+//     re-executed, so a resumed dynamic run continues from where it
+//     stopped).
+//
+// Layer callback: attach with WithLayerCallback. In layer mode it
+// fires once per completed layer. In dynamic mode it is not fired —
+// there are no layers to checkpoint. Callers that need checkpointing
+// for dynamic DAGs must use a Journal (see action.Durable) instead.
+// The callback is consumed by the outermost DAG that sees it, so
+// nested DAGs never fire it twice.
+//
+// On any error the returned *State is non-nil and owns every node
+// output produced so far. The caller must Release it.
 func (d *DAG) Execute(ctx context.Context, initialState ReadState) (*State, error) {
+	if d == nil {
+		return nil, errors.New("graph: nil DAG")
+	}
+
+	if d.conditionalEdges != nil {
+		return d.executeDynamic(ctx, initialState)
+	}
+
+	return d.executeLayered(ctx, initialState)
+}
+
+// executeLayered is the original layer-by-layer executor.
+func (d *DAG) executeLayered(ctx context.Context, initialState ReadState) (*State, error) {
 	currentState := initialState.Clone()
 	onLayer := LayerCallbackFromCtx(ctx)
 	if onLayer != nil {

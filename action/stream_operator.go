@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"reflect"
+	"strings"
 
 	"github.com/nexssp/kernel/stream"
 )
@@ -63,7 +65,11 @@ func NewSimpleOperator[In, Out any](
 }
 
 func decodeConfig(target, source any) error {
-	data, err := json.Marshal(source)
+	normalized, err := normalizeConfigForTarget(source, target)
+	if err != nil {
+		return err
+	}
+	data, err := json.Marshal(normalized)
 	if err != nil {
 		return err
 	}
@@ -72,7 +78,65 @@ func decodeConfig(target, source any) error {
 	return decoder.Decode(target)
 }
 
-// ValidateOperatorDeclaration validates operator completeness at registration time.
+// normalizeConfigForTarget converts string values from a raw config map
+// into the JSON-compatible representation expected by the target
+// struct's field types. This is the whole-struct counterpart to
+// CoerceStringValue: config decoding calls it once per operator build,
+// so a string "false" for a bool field reaches the JSON decoder as a
+// real bool, and a string "false" for a string field stays a string.
+//
+// Fields not present in the source map are left untouched — the JSON
+// decoder applies zero values or explicit defaults. Unknown keys in
+// the source map are passed through so DisallowUnknownFields in the
+// decoder can reject them with its own diagnostic.
+func normalizeConfigForTarget(source, target any) (any, error) {
+	m, ok := source.(map[string]any)
+	if !ok || target == nil {
+		return source, nil
+	}
+	typ := reflect.TypeOf(target)
+	for typ.Kind() == reflect.Pointer {
+		typ = typ.Elem()
+	}
+	if typ.Kind() != reflect.Struct {
+		return source, nil
+	}
+
+	out := make(map[string]any, len(m))
+	maps.Copy(out, m)
+
+	for field := range typ.Fields() {
+		if !field.IsExported() {
+			continue
+		}
+		jsonName, _, _ := strings.Cut(field.Tag.Get("json"), ",")
+		if jsonName == "" {
+			jsonName = field.Name
+		}
+		if jsonName == "-" {
+			continue
+		}
+		raw, exists := out[jsonName]
+		if !exists {
+			continue
+		}
+		str, isStr := raw.(string)
+		if !isStr {
+			continue
+		}
+		coerced, err := CoerceStringValue(str, field.Type)
+		if err != nil {
+			return nil, fmt.Errorf("field %q: %w", jsonName, err)
+		}
+		out[jsonName] = coerced
+	}
+	return out, nil
+}
+
+// ValidateOperatorDeclaration validates operator completeness at
+// registration time. Every field that a caller could observe is
+// checked, so a hand-constructed NamedOperator with a nil ConfigType
+// is rejected here rather than at the first build attempt.
 func ValidateOperatorDeclaration(op NamedOperator) error {
 	if op.Name == "" {
 		return errors.New("operator with empty name")
@@ -80,8 +144,14 @@ func ValidateOperatorDeclaration(op NamedOperator) error {
 	if op.Build == nil {
 		return fmt.Errorf("operator %q: nil Build", op.Name)
 	}
-	if op.InType == nil || op.OutType == nil {
-		return fmt.Errorf("operator %q: nil InType or OutType", op.Name)
+	if op.InType == nil {
+		return fmt.Errorf("operator %q: nil InType", op.Name)
+	}
+	if op.OutType == nil {
+		return fmt.Errorf("operator %q: nil OutType", op.Name)
+	}
+	if op.ConfigType == nil {
+		return fmt.Errorf("operator %q: nil ConfigType", op.Name)
 	}
 	return nil
 }

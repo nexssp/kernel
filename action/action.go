@@ -160,8 +160,11 @@ func (a *BuiltAction[Req, Res]) Do(ctx context.Context, req Req) (res Res, err e
 
 func setupExecutionContext(ctx context.Context, state **execState, needExecState bool) context.Context {
 	finalCtx := ctx
-	if s := xctx.ScopeFrom(finalCtx); s != nil && s.ExecutionID != "" && s.RootExecutionID == "" {
-		finalCtx = xctx.WithRootExecutionID(finalCtx, s.ExecutionID)
+	// First action in the tree anchors the root. The check also covers
+	// contexts carrying only ExecutionID (legacy scope), not just those
+	// produced by WithExecutionID.
+	if execID := xctx.ExecutionIDFrom(finalCtx); execID != "" && xctx.RootExecutionIDFrom(finalCtx) == "" {
+		finalCtx = xctx.WithRootExecutionID(finalCtx, execID)
 	}
 	if needExecState {
 		*state = &execState{}

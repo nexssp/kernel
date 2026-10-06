@@ -91,7 +91,10 @@ func TestRequestScopeAllFields(t *testing.T) {
 	if xctx.RequestIDFrom(ctx) != "r1" || scope.RequestID != "r1" {
 		t.Fail()
 	}
-	if xctx.ExecutionIDFrom(ctx) != "e1" || scope.ExecutionID != "e1" {
+	if xctx.ExecutionIDFrom(ctx) != "e1" {
+		t.Fail()
+	}
+	if xctx.RootExecutionIDFrom(ctx) != "e1" {
 		t.Fail()
 	}
 	if xctx.TraceIDFrom(ctx) != "t1" || scope.TraceID != "t1" {
@@ -111,6 +114,9 @@ func TestRequestScopeAllFields(t *testing.T) {
 	asyncCtx := xctx.CloneForAsync(ctx)
 	if xctx.ExecutionIDFrom(asyncCtx) != "e1" {
 		t.Errorf("expected execution ID preserved across async boundary")
+	}
+	if xctx.RootExecutionIDFrom(asyncCtx) != "e1" {
+		t.Errorf("expected root execution ID preserved across async boundary")
 	}
 	if xctx.SpanIDFrom(asyncCtx) != "s1" {
 		t.Errorf("expected span ID preserved across async boundary")

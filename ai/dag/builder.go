@@ -2,6 +2,7 @@ package dag
 
 import (
 	"fmt"
+	"maps"
 	"slices"
 	"sort"
 
@@ -12,10 +13,13 @@ import (
 // Builder accumulates nodes and edges, then compiles them into an
 // immutable DAG. The first builder error short-circuits further calls.
 type Builder struct {
-	name       string
-	nodes      map[string]Node
-	edges      []Edge
-	compileErr error
+	name             string
+	nodes            map[string]Node
+	edges            []Edge
+	conditionalEdges map[string]conditionalEdge
+	maxSteps         int
+	entryID          string
+	compileErr       error
 }
 
 // New returns a Builder for a named DAG.
@@ -45,6 +49,9 @@ func (b *Builder) AddNode(id, _ string, act action.AnyAction) *Builder {
 		return b
 	}
 	b.nodes[id] = Node{ID: id, OutputKey: OutputKey(id), Action: ex}
+	if b.entryID == "" {
+		b.entryID = id
+	}
 	return b
 }
 
@@ -69,11 +76,74 @@ func (b *Builder) AddEdge(from, to string) *Builder {
 }
 
 // Compile validates the graph and produces the immutable DAG. Errors
-// accumulated by AddNode / AddEdge surface here.
+// accumulated by AddNode / AddEdge / AddConditionalEdge surface here.
 func (b *Builder) Compile() (*DAG, error) {
 	if b.compileErr != nil {
 		return nil, b.compileErr
 	}
+
+	// Validate conditional edges point at existing nodes BEFORE we
+	// build the layer graph. A router that returns an unknown node ID
+	// at runtime becomes xerr.NotFound; a router whose source node is
+	// unknown is a compile error.
+	for from := range b.conditionalEdges {
+		if _, ok := b.nodes[from]; !ok {
+			return nil, xerr.NotFound(fmt.Sprintf(
+				"graph compile: conditional edge source %q not found", from))
+		}
+	}
+
+	// Dynamic DAGs must have a resolvable entry node.
+	if len(b.conditionalEdges) > 0 {
+		if b.entryID == "" {
+			return nil, xerr.BadRequest(fmt.Sprintf(
+				"graph compile: dynamic graph %q has no entry node", b.name))
+		}
+		if _, ok := b.nodes[b.entryID]; !ok {
+			return nil, xerr.NotFound(fmt.Sprintf(
+				"graph compile: entry node %q not found", b.entryID))
+		}
+	}
+
+	layers, visited, err := b.computeLayers()
+	if err != nil {
+		return nil, err
+	}
+
+	// A graph with only conditional edges has no static edges and
+	// therefore no layers. That is valid — the entry point is the
+	// single node with no incoming static edges. Detect the degenerate
+	// case explicitly: dynamic DAGs need at least one node to start
+	// from.
+	if len(b.conditionalEdges) > 0 && len(b.nodes) == 0 {
+		return nil, xerr.BadRequest("graph compile: dynamic graph has no nodes")
+	}
+
+	if len(b.conditionalEdges) == 0 && visited != len(b.nodes) {
+		return nil, xerr.Conflict(fmt.Sprintf(
+			"graph compile: cycle detected in graph %q", b.name))
+	}
+
+	// Copy conditional edges so the DAG does not alias the builder's
+	// map if the builder is reused.
+	var condEdges map[string]conditionalEdge
+	if len(b.conditionalEdges) > 0 {
+		condEdges = make(map[string]conditionalEdge, len(b.conditionalEdges))
+		maps.Copy(condEdges, b.conditionalEdges)
+	}
+
+	return &DAG{
+		name:             b.name,
+		nodes:            b.nodes,
+		edges:            slices.Clone(b.edges),
+		conditionalEdges: condEdges,
+		layers:           layers,
+		maxSteps:         b.maxSteps,
+		entryID:          b.entryID,
+	}, nil
+}
+
+func (b *Builder) computeLayers() ([][]Node, int, error) {
 	inDegree := make(map[string]int, len(b.nodes))
 	adj := make(map[string][]string, len(b.nodes))
 
@@ -82,10 +152,10 @@ func (b *Builder) Compile() (*DAG, error) {
 	}
 	for _, e := range b.edges {
 		if _, ok := b.nodes[e.From]; !ok {
-			return nil, xerr.NotFound(fmt.Sprintf("graph compile: node %q not found", e.From))
+			return nil, 0, xerr.NotFound(fmt.Sprintf("graph compile: node %q not found", e.From))
 		}
 		if _, ok := b.nodes[e.To]; !ok {
-			return nil, xerr.NotFound(fmt.Sprintf("graph compile: node %q not found", e.To))
+			return nil, 0, xerr.NotFound(fmt.Sprintf("graph compile: node %q not found", e.To))
 		}
 		adj[e.From] = append(adj[e.From], e.To)
 		inDegree[e.To]++
@@ -118,15 +188,5 @@ func (b *Builder) Compile() (*DAG, error) {
 		}
 		layers = append(layers, currentLayer)
 	}
-
-	if visited != len(b.nodes) {
-		return nil, xerr.Conflict(fmt.Sprintf("graph compile: cycle detected in graph %q", b.name))
-	}
-
-	return &DAG{
-		name:   b.name,
-		nodes:  b.nodes,
-		edges:  slices.Clone(b.edges),
-		layers: layers,
-	}, nil
+	return layers, visited, nil
 }

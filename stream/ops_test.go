@@ -9,27 +9,6 @@ import (
 	"github.com/nexssp/kernel/stream"
 )
 
-func source[T any](items ...T) iter.Seq2[T, error] {
-	return func(yield func(T, error) bool) {
-		for _, item := range items {
-			if !yield(item, nil) {
-				return
-			}
-		}
-	}
-}
-
-func collect[T any](seq iter.Seq2[T, error]) ([]T, error) {
-	var out []T
-	for item, err := range seq {
-		if err != nil {
-			return out, err
-		}
-		out = append(out, item)
-	}
-	return out, nil
-}
-
 func TestMapFilterTake(t *testing.T) {
 	seq := stream.Take[int](2)(
 		stream.Filter(func(v int) bool { return v%2 == 0 })(

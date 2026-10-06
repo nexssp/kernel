@@ -9,8 +9,10 @@ import "context"
 // detached work and the detached work does not race the parent's pooled
 // scope.
 //
-// The returned context carries a scope with a fresh generation, so
-// AddTrace on the clone writes to the clone, not to the parent.
+// Execution identity keys (execution id, root execution id) are carried
+// through automatically: context.WithoutCancel preserves all values, so
+// the clone sees the same execution ids as the parent without an
+// explicit copy. Only the mutable RequestScope is duplicated.
 func CloneForAsync(ctx context.Context) context.Context {
 	if ctx == nil {
 		return context.Background()
@@ -20,8 +22,6 @@ func CloneForAsync(ctx context.Context) context.Context {
 		return context.WithoutCancel(ctx)
 	}
 
-	// Snapshot TraceEvents under the lock; the parent request may still
-	// have in-flight goroutines calling AddTrace.
 	s.traceMu.Lock()
 	traceEvents := append([]string(nil), s.TraceEvents...)
 	s.traceMu.Unlock()
@@ -29,17 +29,15 @@ func CloneForAsync(ctx context.Context) context.Context {
 	gen := globalGeneration.Add(1)
 
 	clone := &RequestScope{
-		RequestID:       s.RequestID,
-		ExecutionID:     s.ExecutionID,
-		RootExecutionID: s.RootExecutionID,
-		TraceID:         s.TraceID,
-		SpanID:          s.SpanID,
-		Endpoint:        s.Endpoint,
-		UserID:          s.UserID,
-		TenantID:        s.TenantID,
-		Role:            s.Role,
-		ClientIP:        s.ClientIP,
-		TraceEvents:     traceEvents,
+		RequestID:   s.RequestID,
+		TraceID:     s.TraceID,
+		SpanID:      s.SpanID,
+		Endpoint:    s.Endpoint,
+		UserID:      s.UserID,
+		TenantID:    s.TenantID,
+		Role:        s.Role,
+		ClientIP:    s.ClientIP,
+		TraceEvents: traceEvents,
 	}
 	clone.generation.Store(gen)
 
@@ -54,5 +52,6 @@ func CloneForAsync(ctx context.Context) context.Context {
 	}
 
 	asyncCtx := context.WithValue(context.WithoutCancel(ctx), scopeKeyT{}, clone)
-	return context.WithValue(asyncCtx, scopeGenKeyT{}, gen)
+	asyncCtx = context.WithValue(asyncCtx, scopeGenKeyT{}, gen)
+	return asyncCtx
 }

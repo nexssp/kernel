@@ -1,6 +1,7 @@
 package action
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -165,4 +166,22 @@ func StreamCollectN[T any](maxItems int) stream.StreamOp[T, []T] {
 			yield(buf, nil)
 		}
 	}
+}
+
+// StreamWorkerPool executes a typed BuiltAction concurrently across stream items with bounded concurrency.
+func StreamWorkerPool[In, Out any](
+	ctx context.Context,
+	concurrency int,
+	bufferCapacity int,
+	act *BuiltAction[In, Out],
+) stream.StreamOp[In, Out] {
+	if act == nil {
+		return func(_ iter.Seq2[In, error]) iter.Seq2[Out, error] {
+			return func(yield func(Out, error) bool) {
+				var zero Out
+				yield(zero, errors.New("action.StreamWorkerPool: action is nil"))
+			}
+		}
+	}
+	return stream.WorkerPool(ctx, concurrency, bufferCapacity, act.Do)
 }
