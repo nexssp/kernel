@@ -65,7 +65,7 @@ func NewSimpleOperator[In, Out any](
 }
 
 func decodeConfig(target, source any) error {
-	normalized, err := normalizeConfigForTarget(source, target)
+	normalized, err := NormalizeConfigForTarget(source, target)
 	if err != nil {
 		return err
 	}
@@ -78,7 +78,7 @@ func decodeConfig(target, source any) error {
 	return decoder.Decode(target)
 }
 
-// normalizeConfigForTarget converts string values from a raw config map
+// NormalizeConfigForTarget converts string values from a raw config map
 // into the JSON-compatible representation expected by the target
 // struct's field types. This is the whole-struct counterpart to
 // CoerceStringValue: config decoding calls it once per operator build,
@@ -89,7 +89,7 @@ func decodeConfig(target, source any) error {
 // decoder applies zero values or explicit defaults. Unknown keys in
 // the source map are passed through so DisallowUnknownFields in the
 // decoder can reject them with its own diagnostic.
-func normalizeConfigForTarget(source, target any) (any, error) {
+func NormalizeConfigForTarget(source, target any) (any, error) {
 	m, ok := source.(map[string]any)
 	if !ok || target == nil {
 		return source, nil

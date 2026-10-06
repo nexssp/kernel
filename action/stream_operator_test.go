@@ -11,7 +11,7 @@ func TestNormalizeConfigForTarget_BoolField(t *testing.T) {
 	type cfg struct {
 		Quiet bool `json:"quiet"`
 	}
-	got, err := normalizeConfigForTarget(map[string]any{"quiet": "true"}, cfg{})
+	got, err := NormalizeConfigForTarget(map[string]any{"quiet": "true"}, cfg{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -30,7 +30,7 @@ func TestNormalizeConfigForTarget_StringFieldStaysString(t *testing.T) {
 	type cfg struct {
 		Clipboard string `json:"clipboard"`
 	}
-	got, err := normalizeConfigForTarget(map[string]any{"clipboard": "false"}, cfg{})
+	got, err := NormalizeConfigForTarget(map[string]any{"clipboard": "false"}, cfg{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,7 +49,7 @@ func TestNormalizeConfigForTarget_InvalidBoolReportsField(t *testing.T) {
 	type cfg struct {
 		Quiet bool `json:"quiet"`
 	}
-	_, err := normalizeConfigForTarget(map[string]any{"quiet": "maybe"}, cfg{})
+	_, err := NormalizeConfigForTarget(map[string]any{"quiet": "maybe"}, cfg{})
 	if err == nil {
 		t.Fatal("expected error for invalid bool")
 	}
