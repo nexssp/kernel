@@ -96,8 +96,14 @@ func TestSaga_UndoPanicRecovery(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected saga failure")
 	}
-	if !res.RolledBack {
-		t.Fatal("expected saga to be marked as RolledBack")
+	// The panic in step 2's undo means the saga is only PARTIALLY rolled
+	// back — RolledBack must be false and the failure recorded.
+	if res.RolledBack {
+		t.Fatal("expected RolledBack=false when compensation panicked")
+	}
+	if len(res.CompensationErrors) != 1 {
+		t.Fatalf("expected exactly 1 compensation error, got %d: %v",
+			len(res.CompensationErrors), res.CompensationErrors)
 	}
 
 	if !undo2Ran.Load() {

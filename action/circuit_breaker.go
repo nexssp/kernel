@@ -59,7 +59,21 @@ func Adaptive[Req, Res any](name string, cfg AdaptiveConfig) Middleware[Req, Res
 			tCtx, cancel := timeoutCtx(ctx, state.CurrentTimeout())
 			defer cancel()
 
-			res, err := next(tCtx, req)
+			// Panic escaping next() would unwind past Observe/
+			// ReleaseProbe and wedge the breaker in stateHalfOpen.
+			res, err := func() (res Res, err error) {
+				defer func() {
+					if r := recover(); r != nil {
+						if ctx.Err() != nil {
+							state.ReleaseProbe()
+						} else {
+							state.Observe(xerr.PanicRecovery(r))
+						}
+						panic(r)
+					}
+				}()
+				return next(tCtx, req)
+			}()
 
 			if err != nil && ctx.Err() != nil {
 				state.ReleaseProbe()

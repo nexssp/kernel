@@ -51,6 +51,17 @@ func (sm *StateMachineBuilder[Req, Res]) Build() *BuiltAction[Req, Res] {
 		return func(ctx context.Context, req Req) (Res, error) {
 			originalState := req.GetState()
 
+			// Fail fast: a state with no outbound transitions can never
+			// produce a valid move. Rejecting BEFORE the handler runs
+			// prevents the handler's side effects for requests the machine
+			// can never accept — previously the handler executed first
+			// and only the in-memory state field was rolled back.
+			allowed, exists := sm.transitions[originalState]
+			if !exists {
+				var zero Res
+				return zero, xerr.Conflict(fmt.Sprintf("invalid transition from '%s'", originalState))
+			}
+
 			// We run the handler first to see the mutated state
 			res, err := next(ctx, req)
 			if err != nil {
@@ -62,16 +73,12 @@ func (sm *StateMachineBuilder[Req, Res]) Build() *BuiltAction[Req, Res] {
 				return res, nil // No transition occurred
 			}
 
-			allowed, exists := sm.transitions[originalState]
-			if !exists || !slices.Contains(allowed, newState) {
+			if !slices.Contains(allowed, newState) {
 				// 🛡️ ROBUST FIX: Roll back the mutation the handler already applied so an
 				// invalid transition never leaves the entity changed just
 				// because we're reporting an error about it.
 				req.SetState(originalState)
 
-				if !exists {
-					return res, xerr.Conflict(fmt.Sprintf("invalid transition from '%s'", originalState))
-				}
 				return res, xerr.Conflict(fmt.Sprintf("invalid transition: '%s' -> '%s'", originalState, newState))
 			}
 

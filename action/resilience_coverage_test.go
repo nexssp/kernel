@@ -23,6 +23,7 @@ import (
 	"context"
 	"errors"
 	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -410,8 +411,14 @@ func TestSaga_UndoFailureDoesNotStopChain(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected saga to fail")
 	}
-	if !res.RolledBack {
-		t.Fatal("expected RolledBack=true")
+	// Undo 2 failed, so the saga is only PARTIALLY rolled back.
+	// RolledBack=false + the failure recorded in CompensationErrors,
+	// while the chain itself still ran to completion.
+	if res.RolledBack {
+		t.Fatal("expected RolledBack=false when an undo failed")
+	}
+	if len(res.CompensationErrors) != 1 || !strings.Contains(res.CompensationErrors[0], "s2") {
+		t.Fatalf("expected compensation error for s2, got: %v", res.CompensationErrors)
 	}
 
 	// All three Undos must have run despite undo 2 returning an error.

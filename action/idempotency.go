@@ -81,6 +81,19 @@ type IdempotencyCoordinator interface {
 	Release(ctx context.Context, key, token string) error
 }
 
+// IdempotencyLeaseRenewer is an optional extension: renews the
+// in-flight lease at leaseTTL/3 so a slow handler can't lose it.
+type IdempotencyLeaseRenewer interface {
+	RenewClaim(ctx context.Context, key, token string, leaseTTL time.Duration) error
+}
+
+// idempotentResult carries the request hash through singleflight so
+// followers can detect a same-key/different-payload mismatch.
+type idempotentResult struct {
+	requestHash string
+	value       any
+}
+
 // IdempotencyMiddleware collapses concurrent identical requests into a single
 // handler execution and replays the stored response for later calls.
 //
@@ -121,9 +134,12 @@ func IdempotencyMiddleware[Req, Res any](store IdempotencyStore, cfg Idempotency
 					return zero, xerr.Conflict("idempotency key already used with a different request payload")
 				}
 				var cachedRes Res
-				if err := json.Unmarshal(entry.Body, &cachedRes); err == nil {
-					return cachedRes, nil
+				if err := json.Unmarshal(entry.Body, &cachedRes); err != nil {
+					// Corrupted: fail closed, never re-execute.
+					var zero Res
+					return zero, xerr.Internal("idempotency: stored response for key is corrupted")
 				}
+				return cachedRes, nil
 			}
 
 			// SingleFlight synchronizes concurrent in-flight executions within the process
@@ -134,9 +150,11 @@ func IdempotencyMiddleware[Req, Res any](store IdempotencyStore, cfg Idempotency
 						return nil, xerr.Conflict("idempotency key already used with a different request payload")
 					}
 					var cachedRes Res
-					if err := json.Unmarshal(entry.Body, &cachedRes); err == nil {
-						return cachedRes, nil
+					if err := json.Unmarshal(entry.Body, &cachedRes); err != nil {
+						// Corrupted: fail closed.
+						return nil, xerr.Internal("idempotency: stored response for key is corrupted")
 					}
+					return idempotentResult{requestHash: reqHash, value: cachedRes}, nil
 				}
 
 				// Handle distributed coordinator if configured
@@ -152,9 +170,11 @@ func IdempotencyMiddleware[Req, Res any](store IdempotencyStore, cfg Idempotency
 					switch claim.State {
 					case IdempotencyClaimCompleted:
 						var cachedRes Res
-						if err := json.Unmarshal(claim.Entry.Body, &cachedRes); err == nil {
-							return cachedRes, nil
+						if err := json.Unmarshal(claim.Entry.Body, &cachedRes); err != nil {
+							// Corrupted: fail closed.
+							return nil, xerr.Internal("idempotency: stored response for key is corrupted")
 						}
+						return idempotentResult{requestHash: reqHash, value: cachedRes}, nil
 					case IdempotencyClaimConflict:
 						return nil, xerr.Conflict("idempotency key already used with a different request payload")
 					case IdempotencyClaimInProgress:
@@ -170,6 +190,10 @@ func IdempotencyMiddleware[Req, Res any](store IdempotencyStore, cfg Idempotency
 							}
 						}
 					}()
+
+					// LIFO defer order stops the renewer BEFORE Release.
+					stopRenewal := startLeaseRenewal(ctx, coord, key, claim.Token, cfg.EffectiveLeaseTTL())
+					defer stopRenewal()
 
 					res, execErr := next(ctx, req)
 					if execErr != nil {
@@ -189,7 +213,7 @@ func IdempotencyMiddleware[Req, Res any](store IdempotencyStore, cfg Idempotency
 						completed = true
 					}
 
-					return res, nil
+					return idempotentResult{requestHash: reqHash, value: res}, nil
 				}
 
 				// In-process local execution
@@ -207,7 +231,7 @@ func IdempotencyMiddleware[Req, Res any](store IdempotencyStore, cfg Idempotency
 					}, ttl)
 				}
 
-				return res, nil
+				return idempotentResult{requestHash: reqHash, value: res}, nil
 			})
 
 			if err != nil {
@@ -215,10 +239,21 @@ func IdempotencyMiddleware[Req, Res any](store IdempotencyStore, cfg Idempotency
 				return zero, err
 			}
 
-			res, ok := val.(Res)
+			fw, ok := val.(idempotentResult)
 			if !ok {
 				var zero Res
 				return zero, xerr.Internal(fmt.Sprintf("idempotency result type mismatch: got %T", val))
+			}
+			// Followers never run the flight function — the only place
+			// a payload mismatch can be caught.
+			if fw.requestHash != "" && reqHash != "" && fw.requestHash != reqHash {
+				var zero Res
+				return zero, xerr.Conflict("idempotency key already used with a different request payload")
+			}
+			res, ok := fw.value.(Res)
+			if !ok {
+				var zero Res
+				return zero, xerr.Internal(fmt.Sprintf("idempotency result type mismatch: got %T", fw.value))
 			}
 			return res, nil
 		}
@@ -486,10 +521,80 @@ func (s *MemoryIdempotencyStore) evictExpiredLocked(now time.Time) {
 	}
 }
 
+// startLeaseRenewal renews at leaseTTL/3 until stop is called.
+// No-op if the store doesn't implement IdempotencyLeaseRenewer.
+func startLeaseRenewal(
+	ctx context.Context,
+	coord IdempotencyCoordinator,
+	key, token string,
+	leaseTTL time.Duration,
+) func() {
+	renewer, ok := coord.(IdempotencyLeaseRenewer)
+	if !ok || leaseTTL <= 0 {
+		return func() {}
+	}
+
+	interval := leaseTTL / 3
+	if interval <= 0 {
+		interval = time.Second
+	}
+
+	stop := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-ticker.C:
+				rCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), interval)
+				renewErr := renewer.RenewClaim(rCtx, key, token, leaseTTL)
+				cancel()
+				if renewErr != nil {
+					select {
+					case <-stop:
+						return // shutdown race with Release — not an error
+					default:
+					}
+					slog.WarnContext(ctx, "idempotency_lease_renewal_failed",
+						"key", key, "error", renewErr)
+					return
+				}
+			}
+		}
+	}()
+	return func() { close(stop) }
+}
+
 func newClaimToken() (string, error) {
 	var b [16]byte
 	if _, err := rand.Read(b[:]); err != nil {
 		return "", fmt.Errorf("idempotency: failed generating claim token: %w", err)
 	}
 	return hex.EncodeToString(b[:]), nil
+}
+
+// RenewClaim extends the lease of an in-flight claim. Implements the optional
+// IdempotencyLeaseRenewer interface so IdempotencyMiddleware keeps long-running
+// handlers from losing their lease to expiry.
+func (s *MemoryIdempotencyStore) RenewClaim(_ context.Context, key, token string, leaseTTL time.Duration) error {
+	if leaseTTL <= 0 {
+		leaseTTL = DefaultIdempotencyLeaseTTL
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	claim, ok := s.claims[key]
+	if !ok {
+		return errors.New("idempotency: no active claim found for key")
+	}
+	if claim.token != token {
+		return errors.New("idempotency: token does not match active claim")
+	}
+
+	// claims stores values: mutate the copy and write it back.
+	claim.expiresAt = time.Now().Add(leaseTTL)
+	s.claims[key] = claim
+	return nil
 }

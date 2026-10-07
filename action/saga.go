@@ -46,7 +46,10 @@ type SagaResult[Res any] struct {
 	StepsOverflow []StepResult             `json:"steps_overflow,omitempty"`
 	Error         string                   `json:"error,omitempty"`
 	RolledBack    bool                     `json:"rolled_back,omitempty"`
-	DurationMs    int64                    `json:"duration_ms"`
+	// CompensationErrors lists failed undos; non-empty means the
+	// rollback was partial and RolledBack=false.
+	CompensationErrors []string `json:"compensation_errors,omitempty"`
+	DurationMs         int64    `json:"duration_ms"`
 }
 
 // Step returns the i-th step result, abstracting the inline/overflow split.
@@ -178,9 +181,12 @@ func (s *BuiltSaga[Req, Res]) Do(ctx context.Context, req Req) (SagaResult[Res],
 			})
 
 			rollbackCtx := context.WithoutCancel(ctx)
+			var compensationErrors []string
 			for j := i - 1; j >= 0; j-- {
 				if s.steps[j].Undo != nil && !stepAt(j).Skipped {
 					if undoErr := executeSagaUndo(rollbackCtx, s.steps[j], req); undoErr != nil {
+						compensationErrors = append(compensationErrors,
+							fmt.Sprintf("%s: %v", s.steps[j].Name, undoErr))
 						slog.Error("saga_undo_failed", "saga", s.name, "step", s.steps[j].Name, "error", undoErr)
 					}
 				}
@@ -190,7 +196,9 @@ func (s *BuiltSaga[Req, Res]) Do(ctx context.Context, req Req) (SagaResult[Res],
 			result.Success = false
 			result.StepsCount = stepCount
 			result.Error = fmt.Sprintf("saga [%s] failed at step [%s]: %v", s.name, step.Name, err)
-			result.RolledBack = true
+			// RolledBack only when every undo succeeded.
+			result.RolledBack = len(compensationErrors) == 0
+			result.CompensationErrors = compensationErrors
 			result.DurationMs = time.Since(start).Milliseconds()
 			result.Output = zero
 			return result, fmt.Errorf("saga [%s] failed at step [%s]: %w", s.name, step.Name, err)

@@ -144,6 +144,12 @@ func debounceLoop[T any](
 	var timer *time.Timer
 	var lastItem T
 	var hasPending bool
+	// Stop the pending timer on every exit path.
+	defer func() {
+		if timer != nil {
+			timer.Stop()
+		}
+	}()
 
 	for {
 		select {
@@ -248,6 +254,10 @@ func BatchByTime[T any](ctx context.Context, size int, timeout time.Duration) St
 
 				select {
 				case <-opCtx.Done():
+					// Preserve accumulated items before the error.
+					if !flush() {
+						return
+					}
 					var zero []T
 					yield(zero, opCtx.Err())
 					return
@@ -272,6 +282,10 @@ func BatchByTime[T any](ctx context.Context, size int, timeout time.Duration) St
 						return
 					}
 					if p.err != nil {
+						// Preserve accumulated items before the error.
+						if !flush() {
+							return
+						}
 						var zero []T
 						yield(zero, p.err)
 						return

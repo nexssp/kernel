@@ -56,6 +56,11 @@ func (c *Coalescer) Do(ctx context.Context, key string, fn func(context.Context)
 		if r := recover(); r != nil {
 			execErr = xerr.PanicRecovery(r)
 			result = nil
+			// Waiters read entry.*, the leader's caller reads the
+			// named returns — set them or the panic is dropped.
+			val = nil
+			shared = false
+			err = execErr
 			c.mu.Lock()
 			entry.result = nil
 			entry.err = execErr

@@ -86,11 +86,19 @@ func NewScope(parent context.Context) (context.Context, *RequestScope, func()) {
 }
 
 // ScopeFrom returns the RequestScope bound to ctx, or nil.
+// Verifies the generation so a stale context fails closed.
 func ScopeFrom(ctx context.Context) *RequestScope {
 	if ctx == nil {
 		return nil
 	}
 	s, _ := ctx.Value(scopeKeyT{}).(*RequestScope)
+	if s == nil {
+		return nil
+	}
+	gen, _ := ctx.Value(scopeGenKeyT{}).(uint64)
+	if gen == 0 || s.generation.Load() != gen {
+		return nil
+	}
 	return s
 }
 

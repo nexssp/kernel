@@ -115,6 +115,12 @@ func Batch[T any](size int) StreamOp[T, []T] {
 			batch := make([]T, 0, size)
 			for item, err := range up {
 				if err != nil {
+					// Flush accumulated items before the error.
+					if len(batch) > 0 {
+						if !yield(batch, nil) {
+							return
+						}
+					}
 					var zero []T
 					yield(zero, err)
 					return

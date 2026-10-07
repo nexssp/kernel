@@ -48,6 +48,11 @@ func (f *inflightMap[Res]) Do(ctx context.Context, key string, fn func() (Res, e
 			c.err = xerr.PanicRecovery(r)
 			var zero Res
 			c.res = zero
+			// Reject before the handler runs if the source state has
+			// no transitions — its side effects would be wasted.
+			val = zero
+			shared = false
+			err = c.err
 		}
 		f.mu.Lock()
 		delete(f.m, key)

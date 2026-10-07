@@ -72,7 +72,7 @@ func WorkerPool[In, Out any](
 
 			feedDone := make(chan error, 1)
 			go func() {
-				feedDone <- feedUpstream(poolCtx, upstream, workChan)
+				feedUpstream(poolCtx, upstream, workChan, feedDone)
 			}()
 
 			go func() {
@@ -128,9 +128,17 @@ func safeInvokeWorker[In, Out any](
 	return worker(ctx, item)
 }
 
-// feedUpstream iterates the upstream iterator and pushes items onto
-// workChan. It closes workChan on exit and reports the terminal error
-// (or nil) on the returned channel.
+// feedUpstream pushes items onto workChan, then reports the terminal
+// error on feedDone BEFORE closing workChan.
+//
+// Ordering is load-bearing: the feedDone send happens BEFORE close(workChan).
+// Workers cannot all exit before workChan is closed, and resultChan is closed
+// only after every worker exits, so the send also happens before drainResults
+// can observe a closed resultChan. Its non-blocking peek on feedDone can
+// therefore never miss the terminal error. The previous shape — feeding the
+// channel from feedUpstream's return value — sent AFTER close(workChan), and
+// a fast-draining pool could close resultChan first, silently dropping the
+// upstream error.
 //
 // A panic inside the upstream iterator is recovered and reported as a
 // feed error, matching the worker-level isolation.
@@ -138,8 +146,18 @@ func feedUpstream[In any](
 	ctx context.Context,
 	upstream iter.Seq2[In, error],
 	workChan chan<- In,
+	feedDone chan<- error,
+) {
+	feedErr := feedUpstreamSeq(ctx, upstream, workChan)
+	feedDone <- feedErr // buffered(1); never blocks, never leaks
+	close(workChan)
+}
+
+func feedUpstreamSeq[In any](
+	ctx context.Context,
+	upstream iter.Seq2[In, error],
+	workChan chan<- In,
 ) (feedErr error) {
-	defer close(workChan)
 	defer func() {
 		if r := recover(); r != nil {
 			feedErr = fmt.Errorf("stream.WorkerPool: upstream panicked: %v", r)
@@ -161,14 +179,15 @@ func feedUpstream[In any](
 
 // drainResults forwards worker results to the consumer.
 //
-// feedDone is a buffered channel written exactly once by the feeder and
-// never closed. Reading from it means the feeder has finished; setting
-// the local reference to nil thereafter disables the case so the select
-// does not busy-spin.
+// before it closes workChan — and never closed. Reading from it means the
+// feeder has finished; setting the local reference to nil thereafter
+// disables the case so the select does not busy-spin.
 //
-// The non-blocking peek on feedDone when resultChan closes is required:
-// when ctx is canceled while the feeder is blocked inside its iterator,
-// the feeder never sends and a blocking read would deadlock.
+// The non-blocking peek on feedDone when resultChan closes is safe because
+// of the feeder's ordering guarantee: the feedDone send happens before
+// close(workChan), which happens before any worker exit, which happens
+// before close(resultChan). By the time resultChan is observed closed, the
+// terminal error is already buffered in feedDone.
 //
 // ctx.Err() gates all upstream-error reporting: once the caller's
 // context is canceled, any upstream error is post-cancellation noise

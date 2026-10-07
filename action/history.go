@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/nexssp/kernel/ringbuf"
+	"github.com/nexssp/kernel/xerr"
 )
 
 type Record[Req, Res any] struct {
@@ -47,14 +48,25 @@ func HistoryMiddleware[Req, Res any](hist *History[Req, Res]) Middleware[Req, Re
 	return func(next Fn[Req, Res]) Fn[Req, Res] {
 		return func(ctx context.Context, req Req) (res Res, err error) {
 			start := time.Now()
+			defer func() {
+				rec := Record[Req, Res]{
+					Time:     start,
+					Duration: time.Since(start),
+					Req:      req,
+					Res:      res,
+					Err:      err,
+				}
+				if r := recover(); r != nil {
+					// Record panicking calls, then re-panic.
+					var zero Res
+					rec.Res = zero
+					rec.Err = xerr.PanicRecovery(r)
+					hist.Push(rec)
+					panic(r)
+				}
+				hist.Push(rec)
+			}()
 			res, err = next(ctx, req)
-			hist.Push(Record[Req, Res]{
-				Time:     start,
-				Duration: time.Since(start),
-				Req:      req,
-				Res:      res,
-				Err:      err,
-			})
 			return res, err
 		}
 	}
