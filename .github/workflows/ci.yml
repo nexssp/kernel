@@ -46,6 +46,9 @@ jobs:
             exit 1
           fi
 
+      - name: Tools
+        run: task tools
+
       - name: Build
         run: task build
 
