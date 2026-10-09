@@ -186,7 +186,7 @@ func (a *BuiltAction[Req, Res]) String() string {
 	return a.meta.String()
 }
 
-func (m Meta) String() string {
+func (m *Meta) String() string {
 	s := m.Name
 	if m.Description != "" {
 		s += ": " + m.Description

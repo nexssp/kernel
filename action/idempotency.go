@@ -13,9 +13,10 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/sync/singleflight"
+
 	"github.com/nexssp/kernel/xctx"
 	"github.com/nexssp/kernel/xerr"
-	"golang.org/x/sync/singleflight"
 )
 
 const (

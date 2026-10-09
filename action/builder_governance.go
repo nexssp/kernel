@@ -36,7 +36,7 @@ func (b *Builder[Req, Res]) ImmutableWhen(guard func(ctx context.Context, req Re
 	})
 }
 
-type QuotaCheckFunc func(ctx context.Context, tenantID string) (current int64, limit int64, err error)
+type QuotaCheckFunc func(ctx context.Context, tenantID string) (current, limit int64, err error)
 
 // RequireCreationLimit enforces plan quotas ONLY during new entity creation (ID == 0).
 // Updates to existing resources bypass this check.

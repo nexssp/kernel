@@ -6,8 +6,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/nexssp/kernel/xerr"
 	"golang.org/x/time/rate"
+
+	"github.com/nexssp/kernel/xerr"
 )
 
 const (

@@ -50,20 +50,20 @@ type AnyHook struct {
 	OnBuild func(meta *Meta, reqType, resType reflect.Type) bool
 
 	Before func(ctx context.Context, req any, meta *Meta) (context.Context, error)
-	After  func(ctx context.Context, req any, res any, err error, meta *Meta)
+	After  func(ctx context.Context, req, res any, err error, meta *Meta)
 
-	OnSuccess func(ctx context.Context, req any, res any, meta *Meta)
+	OnSuccess func(ctx context.Context, req, res any, meta *Meta)
 	OnTimeout func(ctx context.Context, req any, meta *Meta)
 	OnError   func(ctx context.Context, req any, err error, meta *Meta)
 
 	OnRetry        func(ctx context.Context, req any, attempt int, err error, meta *Meta)
-	OnCacheHit     func(ctx context.Context, req any, res any, meta *Meta)
+	OnCacheHit     func(ctx context.Context, req, res any, meta *Meta)
 	OnCacheMiss    func(ctx context.Context, req any, meta *Meta)
 	OnCoalesced    func(ctx context.Context, req any, meta *Meta)
 	OnDeduplicated func(ctx context.Context, req any, meta *Meta)
 	OnCancel       func(ctx context.Context, req any, meta *Meta)
 
-	OnPanic func(ctx context.Context, req any, recovered any, meta *Meta)
+	OnPanic func(ctx context.Context, req, recovered any, meta *Meta)
 }
 
 // Adapt converts a typed hook to its type-erased representation.
@@ -76,12 +76,12 @@ func Adapt[Req, Res any](h Hook[Req, Res]) AnyHook {
 		}
 	}
 	if h.After != nil {
-		ah.After = func(ctx context.Context, req any, res any, err error, meta *Meta) {
+		ah.After = func(ctx context.Context, req, res any, err error, meta *Meta) {
 			h.After(ctx, assertTo[Req](req), assertTo[Res](res), err, meta)
 		}
 	}
 	if h.OnSuccess != nil {
-		ah.OnSuccess = func(ctx context.Context, req any, res any, meta *Meta) {
+		ah.OnSuccess = func(ctx context.Context, req, res any, meta *Meta) {
 			h.OnSuccess(ctx, assertTo[Req](req), assertTo[Res](res), meta)
 		}
 	}
@@ -101,7 +101,7 @@ func Adapt[Req, Res any](h Hook[Req, Res]) AnyHook {
 		}
 	}
 	if h.OnCacheHit != nil {
-		ah.OnCacheHit = func(ctx context.Context, req any, res any, meta *Meta) {
+		ah.OnCacheHit = func(ctx context.Context, req, res any, meta *Meta) {
 			h.OnCacheHit(ctx, assertTo[Req](req), assertTo[Res](res), meta)
 		}
 	}

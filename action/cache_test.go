@@ -71,13 +71,13 @@ func TestCache_Hit(t *testing.T) {
 		return "fresh", nil
 	}).
 		Cache(10*time.Minute, func(r string) string { return r }, store).
-		HookCacheHit(func(_ context.Context, _ string, res string, _ *action.Meta) {
+		HookCacheHit(func(_ context.Context, _, res string, _ *action.Meta) {
 			hitHookCalled = true
 			if res != "cached" {
 				t.Errorf("expected cached value 'cached', got %q", res)
 			}
 		}).
-		HookSuccess(func(_ context.Context, _ string, _ string, _ *action.Meta) {
+		HookSuccess(func(_ context.Context, _, _ string, _ *action.Meta) {
 			executedHookCalled = true
 		}).
 		Build()
@@ -116,7 +116,7 @@ func TestCache_Miss(t *testing.T) {
 				t.Errorf("expected req 'missKey', got %q", req)
 			}
 		}).
-		HookSuccess(func(_ context.Context, _ string, _ string, _ *action.Meta) {
+		HookSuccess(func(_ context.Context, _, _ string, _ *action.Meta) {
 			executedHookCalled = true
 		}).
 		Build()

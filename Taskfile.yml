@@ -1,70 +1,57 @@
+# Nexss Ecosystem
+# Copyright 2018-Present Marcin Polak and Contributors
+# SPDX-License-Identifier: Apache-2.0
 version: '3'
 
+vars:
+  BASE:
+    sh: git merge-base HEAD origin/main 2>/dev/null || echo HEAD
+  CENTRAL_REF: 'main'
+
 tasks:
-  default:
-    desc: Show every available task
-    cmds:
-      - task --list
+  default: { cmds: [task --list --sort none], silent: true }
 
-  build:
-    desc: Build every Go package
-    cmds:
-      - go build ./...
+  build:     { desc: "go build ./...",                       cmds: [go build ./...] }
+  build:bin: { desc: "go build -trimpath -o bin/ ./cmd/...", cmds: [go build -trimpath -o bin/ ./cmd/...] }
+  tidy:      { desc: "go mod tidy",                          cmds: [go mod tidy] }
+  clean:     { desc: "rm -rf bin coverage.out",              cmds: [rm -rf bin coverage.out] }
 
-  test:
-    desc: Fast Go test pass in short mode
-    cmds:
-      - go test -short ./...
+  test:              { desc: "go tool gotestsum -- -short ./...",         cmds: [go tool gotestsum -- -short ./...] }
+  test:nocache:      { desc: "go tool gotestsum -- -count=1 ./...",        cmds: [go tool gotestsum -- -count=1 ./...] }
+  test:race:         { desc: "go tool gotestsum -- -race -short ./...",   cmds: [go tool gotestsum -- -race -short ./...] }
+  test:race:nocache: { desc: "go tool gotestsum -- -race -count=1 ./...", cmds: [go tool gotestsum -- -race -count=1 ./...] }
+  test:cover:        { desc: "go test -coverprofile=coverage.out ./...",  cmds: [go test -coverprofile=coverage.out -short ./..., go tool cover -func=coverage.out] }
+  bench:             { desc: "go test -run='^$' -bench=. -benchmem ./...",cmds: [go test -run='^$' -bench=. -benchmem ./...] }
 
-  test:race:
-    desc: Full Go test suite with the race detector
-    cmds:
-      - go test ./... -race
+  fmt:       { desc: "golangci-lint fmt", cmds: [golangci-lint fmt] }
+  fmt:check: { desc: "golangci-lint fmt --diff", cmds: [golangci-lint fmt --diff] }
+  lint:      { desc: "golangci-lint run", cmds: [golangci-lint run] }
+  lint:new:  { desc: 'golangci-lint run --new-from-rev="BASE"', cmds: ['golangci-lint run --new-from-rev="{{.BASE}}"'] }
+  lint:fix:  { desc: 'golangci-lint run --fix --new-from-rev="BASE"', cmds: ['golangci-lint run --fix --new-from-rev="{{.BASE}}"'] }
+  vuln:      { desc: "go tool govulncheck -show=version ./...", cmds: [go tool govulncheck -show=version ./...] }
 
-  bench:
-    desc: Run action benchmarks
-    cmds:
-      - go test ./action/... -run '^$' -bench=. -benchmem
+  # ── Workflows (Gates) ────────────────────────────────────────────
 
-  fmt:
-    desc: Apply configured gofumpt and goimports formatters
-    cmds:
-      - golangci-lint fmt
+  pre-commit: { desc: "[fmt:check, lint:new, test]", deps: [fmt:check, lint:new, test] }
+  pre-push:   { desc: "[fmt:check, lint, test:race]", deps: [fmt:check, lint, test:race] }
+  ci:
+    desc: "[fmt:check, lint, test:race:nocache] (parallel + failfast)"
+    deps: [fmt:check, lint, test:race:nocache]
+    output: prefixed
 
-  fmt:check:
-    desc: Check gofumpt and goimports formatting without editing files
-    cmds:
-      - golangci-lint fmt --diff
+  tools:     { desc: "go get -tool gotest.tools/gotestsum golang.org/x/vuln/cmd/govulncheck", cmds: [go get -tool gotest.tools/gotestsum golang.org/x/vuln/cmd/govulncheck] }
 
-  lint:
-    desc: Run configured golangci-lint checks
-    cmds:
-      - golangci-lint run ./...
+  setup: { desc: "[setup:files, tools]", deps: [setup:files, tools] }
 
-  lint:new:
-    desc: Run golangci-lint only on code changed since origin/main
+  examples:
+    desc: Check building all examples
     cmds:
-      - golangci-lint run --new-from-rev=origin/main
+      - go build ./examples/...
 
-  lint:fix:
-    desc: Run golangci-lint with auto-fix only on code changed since origin/main
+  setup:files:
+    desc: "Fetch missing repo templates (LICENSE, .gitignore, configs...)"
     cmds:
-      - golangci-lint run --fix --new-from-rev=origin/main
-
-  check:
-    desc: Full local gate — format check, lint, and race tests
-    cmds:
-      - task: fmt:check
-      - task: lint
-      - task: test:race
-
-  pre-push:
-    desc: Fast pre-push gate — lint of new code and short tests, run in parallel
-    deps:
-      - lint:new
-      - test
-
-  tidy:
-    desc: Tidy this module
-    cmds:
-      - go mod tidy
+      - |
+        for f in LICENSE NOTICE .gitattributes .gitignore .golangci.yml .pre-commit-config.yaml; do
+          test -f "$f" || { echo "→ Fetching $f..."; curl -sSfL "https://raw.githubusercontent.com/nexssp/.github/{{.CENTRAL_REF}}/$f" -o "$f"; }
+        done

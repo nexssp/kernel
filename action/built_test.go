@@ -118,7 +118,7 @@ func TestBuiltAction_ToBuilder_PanicRecovery(t *testing.T) {
 		panic("database connection pool melted")
 	}).
 		AnyHook(action.AnyHook{
-			OnPanic: func(_ context.Context, _ any, recovered any, _ *action.Meta) {
+			OnPanic: func(_ context.Context, _, recovered any, _ *action.Meta) {
 				if str, ok := recovered.(string); ok && strings.Contains(str, "database connection pool melted") {
 					panicCaught.Store(true)
 				}

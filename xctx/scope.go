@@ -38,9 +38,9 @@ type RequestScope struct {
 }
 
 // Reset clears every field, retaining slice capacity up to the trace
-// ring size. Called by the pool before returning a scope for reuse. It
-// does not touch generation; that is the pool's responsibility.
+// ring size. It resets generation so the scope is unbound.
 func (s *RequestScope) Reset() {
+	s.generation.Store(0)
 	s.RequestID = ""
 	s.TraceID = ""
 	s.SpanID = ""
@@ -52,6 +52,7 @@ func (s *RequestScope) Reset() {
 	s.Roles = s.Roles[:0]
 	s.Permissions = s.Permissions[:0]
 	s.Features = s.Features[:0]
+	clear(s.TraceEvents)
 	if cap(s.TraceEvents) > MaxTraceEvents {
 		s.TraceEvents = nil
 	} else {
@@ -70,6 +71,8 @@ func NewScope(parent context.Context) (context.Context, *RequestScope, func()) {
 	s, ok := scopePool.Get().(*RequestScope)
 	if !ok || s == nil {
 		s = &RequestScope{}
+	} else {
+		s.Reset()
 	}
 	gen := globalGeneration.Add(1)
 	s.generation.Store(gen)
@@ -78,7 +81,6 @@ func NewScope(parent context.Context) (context.Context, *RequestScope, func()) {
 	var once sync.Once
 	return ctx, s, func() {
 		once.Do(func() {
-			s.generation.Store(0)
 			s.Reset()
 			scopePool.Put(s)
 		})

@@ -11,9 +11,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/nexssp/kernel/xerr"
-
 	"golang.org/x/sync/singleflight"
+
+	"github.com/nexssp/kernel/xerr"
 )
 
 type CacheLayer[V any] interface {

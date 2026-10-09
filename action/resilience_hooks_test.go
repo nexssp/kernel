@@ -54,7 +54,7 @@ func TestHook_OnRetry_Arguments(t *testing.T) {
 		}
 		return 42, nil
 	}).
-		HookRetry(func(ctx context.Context, _ int, attempt int, err error, _ *action.Meta) {
+		HookRetry(func(ctx context.Context, _, attempt int, err error, _ *action.Meta) {
 			rec.OnRetry(ctx, 0, attempt, err)
 		}).
 		Retry(3, action.ConstantBackoff(0)).
@@ -105,7 +105,7 @@ func TestHook_OnCacheHit_CachedResponsePassed(t *testing.T) {
 		return "fresh", nil
 	}).
 		Cache(time.Minute, func(r string) string { return r }, store).
-		HookCacheHit(func(ctx context.Context, req string, res string, _ *action.Meta) {
+		HookCacheHit(func(ctx context.Context, req, res string, _ *action.Meta) {
 			rec.OnCacheHit(ctx, req, res)
 		}).
 		Build()
@@ -426,7 +426,7 @@ func TestHook_OnRetry_ErrorTypePreserved(t *testing.T) {
 	act := action.New("hook.retry.errtype", func(_ context.Context, _ int) (int, error) {
 		return 0, wrappedErr
 	}).
-		HookRetry(func(_ context.Context, _ int, _ int, err error, _ *action.Meta) {
+		HookRetry(func(_ context.Context, _, _ int, err error, _ *action.Meta) {
 			capturedErr = err
 		}).
 		Retry(3, action.ConstantBackoff(0)).

@@ -12,7 +12,7 @@ import (
 // AuditLogger defines the minimal contract required by the builder to log audit events.
 // This prevents circular import dependencies between action and audit adapters.
 type AuditLogger interface {
-	Log(ctx context.Context, category string, actionName string, details string)
+	Log(ctx context.Context, category, actionName, details string)
 }
 
 // Audited attaches a generic audit hook invoked after successful action execution.
@@ -32,7 +32,7 @@ func (b *Builder[Req, Res]) Audited(logger AuditLogger, category string, details
 
 // PIITracker defines the minimal contract for personal data access tracking.
 type PIITracker interface {
-	TrackPIIAccess(ctx context.Context, purpose string, actionName string)
+	TrackPIIAccess(ctx context.Context, purpose, actionName string)
 }
 
 // TrackPIIAccess attaches a non-blocking hook recording the purpose of PII data access.

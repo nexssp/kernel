@@ -125,9 +125,10 @@ func TestExclusiveFenced_LockContention(t *testing.T) {
 
 func TestExclusiveFenced_ValidationErrors(t *testing.T) {
 	t.Parallel()
-	mutex := newFakeMutex()
 
 	t.Run("empty key rejected", func(t *testing.T) {
+		t.Parallel()
+		mutex := newFakeMutex()
 		built := New("invoice.settle", func(_ context.Context, _ string) (string, error) {
 			return "ok", nil
 		}).ExclusiveFenced(mutex, 300*time.Millisecond, func(_ string) string { return "" }).Build()
@@ -138,6 +139,8 @@ func TestExclusiveFenced_ValidationErrors(t *testing.T) {
 	})
 
 	t.Run("short TTL rejected", func(t *testing.T) {
+		t.Parallel()
+		mutex := newFakeMutex()
 		built := New("invoice.settle", func(_ context.Context, _ string) (string, error) {
 			return "ok", nil
 		}).ExclusiveFenced(mutex, 50*time.Millisecond, func(req string) string { return req }).Build()
@@ -148,6 +151,7 @@ func TestExclusiveFenced_ValidationErrors(t *testing.T) {
 	})
 
 	t.Run("nil mutex rejected", func(t *testing.T) {
+		t.Parallel()
 		built := New("invoice.settle", func(_ context.Context, _ string) (string, error) {
 			return "ok", nil
 		}).ExclusiveFenced(nil, 300*time.Millisecond, func(req string) string { return req }).Build()

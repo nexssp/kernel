@@ -99,7 +99,7 @@ func TestAnyHook_OnPanic_Fires(t *testing.T) {
 	act := action.New("critical.db.write", func(_ context.Context, _ int) (int, error) {
 		panic("database connection melted")
 	}).AnyHook(action.AnyHook{
-		OnPanic: func(_ context.Context, _ any, recovered any, _ *action.Meta) {
+		OnPanic: func(_ context.Context, _, recovered any, _ *action.Meta) {
 			recoveredVal = recovered
 		},
 	}).Build()

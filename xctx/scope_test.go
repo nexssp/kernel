@@ -43,12 +43,14 @@ func TestNewScopeLifecycleAndPooling(t *testing.T) {
 		t.Fatalf("expected 1 trace event, got %d", len(scope.TraceEvents))
 	}
 
-	// Return to sync.Pool and verify reset
-	release()
-
+	// Verify reset while this goroutine still owns the scope:
+	scope.Reset()
 	if scope.UserID != "" || len(scope.Roles) != 0 || len(scope.TraceEvents) != 0 {
-		t.Fatal("expected scope fields to be completely reset after release")
+		t.Fatal("expected scope fields to be completely reset")
 	}
+
+	// Return to sync.Pool — do NOT read from scope after this call:
+	release()
 }
 
 func TestNilContext_Safety(t *testing.T) {

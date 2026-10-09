@@ -305,6 +305,7 @@ func TestStreamCollectN_PanicsOnNonPositiveLimit(t *testing.T) {
 	t.Parallel()
 	for _, limit := range []int{0, -1, -100} {
 		t.Run("", func(t *testing.T) {
+			t.Parallel()
 			defer func() {
 				if r := recover(); r == nil {
 					t.Fatalf("expected panic for maxItems=%d", limit)

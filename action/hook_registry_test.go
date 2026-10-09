@@ -106,6 +106,7 @@ func TestHookRegistry_MustHelpersPanics(t *testing.T) {
 	t.Parallel()
 
 	t.Run("MustNamedHook panics on unknown", func(t *testing.T) {
+		//nolint:tparallel // MustNamedHook uses the package-global defaultHookRegistry
 		defer func() {
 			if recovered := recover(); recovered == nil {
 				t.Fatal("expected panic on missing hook")
@@ -115,6 +116,7 @@ func TestHookRegistry_MustHelpersPanics(t *testing.T) {
 	})
 
 	t.Run("MustRegisterHook panics on error", func(t *testing.T) {
+		//nolint:tparallel // MustRegisterHook uses the package-global defaultHookRegistry
 		defer func() {
 			if recovered := recover(); recovered == nil {
 				t.Fatal("expected panic on nil factory")

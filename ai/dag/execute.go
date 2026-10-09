@@ -4,8 +4,9 @@ import (
 	"context"
 	"errors"
 
-	"github.com/nexssp/kernel/action"
 	"golang.org/x/sync/errgroup"
+
+	"github.com/nexssp/kernel/action"
 )
 
 // Execute runs the DAG.
