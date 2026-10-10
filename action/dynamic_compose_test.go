@@ -196,6 +196,30 @@ func TestSagaAny(t *testing.T) {
 	ktest.RequireEqual(t, log, []string{"do1", "do2", "undo1"})
 }
 
+func TestSagaAnyReportsCompensationFailures(t *testing.T) {
+	ctx, _ := ktest.Ctx(t)
+	stepFailure := errors.New("forward step failed")
+	undoFailure := errors.New("refund failed")
+
+	completed := action.DynamicSagaStep{
+		Name: "charge",
+		Do:   action.New("charge", func(_ context.Context, req any) (any, error) { return req, nil }).Build(),
+		Undo: action.New("refund", func(_ context.Context, _ any) (any, error) { return nil, undoFailure }).Build(),
+	}
+	failed := action.DynamicSagaStep{
+		Name: "confirm",
+		Do:   action.New("confirm", func(_ context.Context, _ any) (any, error) { return nil, stepFailure }).Build(),
+	}
+
+	_, err := action.SagaAny("payment", []action.DynamicSagaStep{completed, failed}).Build().Do(ctx, "order-1")
+	if !errors.Is(err, stepFailure) {
+		t.Fatalf("primary step error was not preserved: %v", err)
+	}
+	if !errors.Is(err, undoFailure) {
+		t.Fatalf("compensation error was not surfaced: %v", err)
+	}
+}
+
 func TestStateMachineAny(t *testing.T) {
 	ctx, _ := ktest.Ctx(t)
 

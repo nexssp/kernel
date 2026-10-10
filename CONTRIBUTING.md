@@ -41,7 +41,7 @@ task ci         # [fmt:check, lint, test:race:nocache] — exactly what CI runs
 Optional extra checks when relevant:
 
 ```bash
-task vuln       # govulncheck
+task vuln       # run govulncheck alone (also included in task ci)
 task bench      # benchmark smoke test
 task examples   # run curated .nflow files as runtime smoke checks
 task lint:nflow # lint ./examples and ./spec

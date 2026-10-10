@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/nexssp/kernel/xerr"
@@ -34,6 +35,10 @@ type FencedMutex interface {
 }
 
 type leaseCtxKey struct{}
+
+type leaseLoss struct {
+	err error
+}
 
 // LeaseFromContext retrieves the active LockLease from the execution context.
 func LeaseFromContext(ctx context.Context) (LockLease, bool) {
@@ -69,33 +74,28 @@ func (b *Builder[Req, Res]) ExclusiveFenced(m FencedMutex, ttl time.Duration, ke
 			execCtx, cancel := context.WithCancel(ctx)
 			execCtx = context.WithValue(execCtx, leaseCtxKey{}, lease)
 
-			done := make(chan struct{})
-			lost := make(chan error, 1)
+			var lost atomic.Pointer[leaseLoss]
 			var renewWG sync.WaitGroup
 			renewWG.Go(func() {
-				runLeaseRenewer(execCtx, m, lease, ttl, done, lost, cancel, lockKey, b.meta.Name)
+				runLeaseRenewer(execCtx, m, lease, ttl, &lost, cancel, lockKey, b.meta.Name)
 			})
 
-			var releaseOnce sync.Once
-			cleanup := func() {
-				releaseOnce.Do(func() {
-					stopRenewer(ctx, done, &renewWG, m, lease, lockKey, b.meta.Name)
-				})
-			}
+			stopped := false
 
 			defer func() {
 				cancel()
-				cleanup()
+				if !stopped {
+					stopRenewer(ctx, &renewWG, m, lease, lockKey, b.meta.Name)
+				}
 			}()
 
 			res, execErr := next(execCtx, req)
 			cancel()
-			cleanup()
+			stopRenewer(ctx, &renewWG, m, lease, lockKey, b.meta.Name)
+			stopped = true
 
-			select {
-			case lostErr := <-lost:
-				return zero, xerr.Unavailable("fenced distributed lock lease lost", lostErr)
-			default:
+			if leaseFailure := lost.Load(); leaseFailure != nil {
+				return zero, xerr.Unavailable("fenced distributed lock lease lost", leaseFailure.err)
 			}
 			return res, execErr
 		}
@@ -120,15 +120,12 @@ func runLeaseRenewer(
 	m FencedMutex,
 	lease LockLease,
 	ttl time.Duration,
-	done chan struct{},
-	lost chan<- error,
+	lost *atomic.Pointer[leaseLoss],
 	cancel context.CancelFunc,
 	lockKey, actionName string,
 ) {
 	reportLoss := func(cause error) {
-		select {
-		case lost <- cause:
-		default:
+		if !lost.CompareAndSwap(nil, &leaseLoss{err: cause}) {
 			slog.Error("fenced_lock_additional_error",
 				"action", actionName, "lock", lockKey, "error", cause)
 		}
@@ -147,8 +144,6 @@ func runLeaseRenewer(
 
 	for {
 		select {
-		case <-done:
-			return
 		case <-execCtx.Done():
 			return
 		case <-ticker.C:
@@ -159,16 +154,13 @@ func runLeaseRenewer(
 		renewCancel()
 
 		if renewErr != nil {
-			if isShuttingDown(done) {
-				return
-			}
 			if execCtx.Err() == nil {
 				reportLoss(fmt.Errorf("renew fenced lock: %w", renewErr))
 			}
 			return
 		}
 		if !renewed {
-			if isShuttingDown(done) || execCtx.Err() != nil {
+			if execCtx.Err() != nil {
 				return
 			}
 			reportLoss(errors.New("fenced lock lease lost"))
@@ -177,18 +169,8 @@ func runLeaseRenewer(
 	}
 }
 
-func isShuttingDown(done chan struct{}) bool {
-	select {
-	case <-done:
-		return true
-	default:
-		return false
-	}
-}
-
 func stopRenewer(
 	parentCtx context.Context,
-	done chan struct{},
 	wg *sync.WaitGroup,
 	m FencedMutex,
 	lease LockLease,
@@ -200,7 +182,6 @@ func stopRenewer(
 				"action", actionName, "lock", lockKey, "panic", r)
 		}
 	}()
-	close(done)
 	wg.Wait()
 
 	releaseCtx, releaseCancel := context.WithTimeout(context.WithoutCancel(parentCtx), 5*time.Second)

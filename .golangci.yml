@@ -160,7 +160,7 @@ linters:
     loggercheck: {slog: true, kitlog: false, klog: false, logr: false, zap: false}
 
     tagalign:
-      align: true
+      align: false
       sort: true
       order: [nflow, default, json, yaml, toml, xml, validate]
 

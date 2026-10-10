@@ -48,18 +48,26 @@ func (a *StreamAction[Req, T]) ResPayload() any {
 	return item
 }
 
+// DoStreamTyped accepts a dynamic request but keeps yielded items typed as T.
+// Prefer this method or Do when the caller knows the stream item type; unlike
+// DoStreamAny, it does not box each item into any.
+func (a *StreamAction[Req, T]) DoStreamTyped(ctx context.Context, req any) (iter.Seq2[T, error], error) {
+	typedReq, err := coerceStreamReq[Req](req)
+	if err != nil {
+		return nil, err
+	}
+	return a.Do(ctx, typedReq)
+}
+
 // DoStreamAny is the dynamic integration boundary used by Flow and
 // transports. When req's type already matches Req, the assertion is a
 // single CPU cycle. Otherwise the request is coerced through the same
 // JSON-tag-driven decoder that DoAny uses, so a map produced by the
 // flow compiler (e.g. {dir: "/tmp/x", ext: "txt"}) lands in the typed
-// Req struct instead of being silently dropped.
+// Req struct instead of being silently dropped. Yielded values are boxed
+// into any at this boundary; use DoStreamTyped to keep them typed.
 func (a *StreamAction[Req, T]) DoStreamAny(ctx context.Context, req any) (AnyStream, error) {
-	typedReq, err := coerceStreamReq[Req](req)
-	if err != nil {
-		return nil, err
-	}
-	seq, err := a.Do(ctx, typedReq)
+	seq, err := a.DoStreamTyped(ctx, req)
 	if err != nil {
 		return nil, err
 	}
@@ -252,19 +260,19 @@ func fireAnyStreamExitHook[Req, T any](
 	meta *Meta,
 ) {
 	if isTimeout && h.OnTimeout != nil {
-		callHook(meta, "OnTimeout", func() { h.OnTimeout(ctx, any(req), meta) })
+		callHook3(meta, "OnTimeout", h.OnTimeout, ctx, any(req), meta)
 	}
 	if isCancel && h.OnCancel != nil {
-		callHook(meta, "OnCancel", func() { h.OnCancel(ctx, any(req), meta) })
+		callHook3(meta, "OnCancel", h.OnCancel, ctx, any(req), meta)
 	}
 	if err != nil && h.OnError != nil {
-		callHook(meta, "OnError", func() { h.OnError(ctx, any(req), err, meta) })
+		callHook4(meta, "OnError", h.OnError, ctx, any(req), err, meta)
 	}
 	if err == nil && h.OnSuccess != nil {
-		callHook(meta, "OnSuccess", func() { h.OnSuccess(ctx, any(req), any(seq), meta) })
+		callHook4(meta, "OnSuccess", h.OnSuccess, ctx, any(req), any(seq), meta)
 	}
 	if h.After != nil {
-		callHook(meta, "After", func() { h.After(ctx, any(req), any(seq), err, meta) })
+		callHook5(meta, "After", h.After, ctx, any(req), any(seq), err, meta)
 	}
 }
 
@@ -278,19 +286,19 @@ func fireTypedStreamExitHook[Req, T any](
 	meta *Meta,
 ) {
 	if isTimeout && h.OnTimeout != nil {
-		callHook(meta, "OnTimeout", func() { h.OnTimeout(ctx, req, meta) })
+		callHook3(meta, "OnTimeout", h.OnTimeout, ctx, req, meta)
 	}
 	if isCancel && h.OnCancel != nil {
-		callHook(meta, "OnCancel", func() { h.OnCancel(ctx, req, meta) })
+		callHook3(meta, "OnCancel", h.OnCancel, ctx, req, meta)
 	}
 	if err != nil && h.OnError != nil {
-		callHook(meta, "OnError", func() { h.OnError(ctx, req, err, meta) })
+		callHook4(meta, "OnError", h.OnError, ctx, req, err, meta)
 	}
 	if err == nil && h.OnSuccess != nil {
-		callHook(meta, "OnSuccess", func() { h.OnSuccess(ctx, req, seq, meta) })
+		callHook4(meta, "OnSuccess", h.OnSuccess, ctx, req, seq, meta)
 	}
 	if h.After != nil {
-		callHook(meta, "After", func() { h.After(ctx, req, seq, err, meta) })
+		callHook5(meta, "After", h.After, ctx, req, seq, err, meta)
 	}
 }
 

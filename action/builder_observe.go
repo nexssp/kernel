@@ -64,15 +64,12 @@ func (b *Builder[Req, Res]) RecordHistory(capacity int) *Builder[Req, Res] {
 //	    Build()
 func (b *Builder[Req, Res]) LogCalls(log *slog.Logger) *Builder[Req, Res] {
 	name := b.meta.Name
+	b.trackExecutionStart = true
 	return b.HookBefore(func(ctx context.Context, _ Req, _ *Meta) (context.Context, error) {
 		log.DebugContext(ctx, "action_start", "action", name)
-		return context.WithValue(ctx, logStartKey{}, time.Now()), nil
+		return RecordExecutionStart(ctx), nil
 	}).HookAfter(func(ctx context.Context, _ Req, _ Res, err error, _ *Meta) {
-		start, ok := ctx.Value(logStartKey{}).(time.Time)
-		if !ok {
-			start = time.Now()
-		}
-		dur := time.Since(start)
+		dur := ExecutionDuration(ctx)
 		if err != nil {
 			log.ErrorContext(ctx, "action_error", "action", name, "duration", dur, "error", err)
 		} else {
@@ -80,8 +77,6 @@ func (b *Builder[Req, Res]) LogCalls(log *slog.Logger) *Builder[Req, Res] {
 		}
 	})
 }
-
-type logStartKey struct{}
 
 // Instrument wires a minimal set of Prometheus-style counters via AnyHook.
 // Counts are tracked by calling the provided inc functions — no Prometheus
@@ -104,20 +99,17 @@ func (b *Builder[Req, Res]) Instrument(
 	incError func(actionName string),
 	recordLatency func(actionName string, ms float64),
 ) *Builder[Req, Res] {
+	b.trackExecutionStart = true
 	return b.AnyHook(AnyHook{
 		Before: func(ctx context.Context, _ any, meta *Meta) (context.Context, error) {
 			if incCall != nil {
 				incCall(meta.Name)
 			}
-			return context.WithValue(ctx, instrumentStartKey{}, time.Now()), nil
+			return RecordExecutionStart(ctx), nil
 		},
 		After: func(ctx context.Context, _, _ any, err error, meta *Meta) {
-			start, ok := ctx.Value(instrumentStartKey{}).(time.Time)
-			if !ok {
-				start = time.Now()
-			}
 			if recordLatency != nil {
-				recordLatency(meta.Name, float64(time.Since(start).Milliseconds()))
+				recordLatency(meta.Name, float64(ExecutionDuration(ctx).Milliseconds()))
 			}
 			if err != nil && incError != nil {
 				incError(meta.Name)
@@ -125,8 +117,6 @@ func (b *Builder[Req, Res]) Instrument(
 		},
 	})
 }
-
-type instrumentStartKey struct{}
 
 func SlowLogMiddleware[Req, Res any](threshold time.Duration, actionName string) Middleware[Req, Res] {
 	return func(next Fn[Req, Res]) Fn[Req, Res] {

@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"slices"
 	"sync/atomic"
+	"time"
 
 	"github.com/nexssp/kernel/xctx"
 	"github.com/nexssp/kernel/xerr"
@@ -18,6 +19,30 @@ type execStateKey struct{}
 
 type execState struct {
 	fromCache bool
+	startedAt time.Time
+}
+
+// RecordExecutionStart stores a monotonic start time in the action's existing
+// per-execution state. It returns the context unchanged when that state is
+// already present; otherwise it attaches a state for direct hook invocation.
+func RecordExecutionStart(ctx context.Context) context.Context {
+	state, ok := ctx.Value(execStateKey{}).(*execState)
+	if !ok || state == nil {
+		state = &execState{}
+		ctx = context.WithValue(ctx, execStateKey{}, state)
+	}
+	state.startedAt = time.Now()
+	return ctx
+}
+
+// ExecutionDuration returns the duration since RecordExecutionStart was called.
+// It returns zero if the context does not carry a recorded start time.
+func ExecutionDuration(ctx context.Context) time.Duration {
+	state, ok := ctx.Value(execStateKey{}).(*execState)
+	if !ok || state == nil || state.startedAt.IsZero() {
+		return 0
+	}
+	return time.Since(state.startedAt)
 }
 
 type BuiltAction[Req, Res any] struct {
@@ -29,8 +54,9 @@ type BuiltAction[Req, Res any] struct {
 	hooks    []Hook[Req, Res]
 	anyHooks atomic.Pointer[anyHookSet]
 
-	bindings []Binding
-	history  *History[Req, Res]
+	bindings            []Binding
+	history             *History[Req, Res]
+	trackExecutionStart bool
 }
 
 type anyHookSet struct {
@@ -123,7 +149,7 @@ func hasOnSuccessHook[Req, Res any](hooks []Hook[Req, Res], anyHooks []AnyHook) 
 
 func (a *BuiltAction[Req, Res]) Do(ctx context.Context, req Req) (res Res, err error) {
 	anyHooks := a.anyHooksSnapshot()
-	needExecState := hasOnSuccessHook(a.hooks, anyHooks)
+	needExecState := hasOnSuccessHook(a.hooks, anyHooks) || a.trackExecutionStart
 
 	var state *execState
 	finalCtx := setupExecutionContext(ctx, &state, needExecState)
@@ -224,9 +250,7 @@ func firePanicHooks[Req any](
 		if h.OnPanic == nil {
 			continue
 		}
-		callHook(meta, "OnPanic", func() {
-			h.OnPanic(ctx, any(req), recovered, meta)
-		})
+		callHook4(meta, "OnPanic", h.OnPanic, ctx, any(req), recovered, meta)
 	}
 }
 
@@ -244,12 +268,12 @@ func fireExitHooks[Req, Res any](
 	if errors.Is(err, context.DeadlineExceeded) {
 		for i := typedHooksRan - 1; i >= 0; i-- {
 			if typedHooks[i].OnTimeout != nil {
-				callHook(meta, "OnTimeout", func() { typedHooks[i].OnTimeout(ctx, req, meta) })
+				callHook3(meta, "OnTimeout", typedHooks[i].OnTimeout, ctx, req, meta)
 			}
 		}
 		for i := anyHooksRan - 1; i >= 0; i-- {
 			if anyHooks[i].OnTimeout != nil {
-				callHook(meta, "OnTimeout", func() { anyHooks[i].OnTimeout(ctx, any(req), meta) })
+				callHook3(meta, "OnTimeout", anyHooks[i].OnTimeout, ctx, any(req), meta)
 			}
 		}
 	}
@@ -273,21 +297,21 @@ func fireTypedExitHook[Req, Res any](
 	switch {
 	case err != nil && errors.Is(err, context.DeadlineExceeded):
 		if h.OnError != nil {
-			callHook(meta, "OnError", func() { h.OnError(ctx, req, err, meta) })
+			callHook4(meta, "OnError", h.OnError, ctx, req, err, meta)
 		}
 	case err != nil && errors.Is(err, context.Canceled):
 		if h.OnCancel != nil {
-			callHook(meta, "OnCancel", func() { h.OnCancel(ctx, req, meta) })
+			callHook3(meta, "OnCancel", h.OnCancel, ctx, req, meta)
 		}
 	case err != nil:
 		if h.OnError != nil {
-			callHook(meta, "OnError", func() { h.OnError(ctx, req, err, meta) })
+			callHook4(meta, "OnError", h.OnError, ctx, req, err, meta)
 		}
 	case h.OnSuccess != nil && state != nil && !state.fromCache:
-		callHook(meta, "OnSuccess", func() { h.OnSuccess(ctx, req, res, meta) })
+		callHook4(meta, "OnSuccess", h.OnSuccess, ctx, req, res, meta)
 	}
 	if h.After != nil {
-		callHook(meta, "After", func() { h.After(ctx, req, res, err, meta) })
+		callHook5(meta, "After", h.After, ctx, req, res, err, meta)
 	}
 }
 
@@ -303,21 +327,21 @@ func fireAnyExitHook[Req, Res any](
 	switch {
 	case err != nil && errors.Is(err, context.DeadlineExceeded):
 		if h.OnError != nil {
-			callHook(meta, "OnError", func() { h.OnError(ctx, any(req), err, meta) })
+			callHook4(meta, "OnError", h.OnError, ctx, any(req), err, meta)
 		}
 	case errors.Is(err, context.Canceled):
 		if h.OnCancel != nil {
-			callHook(meta, "OnCancel", func() { h.OnCancel(ctx, any(req), meta) })
+			callHook3(meta, "OnCancel", h.OnCancel, ctx, any(req), meta)
 		}
 	case err != nil:
 		if h.OnError != nil {
-			callHook(meta, "OnError", func() { h.OnError(ctx, any(req), err, meta) })
+			callHook4(meta, "OnError", h.OnError, ctx, any(req), err, meta)
 		}
 	case h.OnSuccess != nil && state != nil && !state.fromCache:
-		callHook(meta, "OnSuccess", func() { h.OnSuccess(ctx, any(req), any(res), meta) })
+		callHook4(meta, "OnSuccess", h.OnSuccess, ctx, any(req), any(res), meta)
 	}
 	if h.After != nil {
-		callHook(meta, "After", func() { h.After(ctx, any(req), any(res), err, meta) })
+		callHook5(meta, "After", h.After, ctx, any(req), any(res), err, meta)
 	}
 }
 

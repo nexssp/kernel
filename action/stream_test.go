@@ -103,6 +103,37 @@ func TestStream_AnyStreamActionBoundary(t *testing.T) {
 	}
 }
 
+func TestStream_DoStreamTypedKeepsItemType(t *testing.T) {
+	t.Parallel()
+
+	type request struct {
+		Prefix string `json:"prefix"`
+	}
+	source := action.NewStream("typed.stream", func(_ context.Context, req request) (iter.Seq2[int, error], error) {
+		return func(yield func(int, error) bool) {
+			if !yield(len(req.Prefix), nil) {
+				return
+			}
+			yield(len(req.Prefix)+1, nil)
+		}, nil
+	})
+
+	seq, err := source.DoStreamTyped(context.Background(), map[string]any{"prefix": "go"})
+	if err != nil {
+		t.Fatalf("DoStreamTyped failed: %v", err)
+	}
+	var got []int
+	for item, itemErr := range seq {
+		if itemErr != nil {
+			t.Fatalf("unexpected item error: %v", itemErr)
+		}
+		got = append(got, item)
+	}
+	if !reflect.DeepEqual(got, []int{2, 3}) {
+		t.Fatalf("typed items = %v, want [2 3]", got)
+	}
+}
+
 func TestStream_ConsumerPanic_NotSwallowed(t *testing.T) {
 	t.Parallel()
 

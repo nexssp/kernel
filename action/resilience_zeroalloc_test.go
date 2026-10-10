@@ -423,13 +423,10 @@ func TestIdempotency_HotPath_BoundedAllocs_Summary(t *testing.T) {
 // or hashing strings/[]byte directly. This eliminates 4 of the 5
 // allocations that the json.Marshal fallback incurs.
 //
-// The remaining single allocation is the hex.EncodeToString call in
-// hashPayload (which wraps hashPayloadBytes). A future API change could
-// return [32]byte directly to eliminate that too.
-//
-// For the int primitive case below, observe that the cache-hit path now
-// allocates exactly 2 allocs/op (hex string + json.Unmarshal of cached
-// body) instead of the 5 allocs/op that the struct case incurs.
+// The middleware carries this fixed-size digest internally and compares it
+// against the raw digest retained by MemoryIdempotencyStore, avoiding a hex
+// string allocation on cache hits. The compatibility string is encoded only
+// when a result is persisted or passed to an existing coordinator API.
 func TestIdempotency_PrimitiveHotPath_LowerAllocs(t *testing.T) {
 	act := action.New("idem.primitive", func(_ context.Context, n int) (int, error) {
 		return n * 2, nil

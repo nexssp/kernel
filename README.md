@@ -93,7 +93,8 @@ The Kernel supports type-erased and dynamic execution boundaries (such as AI too
 ```go
 act := action.New("user.lookup", lookupHandler).Build()
 
-// 1. Direct type-erased call: 0 heap allocations on matching Req or *Req pointer
+// 1. Direct type-erased call: zero heap allocations when matching Req and Res are pointers.
+//    A value-type Res may allocate when it is boxed into any.
 result, err := act.DoAny(ctx, UserRequest{ID: "usr-42"})
 
 // 2. Universal Invoker: automatically decodes and coerces dynamic payloads
@@ -171,7 +172,7 @@ results, err := reviewer.Do(ctx, "package main...")
 - Cache hits return without invoking the underlying handler.
 - Cache misses execute the handler under singleflight protection to prevent cache stampedes.
 - Slower-layer hits automatically back-fill faster layers.
-- If no layers are passed, an internal thread-safe in-memory cache with an automated background janitor is instantiated. Call `action.Close()` on application shutdown to release janitor goroutines.
+- If no layers are passed, an internal thread-safe in-memory cache is instantiated. It evicts entries inline during `Set` and lazily during `Get`; it starts no janitor goroutine and requires no `Close()` call.
 - `Once()` memoizes the result or error of the first execution indefinitely for static configurations.
 
 ### Idempotency Contracts
@@ -408,7 +409,7 @@ The Kernel provides execution semantics and safety contracts; applications suppl
 
 The Kernel avoids reflection on execution paths, relies on immutable structures post-build, and compiles middleware chains at initialization time.
 
-Streaming is O(1) in memory: StreamAction[Req, T] wraps Go 1.23 iter.Seq2[T, error] under action lifecycle management. Per-item cost is zero allocations; only a constant per-call overhead is paid (iterator closure, hook wrappers, panic recovery).
+Streaming is O(1) in memory: `StreamAction[Req, T]` wraps Go 1.23 `iter.Seq2[T, error]` under action lifecycle management. The typed `Do` and `DoStreamTyped` paths do not allocate per item; the type-erased `DoStreamAny` boundary boxes each item into `any` and can allocate for non-pointer values. A constant per-call overhead is also paid (iterator closure, hook wrappers, panic recovery).
 
 ### Benchmark and Quality Verification
 
@@ -446,6 +447,9 @@ Complete, runnable examples are located in the [`examples/`](./examples) directo
 - [`10_observe_lifecycle`](./examples/10_observe_lifecycle) – End-to-end lifecycle observation with Prometheus, Slog, JSONL, and Metrics sinks.
 
 ---
+
+## API Stability
+Nexss Kernel is currently pre-1.0. Exported APIs may change between minor releases; downstream projects should pin an explicit released module version rather than track `main`. The current upstream tag is `v0.28.0`.
 
 ## Contributing
 

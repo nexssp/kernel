@@ -53,6 +53,9 @@ type IdempotencyEntry struct {
 	Headers     map[string]string `json:"headers,omitempty"`
 	StoredAt    time.Time         `json:"stored_at"`
 	RequestHash string            `json:"request_hash"`
+	// RequestHashBytes is an in-memory fast path; RequestHash remains the
+	// serialized compatibility field used by existing stores.
+	RequestHashBytes [32]byte `json:"-"`
 }
 
 type IdempotencyStore interface {
@@ -91,7 +94,7 @@ type IdempotencyLeaseRenewer interface {
 // idempotentResult carries the request hash through singleflight so
 // followers can detect a same-key/different-payload mismatch.
 type idempotentResult struct {
-	requestHash string
+	requestHash [32]byte
 	value       any
 }
 
@@ -121,7 +124,7 @@ func IdempotencyMiddleware[Req, Res any](store IdempotencyStore, cfg Idempotency
 				return next(ctx, req)
 			}
 
-			reqHash := hashPayload(req)
+			reqHash := hashPayloadBytes(req)
 			ttl := cfg.TTL
 			if ttl <= 0 {
 				ttl = DefaultIdempotencyTTL
@@ -130,7 +133,7 @@ func IdempotencyMiddleware[Req, Res any](store IdempotencyStore, cfg Idempotency
 			// Fast path: replay cached result, but only after verifying the
 			// payload hash matches. A hash mismatch is a Conflict, not a hit.
 			if entry, ok := store.Get(ctx, key); ok {
-				if entry.RequestHash != "" && reqHash != "" && entry.RequestHash != reqHash {
+				if requestHashConflict(entry, reqHash) {
 					var zero Res
 					return zero, xerr.Conflict("idempotency key already used with a different request payload")
 				}
@@ -147,7 +150,7 @@ func IdempotencyMiddleware[Req, Res any](store IdempotencyStore, cfg Idempotency
 			val, err, _ := sf.Do(key, func() (any, error) {
 				// Re-check inside flight in case a concurrent caller completed it
 				if entry, ok := store.Get(ctx, key); ok {
-					if entry.RequestHash != "" && reqHash != "" && entry.RequestHash != reqHash {
+					if requestHashConflict(entry, reqHash) {
 						return nil, xerr.Conflict("idempotency key already used with a different request payload")
 					}
 					var cachedRes Res
@@ -160,7 +163,7 @@ func IdempotencyMiddleware[Req, Res any](store IdempotencyStore, cfg Idempotency
 
 				// Handle distributed coordinator if configured
 				if coord, ok := store.(IdempotencyCoordinator); ok {
-					claim, err := coord.Claim(ctx, key, reqHash, cfg.EffectiveLeaseTTL())
+					claim, err := coord.Claim(ctx, key, hashPayloadString(reqHash), cfg.EffectiveLeaseTTL())
 					if err != nil {
 						if ctxErr := ctx.Err(); ctxErr != nil {
 							return nil, ctxErr
@@ -203,10 +206,11 @@ func IdempotencyMiddleware[Req, Res any](store IdempotencyStore, cfg Idempotency
 
 					if bodyBytes, mErr := json.Marshal(res); mErr == nil {
 						entry := IdempotencyEntry{
-							Status:      200,
-							Body:        bodyBytes,
-							StoredAt:    time.Now().UTC(),
-							RequestHash: reqHash,
+							Status:           200,
+							Body:             bodyBytes,
+							StoredAt:         time.Now(),
+							RequestHash:      hashPayloadString(reqHash),
+							RequestHashBytes: reqHash,
 						}
 						if completeErr := coord.Complete(context.WithoutCancel(ctx), key, claim.Token, entry, ttl); completeErr != nil {
 							return nil, xerr.Unavailable("idempotency completion unavailable", completeErr)
@@ -225,10 +229,11 @@ func IdempotencyMiddleware[Req, Res any](store IdempotencyStore, cfg Idempotency
 
 				if bodyBytes, mErr := json.Marshal(res); mErr == nil {
 					store.Set(ctx, key, IdempotencyEntry{
-						Status:      200,
-						Body:        bodyBytes,
-						StoredAt:    time.Now().UTC(),
-						RequestHash: reqHash,
+						Status:           200,
+						Body:             bodyBytes,
+						StoredAt:         time.Now(),
+						RequestHash:      hashPayloadString(reqHash),
+						RequestHashBytes: reqHash,
 					}, ttl)
 				}
 
@@ -247,7 +252,7 @@ func IdempotencyMiddleware[Req, Res any](store IdempotencyStore, cfg Idempotency
 			}
 			// Followers never run the flight function — the only place
 			// a payload mismatch can be caught.
-			if fw.requestHash != "" && reqHash != "" && fw.requestHash != reqHash {
+			if fw.requestHash != ([32]byte{}) && reqHash != ([32]byte{}) && fw.requestHash != reqHash {
 				var zero Res
 				return zero, xerr.Conflict("idempotency key already used with a different request payload")
 			}
@@ -278,15 +283,57 @@ func extractIdempotencyKey[Req any](ctx context.Context, req Req, cfg Idempotenc
 // []byte), this is zero-allocation — the hash is computed on stack buffers.
 // For complex types, it falls back to encoding/json (which allocates).
 //
-// The returned string is a hex-encoded SHA-256. To eliminate the final
-// string allocation, callers can use bytes.Equal on the raw [32]byte
-// (see hashPayloadBytes below).
+// The returned string is a hex-encoded SHA-256 for use as a persisted key.
+// IdempotencyMiddleware compares raw [32]byte digests on its hot path.
 func hashPayload(v any) string {
-	sum := hashPayloadBytes(v)
+	return hashPayloadString(hashPayloadBytes(v))
+}
+
+func hashPayloadString(sum [32]byte) string {
 	if sum == ([32]byte{}) {
 		return ""
 	}
 	return hex.EncodeToString(sum[:])
+}
+
+func requestHashConflict(entry IdempotencyEntry, requestHash [32]byte) bool {
+	if requestHash == ([32]byte{}) || (entry.RequestHash == "" && entry.RequestHashBytes == ([32]byte{})) {
+		return false
+	}
+	stored := entry.RequestHashBytes
+	if stored == ([32]byte{}) {
+		stored = decodeRequestHash(entry.RequestHash)
+	}
+	return stored != requestHash
+}
+
+func decodeRequestHash(encoded string) [32]byte {
+	var decoded [32]byte
+	if len(encoded) != hex.EncodedLen(len(decoded)) {
+		return decoded
+	}
+	for i := range decoded {
+		hi, okHi := hexNibble(encoded[i*2])
+		lo, okLo := hexNibble(encoded[i*2+1])
+		if !okHi || !okLo {
+			return [32]byte{}
+		}
+		decoded[i] = hi<<4 | lo
+	}
+	return decoded
+}
+
+func hexNibble(c byte) (byte, bool) {
+	switch {
+	case c >= '0' && c <= '9':
+		return c - '0', true
+	case c >= 'a' && c <= 'f':
+		return c - 'a' + 10, true
+	case c >= 'A' && c <= 'F':
+		return c - 'A' + 10, true
+	default:
+		return 0, false
+	}
 }
 
 // hashPayloadBytes returns the raw [32]byte SHA-256 of the request payload.
@@ -393,6 +440,9 @@ func (s *MemoryIdempotencyStore) Get(_ context.Context, key string) (Idempotency
 func (s *MemoryIdempotencyStore) setLocked(key string, entry IdempotencyEntry, ttl time.Duration) {
 	if entry.StoredAt.IsZero() {
 		entry.StoredAt = time.Now()
+	}
+	if entry.RequestHashBytes == ([32]byte{}) {
+		entry.RequestHashBytes = decodeRequestHash(entry.RequestHash)
 	}
 
 	if len(s.entries) >= s.maxCapacity {
@@ -506,12 +556,12 @@ func (s *MemoryIdempotencyStore) Release(_ context.Context, key, token string) e
 }
 
 func (s *MemoryIdempotencyStore) evictExpiredLocked(now time.Time) {
-	for k, e := range s.entries {
-		ttl := e.ttl
+	for k := range s.entries {
+		ttl := s.entries[k].ttl
 		if ttl <= 0 {
 			ttl = s.defTTL
 		}
-		if now.Sub(e.StoredAt) > ttl {
+		if now.Sub(s.entries[k].StoredAt) > ttl {
 			delete(s.entries, k)
 		}
 	}

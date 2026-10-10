@@ -22,7 +22,7 @@ func fireStreamStart[Req, Item any](ctx context.Context, hooks []StreamHook[Req,
 	for i := range hooks {
 		if hooks[i].OnStart != nil {
 			h := hooks[i]
-			callHook(meta, "Stream.OnStart", func() { h.OnStart(ctx, req, meta) })
+			callHook3(meta, "Stream.OnStart", h.OnStart, ctx, req, meta)
 		}
 	}
 }
@@ -31,7 +31,7 @@ func fireStreamItem[Req, Item any](ctx context.Context, hooks []StreamHook[Req, 
 	for i := range hooks {
 		if hooks[i].OnItem != nil {
 			h := hooks[i]
-			callHook(meta, "Stream.OnItem", func() { h.OnItem(ctx, req, item, itemErr, meta) })
+			callHook5(meta, "Stream.OnItem", h.OnItem, ctx, req, item, itemErr, meta)
 		}
 	}
 }
@@ -41,19 +41,19 @@ func fireStreamTerminal[Req, Item any](ctx context.Context, hooks []StreamHook[R
 	isCancel := errors.Is(err, context.Canceled)
 	for _, h := range slices.Backward(hooks) {
 		if isTimeout && h.OnTimeout != nil {
-			callHook(meta, "Stream.OnTimeout", func() { h.OnTimeout(ctx, req, meta) })
+			callHook3(meta, "Stream.OnTimeout", h.OnTimeout, ctx, req, meta)
 		}
 		if isCancel && h.OnCancel != nil {
-			callHook(meta, "Stream.OnCancel", func() { h.OnCancel(ctx, req, meta) })
+			callHook3(meta, "Stream.OnCancel", h.OnCancel, ctx, req, meta)
 		}
 		if err != nil && h.OnError != nil {
-			callHook(meta, "Stream.OnError", func() { h.OnError(ctx, req, err, meta) })
+			callHook4(meta, "Stream.OnError", h.OnError, ctx, req, err, meta)
 		}
 		if err == nil && h.OnSuccess != nil {
-			callHook(meta, "Stream.OnSuccess", func() { h.OnSuccess(ctx, req, meta) })
+			callHook3(meta, "Stream.OnSuccess", h.OnSuccess, ctx, req, meta)
 		}
 		if h.After != nil {
-			callHook(meta, "Stream.After", func() { h.After(ctx, req, err, meta) })
+			callHook4(meta, "Stream.After", h.After, ctx, req, err, meta)
 		}
 	}
 }

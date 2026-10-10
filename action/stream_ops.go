@@ -128,9 +128,8 @@ func StreamCollect[T any]() stream.StreamOp[T, []T] {
 
 // StreamCollectN is the bounded variant of StreamCollect.
 //
-// maxItems must be > 0. The function panics if maxItems <= 0 — this is a
-// programmer error, not a runtime condition. Configuration validation in
-// the Flow layer is expected to reject invalid limits before construction.
+// maxItems must be > 0. If maxItems <= 0, the returned operator emits a
+// xerr.BadRequest error without consuming the upstream stream.
 //
 // If the upstream yields more than maxItems items, a xerr.Forbidden error
 // is emitted and the stream terminates. Partial results are never returned.
@@ -138,7 +137,12 @@ func StreamCollect[T any]() stream.StreamOp[T, []T] {
 // error.
 func StreamCollectN[T any](maxItems int) stream.StreamOp[T, []T] {
 	if maxItems <= 0 {
-		panic("action.StreamCollectN: maxItems must be > 0")
+		invalidLimitErr := xerr.BadRequest("action.StreamCollectN: maxItems must be > 0")
+		return func(_ iter.Seq2[T, error]) iter.Seq2[[]T, error] {
+			return func(yield func([]T, error) bool) {
+				yield(nil, invalidLimitErr)
+			}
+		}
 	}
 	return func(up iter.Seq2[T, error]) iter.Seq2[[]T, error] {
 		return func(yield func([]T, error) bool) {

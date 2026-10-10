@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
+	"log/slog"
 	"slices"
 	"sync/atomic"
 
@@ -261,14 +262,21 @@ func SagaAny(name string, steps []DynamicSagaStep) *Builder[any, any] {
 					continue
 				}
 				rollbackCtx := context.WithoutCancel(ctx)
+				var compensationErrors []error
 				for _, c := range slices.Backward(completed) {
 					undoAct := steps[c].Undo
 					if undoAct != nil {
-						//nolint:errcheck // rollback is best-effort; primary error is returned below
-						_, _ = InvokeAny(rollbackCtx, undoAct, initialPayload)
+						if _, undoErr := InvokeAny(rollbackCtx, undoAct, initialPayload); undoErr != nil {
+							compensationErrors = append(compensationErrors, fmt.Errorf("step %q: %w", steps[c].Name, undoErr))
+							slog.Error("saga_undo_failed", "saga", name, "step", steps[c].Name, "error", undoErr)
+						}
 					}
 				}
-				return nil, fmt.Errorf("saga [%s] failed at %q: %w", name, step.Name, err)
+				primaryErr := fmt.Errorf("saga [%s] failed at %q: %w", name, step.Name, err)
+				if len(compensationErrors) > 0 {
+					return nil, errors.Join(primaryErr, fmt.Errorf("saga [%s] compensation failures: %w", name, errors.Join(compensationErrors...)))
+				}
+				return nil, primaryErr
 			}
 			completed = append(completed, i)
 			currentPayload = out

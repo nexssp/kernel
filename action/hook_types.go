@@ -10,13 +10,39 @@ import (
 	"reflect"
 )
 
-func callHook(meta *Meta, hook string, fn func()) {
+func logHookPanic(meta *Meta, hook string, recovered any) {
+	actionName := ""
+	if meta != nil {
+		actionName = meta.Name
+	}
+	slog.Error("action_hook_panic", "action", actionName, "hook", hook, "panic", recovered)
+}
+
+func callHook3[A, B, C any](meta *Meta, hook string, fn func(A, B, C), a A, b B, c C) {
 	defer func() {
-		if r := recover(); r != nil {
-			slog.Error("action_hook_panic", "action", meta.Name, "hook", hook, "panic", r)
+		if recovered := recover(); recovered != nil {
+			logHookPanic(meta, hook, recovered)
 		}
 	}()
-	fn()
+	fn(a, b, c)
+}
+
+func callHook4[A, B, C, D any](meta *Meta, hook string, fn func(A, B, C, D), a A, b B, c C, d D) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			logHookPanic(meta, hook, recovered)
+		}
+	}()
+	fn(a, b, c, d)
+}
+
+func callHook5[A, B, C, D, E any](meta *Meta, hook string, fn func(A, B, C, D, E), a A, b B, c C, d D, e E) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			logHookPanic(meta, hook, recovered)
+		}
+	}()
+	fn(a, b, c, d, e)
 }
 
 // Hook is a strongly typed hook set for one request/response pair.

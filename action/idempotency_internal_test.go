@@ -138,3 +138,17 @@ func TestMemoryIdempotencyStore_CapacityBounded(t *testing.T) {
 		t.Fatalf("entries size %d exceeds capacity %d", size, store.maxCapacity)
 	}
 }
+
+func TestRequestHashConflict_LegacyAndRawDigest(t *testing.T) {
+	digest := hashPayloadBytes("payload")
+	legacyEntry := IdempotencyEntry{RequestHash: hashPayloadString(digest)}
+	if requestHashConflict(legacyEntry, digest) {
+		t.Fatal("matching legacy string hash was rejected")
+	}
+	if !requestHashConflict(legacyEntry, hashPayloadBytes("different")) {
+		t.Fatal("different legacy string hash was accepted")
+	}
+	if requestHashConflict(IdempotencyEntry{RequestHashBytes: digest}, digest) {
+		t.Fatal("matching raw digest without the string field was rejected")
+	}
+}

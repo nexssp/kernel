@@ -15,13 +15,14 @@ import (
 // All methods return the same builder for chaining.
 // Call Build() once — the result is immutable and safe for concurrent use.
 type Builder[Req, Res any] struct {
-	meta        Meta
-	exec        Fn[Req, Res]
-	middlewares []DispatcherMiddleware[Req, Res]
-	hooks       []Hook[Req, Res]
-	anyHooks    []AnyHook
-	bindings    []Binding
-	history     *History[Req, Res]
+	meta                Meta
+	exec                Fn[Req, Res]
+	middlewares         []DispatcherMiddleware[Req, Res]
+	hooks               []Hook[Req, Res]
+	anyHooks            []AnyHook
+	bindings            []Binding
+	history             *History[Req, Res]
+	trackExecutionStart bool
 }
 
 // ToBuilder creates a mutable configuration state from an existing action.
@@ -36,13 +37,14 @@ func (b *BuiltAction[Req, Res]) ToBuilder() *Builder[Req, Res] {
 	}
 
 	return &Builder[Req, Res]{
-		meta:        metaCopy,
-		exec:        b.baseExec,
-		middlewares: slices.Clone(b.middlewares),
-		bindings:    append([]Binding(nil), b.bindings...),
-		hooks:       append([]Hook[Req, Res](nil), b.hooks...),
-		anyHooks:    append([]AnyHook(nil), b.anyHooksSnapshot()...),
-		history:     b.history,
+		meta:                metaCopy,
+		exec:                b.baseExec,
+		middlewares:         slices.Clone(b.middlewares),
+		bindings:            append([]Binding(nil), b.bindings...),
+		hooks:               append([]Hook[Req, Res](nil), b.hooks...),
+		anyHooks:            append([]AnyHook(nil), b.anyHooksSnapshot()...),
+		history:             b.history,
+		trackExecutionStart: b.trackExecutionStart,
 	}
 }
 
@@ -200,11 +202,12 @@ func (b *Builder[Req, Res]) Build() *BuiltAction[Req, Res] {
 	metaCopy.RequiredFeatures = slices.Clone(b.meta.RequiredFeatures)
 
 	act := &BuiltAction[Req, Res]{
-		meta:        &metaCopy,
-		baseExec:    b.exec,
-		middlewares: slices.Clone(b.middlewares),
-		bindings:    append([]Binding(nil), b.bindings...),
-		history:     b.history,
+		meta:                &metaCopy,
+		baseExec:            b.exec,
+		middlewares:         slices.Clone(b.middlewares),
+		bindings:            append([]Binding(nil), b.bindings...),
+		history:             b.history,
+		trackExecutionStart: b.trackExecutionStart,
 	}
 
 	reqType := reflect.TypeFor[Req]()

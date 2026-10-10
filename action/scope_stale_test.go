@@ -123,10 +123,9 @@ func TestAdaptive_PanicInClosedState_TripsBreaker(t *testing.T) {
 
 // ─── Idempotency: concurrent payload mismatch ────────────────────────────────
 
-// CONCURRENT KEY REUSE WITH DIFFERENT PAYLOAD: caller B joins caller A's
-// singleflight (same key) while A is in flight. B must receive a Conflict,
-// not A's response. Before the fix the follower path skipped the hash check
-// entirely and silently returned A's response for a different body.
+// CONCURRENT KEY REUSE WITH DIFFERENT PAYLOAD: caller B races caller A using
+// the same key but a different payload. B must receive a Conflict, not A's
+// response. Before the fix the follower path skipped the hash check entirely.
 func TestIdempotency_ConcurrentDifferentPayload_ReturnsConflict(t *testing.T) {
 	t.Parallel()
 
@@ -148,34 +147,47 @@ func TestIdempotency_ConcurrentDifferentPayload_ReturnsConflict(t *testing.T) {
 	}
 	wrapped := mw(core)
 
-	results := make(chan error, 2)
+	type callResult struct {
+		caller string
+		err    error
+	}
+	results := make(chan callResult, 2)
 
 	// Leader: payload "A" (hash H_A), key "shared-key".
 	go func() {
 		_, err := wrapped(context.Background(), []byte("A"))
-		results <- err
+		results <- callResult{caller: "leader", err: err}
 	}()
 
 	<-handlerEntered // leader holds the flight
 
-	// Follower: payload "B" (hash H_B), same key — joins the in-flight
-	// leader via singleflight and never runs the flight function itself.
+	// Follower: payload "B" (hash H_B), same key. It may join the in-flight
+	// leader or observe the completed cache entry, but must never get A's result.
 	go func() {
 		_, err := wrapped(context.Background(), []byte("B"))
-		results <- err
+		results <- callResult{caller: "follower", err: err}
 	}()
 
-	// Give the follower a moment to join, then let the leader finish.
-	time.Sleep(50 * time.Millisecond)
+	// Release the leader without a timing assumption. Whether the follower
+	// joins the flight or observes the completed cache entry, its different
+	// payload must conflict; result order is deliberately not assumed.
 	close(release)
 
-	errA := <-results
-	errB := <-results
-	if errA != nil {
-		t.Fatalf("leader should succeed, got: %v", errA)
+	var leaderErr, followerErr error
+	for range 2 {
+		result := <-results
+		switch result.caller {
+		case "leader":
+			leaderErr = result.err
+		case "follower":
+			followerErr = result.err
+		}
 	}
-	if xerr.KindFrom(errB) != xerr.KindConflict {
-		t.Fatalf("follower with different payload must get Conflict, got: %v", errB)
+	if leaderErr != nil {
+		t.Fatalf("leader should succeed, got: %v", leaderErr)
+	}
+	if xerr.KindFrom(followerErr) != xerr.KindConflict {
+		t.Fatalf("follower with different payload must get Conflict, got: %v", followerErr)
 	}
 }
 

@@ -39,8 +39,6 @@ type Event struct {
 	Attempt     int
 }
 
-type observationStartKey struct{}
-
 type Sink interface {
 	Emit(context.Context, Event)
 }
@@ -66,7 +64,7 @@ func Hook(sink Sink) action.AnyHook {
 	}
 	return action.AnyHook{
 		Before: func(ctx context.Context, _ any, _ *action.Meta) (context.Context, error) {
-			return context.WithValue(ctx, observationStartKey{}, time.Now()), nil
+			return action.RecordExecutionStart(ctx), nil
 		},
 		OnSuccess: func(ctx context.Context, req, res any, meta *action.Meta) {
 			ev := baseEvent(ctx, KindSuccess, meta)
@@ -128,11 +126,7 @@ func Hook(sink Sink) action.AnyHook {
 }
 
 func durationSince(ctx context.Context) time.Duration {
-	start, ok := ctx.Value(observationStartKey{}).(time.Time)
-	if !ok {
-		return 0
-	}
-	return time.Since(start)
+	return action.ExecutionDuration(ctx)
 }
 
 func actionName(meta *action.Meta) string {
