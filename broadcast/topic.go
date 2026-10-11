@@ -1,18 +1,20 @@
-// Package broadcast provides a lock-free Single-Producer Multi-Consumer (SPMC)
+// Package broadcast provides a Single-Producer Multi-Consumer (SPMC)
 // ring buffer for broadcasting state snapshots without blocking the producer.
 package broadcast
 
 import (
 	"math"
+	"sync"
 	"sync/atomic"
 )
 
 type slot[T any] struct {
 	seq atomic.Uint64
+	mu  sync.Mutex
 	val T
 }
 
-// Topic is a lock-free, SPMC ring buffer.
+// Topic is an SPMC ring buffer.
 // Producer writes sequentially; consumers maintain private cursors.
 type Topic[T any] struct {
 	_      [56]byte
@@ -45,8 +47,11 @@ func (t *Topic[T]) Publish(msg T) {
 	seq := t.head.Load()
 	s := &t.buffer[seq&t.mask]
 
+	s.mu.Lock()
 	s.val = msg
-	s.seq.Store(seq) // Establish happens-before boundary before publishing head
+	s.seq.Store(seq) // Establish happens-before boundary before unlocking
+	s.mu.Unlock()
+
 	t.head.Store(seq + 1)
 }
 
@@ -75,12 +80,25 @@ func (t *Topic[T]) Read(c *Cursor, dst []T) int {
 	n := 0
 	for tail < head && n < len(dst) {
 		s := &t.buffer[tail&t.mask]
-		// If the slot sequence does not match tail, the producer either
-		// hasn't finished writing or has already lapped this slot.
+
+		// 1. Optimistic lock-free check. If the sequence doesn't match,
+		// the producer has lapped us or hasn't finished writing.
 		if s.seq.Load() != tail {
 			break
 		}
+
+		// 2. Lock to prevent torn reads and satisfy the Go Race Detector.
+		s.mu.Lock()
+
+		// 3. Double-check inside the lock. The producer might have
+		// overwritten this slot in the microsecond we waited for the lock!
+		if s.seq.Load() != tail {
+			s.mu.Unlock()
+			break
+		}
 		dst[n] = s.val
+		s.mu.Unlock()
+
 		tail++
 		n++
 	}
