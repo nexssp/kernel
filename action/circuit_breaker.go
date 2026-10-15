@@ -185,13 +185,8 @@ func (s *CircuitBreakerState) complete(permit breakerPermit, err error, canceled
 			s.failures = 0
 			return breakerResult{closed: true}
 		}
-		// An unclassified probe is inconclusive: keep the breaker open for
-		// another recovery window, but do not count it as an outage failure.
-		if !xerr.IsTransient(err) {
-			s.state = stateOpen
-			s.openedAt = time.Now()
-			return breakerResult{failures: s.failures}
-		}
+		// Every non-permanent probe failure reopens the breaker for another
+		// recovery window, regardless of the retry classification.
 		s.failures++
 		s.state = stateOpen
 		s.openedAt = time.Now()
@@ -205,9 +200,9 @@ func (s *CircuitBreakerState) complete(permit breakerPermit, err error, canceled
 		s.failures = 0
 		return breakerResult{closed: true}
 	}
-	// Do not treat unclassified errors (for example, Internal or Canceled) as
-	// transient. The breaker tracks outages only when xerr says they are retryable.
-	if !xerr.IsTransient(err) {
+	// The breaker deliberately uses a broader failure predicate than Retry:
+	// every non-permanent error, including Internal, counts as a failure.
+	if xerr.IsPermanent(err) {
 		return breakerResult{failures: s.failures}
 	}
 	s.failures++

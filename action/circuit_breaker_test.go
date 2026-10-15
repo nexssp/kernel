@@ -315,25 +315,23 @@ func TestApplyResilience_CircuitBreakerWrapsRetryAndTimeoutIsPerAttempt(t *testi
 	}
 }
 
-func TestCircuitBreaker_UnclassifiedErrorsDoNotTrip(t *testing.T) {
+func TestCircuitBreaker_InternalErrorsTrip(t *testing.T) {
 	t.Parallel()
-	var healthy atomic.Bool
+	var calls atomic.Int32
 	state := newTestBreaker(t, "unclassified", time.Second)
 	act := action.New("unclassified.call", func(context.Context, struct{}) (string, error) {
-		if !healthy.Load() {
-			return "", xerr.Internal("local processing failure")
-		}
-		return "ok", nil
+		calls.Add(1)
+		return "", xerr.Internal("local processing failure")
 	}).Use(action.CircuitBreaker[struct{}, string](state)).Build()
 
-	for range 3 {
-		if _, err := act.Do(t.Context(), struct{}{}); xerr.KindFrom(err) != xerr.KindInternal ||
-			xerr.IsTransient(err) || xerr.IsPermanent(err) {
-			t.Fatalf("unclassified failure = %v, want Internal and neither transient nor permanent", err)
-		}
+	if _, err := act.Do(t.Context(), struct{}{}); xerr.KindFrom(err) != xerr.KindInternal ||
+		xerr.IsTransient(err) || xerr.IsPermanent(err) {
+		t.Fatalf("internal failure = %v, want Internal and neither transient nor permanent", err)
 	}
-	healthy.Store(true)
-	if got, err := act.Do(t.Context(), struct{}{}); err != nil || got != "ok" {
-		t.Fatalf("call after unclassified errors = (%q, %v), want (ok, nil)", got, err)
+	if _, err := act.Do(t.Context(), struct{}{}); xerr.KindFrom(err) != xerr.KindCircuitBreaker {
+		t.Fatalf("call after Internal failure = %v, want CircuitBreaker", err)
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("handler called %d times, want 1 after breaker opened", got)
 	}
 }
