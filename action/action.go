@@ -57,6 +57,8 @@ type BuiltAction[Req, Res any] struct {
 	bindings            []Binding
 	history             *History[Req, Res]
 	trackExecutionStart bool
+	resilienceApplied   bool
+	validationErr       error
 }
 
 type anyHookSet struct {
@@ -148,6 +150,9 @@ func hasOnSuccessHook[Req, Res any](hooks []Hook[Req, Res], anyHooks []AnyHook) 
 }
 
 func (a *BuiltAction[Req, Res]) Do(ctx context.Context, req Req) (res Res, err error) {
+	if a.validationErr != nil {
+		return res, fmt.Errorf("action %s configuration: %w", a.meta.Name, a.validationErr)
+	}
 	anyHooks := a.anyHooksSnapshot()
 	needExecState := hasOnSuccessHook(a.hooks, anyHooks) || a.trackExecutionStart
 
