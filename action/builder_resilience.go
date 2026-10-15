@@ -5,124 +5,63 @@
 package action
 
 import (
-	"log/slog"
+	"errors"
+	"fmt"
 	"time"
 
 	"github.com/nexssp/kernel/xerr"
 )
 
 func (c *AdaptiveConfig) SetDefaults() {
-	if c.FailureThreshold == 0 {
-		c.FailureThreshold = 5
-	}
-	if c.ResetTimeout == 0 {
-		c.ResetTimeout = 30 * time.Second
-	}
-	if c.InitialTimeout == 0 {
-		c.InitialTimeout = 5 * time.Second
-	}
-}
-
-const (
-	stateClosed circuitState = iota
-	stateOpen
-	stateHalfOpen
-)
-
-func (a *adaptiveState) CurrentTimeout() time.Duration {
-	a.mu.RLock()
-	defer a.mu.RUnlock()
-	return a.timeout
-}
-
-// AllowRequest implements the 3-state transition logic.
-// Exactly one probe request is allowed through during the half-open window.
-func (a *adaptiveState) AllowRequest() bool {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-
-	now := time.Now()
-
-	switch a.state {
-	case stateClosed:
-		return true
-
-	case stateOpen:
-		if now.Sub(a.lastFailure) > a.cfg.ResetTimeout {
-			slog.Info("CircuitBreaker: Half-Open transition", "action", a.name)
-			a.state = stateHalfOpen
-			return true
-		}
-		return false
-
-	case stateHalfOpen:
-		// Another probe is currently active; reject concurrent callers
-		return false
-	}
-
-	return false
-}
-
-func (a *adaptiveState) Observe(err error) {
-	if err == nil {
-		a.mu.Lock()
-		if a.state != stateClosed {
-			slog.Info("CircuitBreaker: Closed transition", "action", a.name)
-		}
-		a.state = stateClosed
-		a.failures = 0
-		a.timeout = a.cfg.InitialTimeout
-		a.mu.Unlock()
-		return
-	}
-
-	// Never trip circuit breaker on permanent client errors (4xx)
-	if xerr.IsPermanent(err) {
-		a.mu.Lock()
-		if a.state == stateHalfOpen {
-			a.state = stateClosed
-			a.failures = 0
-			a.timeout = a.cfg.InitialTimeout
-		}
-		a.mu.Unlock()
-		return
-	}
-
-	a.mu.Lock()
-	defer a.mu.Unlock()
-
-	a.failures++
-	a.lastFailure = time.Now()
-
-	if a.state == stateHalfOpen || a.failures >= a.cfg.FailureThreshold {
-		a.state = stateOpen
-		a.timeout = time.Duration(float64(a.cfg.InitialTimeout) * (1 + float64(a.failures)/10))
-		slog.Warn("CircuitBreaker: OPEN", "action", a.name, "failures", a.failures)
-	}
-}
-
-// ReleaseProbe returns the breaker to Open after a caller-canceled probe.
-// Without this, one canceled probe leaves the breaker permanently
-// half-open and rejects every future request.
-func (a *adaptiveState) ReleaseProbe() {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if a.state == stateHalfOpen {
-		a.state = stateOpen
-		a.lastFailure = time.Now()
+	if c != nil {
+		*c = c.Normalized()
 	}
 }
 
 type ResilienceConfig struct {
-	MaxRetries    int
-	Backoff       func(attempt int) time.Duration
-	Predicate     RetryPredicate
-	Timeout       time.Duration
-	MaxConcurrent int32
-	Adaptive      *AdaptiveConfig
+	MaxRetries     int
+	Backoff        func(attempt int) time.Duration
+	Predicate      RetryPredicate
+	Timeout        time.Duration
+	MaxConcurrent  int32
+	CircuitBreaker *CircuitBreakerState
+	Adaptive       *AdaptiveConfig
 }
 
-func (b *Builder[Req, Res]) Resilient(cfg ResilienceConfig) *Builder[Req, Res] {
+// ApplyResilience validates cfg before mutating the builder, then installs
+// policies in one deterministic order: concurrency admission, breaker (or
+// Adaptive), retry loop, per-attempt timeout, then any existing inner
+// middleware and the handler. Call it at most once per builder.
+func (b *Builder[Req, Res]) ApplyResilience(cfg ResilienceConfig) error {
+	if b == nil {
+		return errors.New("resilience: builder is nil")
+	}
+	if b.resilienceApplied {
+		return errors.New("resilience: policies have already been applied to this builder")
+	}
+	if cfg.MaxRetries < 0 {
+		return errors.New("resilience: max retries must not be negative")
+	}
+	if cfg.Timeout < 0 {
+		return errors.New("resilience: timeout must not be negative")
+	}
+	if cfg.MaxConcurrent < 0 {
+		return errors.New("resilience: max concurrent must not be negative")
+	}
+	if cfg.CircuitBreaker != nil && cfg.Adaptive != nil {
+		return errors.New("resilience: standalone circuit breaker and adaptive breaker are mutually exclusive")
+	}
+	if cfg.CircuitBreaker != nil && !cfg.CircuitBreaker.valid() {
+		return errors.New("resilience: circuit breaker state is uninitialized")
+	}
+	if cfg.Adaptive != nil {
+		normalized := cfg.Adaptive.Normalized()
+		if err := normalized.Validate(); err != nil {
+			return fmt.Errorf("resilience: %w", err)
+		}
+		cfg.Adaptive = &normalized
+	}
+
 	if cfg.MaxRetries > 0 {
 		backoff := cfg.Backoff
 		if backoff == nil {
@@ -130,34 +69,37 @@ func (b *Builder[Req, Res]) Resilient(cfg ResilienceConfig) *Builder[Req, Res] {
 		}
 
 		if cfg.Predicate != nil {
-			b = b.RetryIf(cfg.MaxRetries, backoff, cfg.Predicate)
+			b.RetryIf(cfg.MaxRetries, backoff, cfg.Predicate)
 		} else {
-			b = b.Retry(cfg.MaxRetries, backoff)
+			b.Retry(cfg.MaxRetries, backoff)
 		}
 	}
 
 	if cfg.Timeout > 0 {
-		b = b.Timeout(cfg.Timeout)
+		b.Timeout(cfg.Timeout)
 	}
 
-	// UseFirst (not Use): the circuit breaker must observe only the final result
-	// of the Do() call after all retries are exhausted — never individual attempts.
-	// Adding it via Use() would nest it inside Retry, causing AllowRequest/Observe
-	// to fire per attempt rather than per caller invocation, silently breaking
-	// the breaker's failure accounting.
-	// SmartResilience manually constructs this same invariant as cb(retry(next)).
+	if cfg.CircuitBreaker != nil {
+		b.UseFirst(CircuitBreaker[Req, Res](cfg.CircuitBreaker))
+	}
 	if cfg.Adaptive != nil {
-		b = b.UseFirst(Adaptive[Req, Res](b.meta.Name, *cfg.Adaptive))
+		b.UseFirst(Adaptive[Req, Res](b.meta.Name, *cfg.Adaptive))
 	}
 
-	// UseFirst: admission control must reject overloads before any retry
-	// or circuit breaker logic executes, regardless of what this builder
-	// already has installed.
 	if cfg.MaxConcurrent > 0 {
 		b.meta.ConcurrencyLimit = cfg.MaxConcurrent
-		b = b.UseFirst(ConcurrencyLimitMiddleware[Req, Res](cfg.MaxConcurrent))
+		b.UseFirst(ConcurrencyLimitMiddleware[Req, Res](cfg.MaxConcurrent))
 	}
+	b.resilienceApplied = true
+	return nil
+}
 
+// Resilient preserves the fluent API. Invalid settings are stored and returned
+// by the built action's Do method; use ApplyResilience for immediate errors.
+func (b *Builder[Req, Res]) Resilient(cfg ResilienceConfig) *Builder[Req, Res] {
+	if err := b.ApplyResilience(cfg); err != nil && b.validationErr == nil {
+		b.validationErr = err
+	}
 	return b
 }
 

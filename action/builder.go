@@ -23,6 +23,8 @@ type Builder[Req, Res any] struct {
 	bindings            []Binding
 	history             *History[Req, Res]
 	trackExecutionStart bool
+	resilienceApplied   bool
+	validationErr       error
 }
 
 // ToBuilder creates a mutable configuration state from an existing action.
@@ -45,6 +47,8 @@ func (b *BuiltAction[Req, Res]) ToBuilder() *Builder[Req, Res] {
 		anyHooks:            append([]AnyHook(nil), b.anyHooksSnapshot()...),
 		history:             b.history,
 		trackExecutionStart: b.trackExecutionStart,
+		resilienceApplied:   b.resilienceApplied,
+		validationErr:       b.validationErr,
 	}
 }
 
@@ -208,6 +212,8 @@ func (b *Builder[Req, Res]) Build() *BuiltAction[Req, Res] {
 		bindings:            append([]Binding(nil), b.bindings...),
 		history:             b.history,
 		trackExecutionStart: b.trackExecutionStart,
+		resilienceApplied:   b.resilienceApplied,
+		validationErr:       b.validationErr,
 	}
 
 	reqType := reflect.TypeFor[Req]()
