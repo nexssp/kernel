@@ -1,10 +1,36 @@
 # Nexss Kernel
+<!-- project-status -->
+[![CI](https://github.com/nexssp/kernel/actions/workflows/ci.yml/badge.svg)](https://github.com/nexssp/kernel/actions/workflows/ci.yml)
+[![Latest tag](https://img.shields.io/github/v/tag/nexssp/kernel?sort=semver&label=latest%20tag)](https://github.com/nexssp/kernel/tags)
+[![Go Reference](https://pkg.go.dev/badge/github.com/nexssp/kernel.svg)](https://pkg.go.dev/github.com/nexssp/kernel)
+[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+<!-- /project-status -->
+
+Runnable examples are maintained in the central [Nexss Ecosystem Examples repository](https://github.com/nexssp/examples/tree/main/kernel).
 
 Nexss Kernel is a lightweight, typed Go execution library for building reusable actions, resilient pipelines, and deterministic DAG workflows. It is independent of concrete transport protocols, persistence implementations, AI vendor SDKs, and specific identity providers.
 
 The Kernel provides core execution semantics, typed generics, context-based security guards, and resilient middleware. Applications and sibling modules supply concrete network adapters, storage drivers, and domain logic.
 
 > **Design goal:** Predictable execution semantics, focused interfaces, zero-allocation hot paths, and idiomatic Go.
+
+## Development Commands
+
+This repository uses [Task](https://taskfile.dev) for local workflows and CI. Install it once with:
+
+```bash
+go install github.com/go-task/task/v3/cmd/task@latest
+```
+
+Use `task --list` to view targets. Common commands:
+
+```bash
+task test                 # short test suite
+task test -- ./action     # test one package or path
+task test:race            # race-enabled tests
+task bench                # benchmarks with memory statistics
+task ci                   # the CI gate
+```
 
 ---
 
@@ -33,13 +59,16 @@ The Kernel owns the lifecycle, concurrency safety, and execution semantics of an
 
 | Package | Purpose |
 | :--- | :--- |
-| `action` | Typed action builders, execution, hooks, middleware, composition, retries, timeouts, concurrency limits, caching, idempotency, deduplication, coalescing, streaming, sagas, and resilience policies. |
+| `action` | Typed action builders, middleware, composition, retries, timeouts, circuit breakers, concurrency limits, caching, idempotency, durable journaling/resume, streaming, sagas, and resilience policies. |
+| `ai/dag` | Typed directed acyclic graphs with deterministic compilation, static and conditional routing, layered parallel execution, nested graphs, state snapshots, Mermaid rendering, and suspension/resume semantics. |
+| `stream` | Domain-neutral lazy stream operators, including Map, Filter, Take, Batch, BatchByTime, Window, Reduce, FlatMap, Distinct, Throttle, Debounce, and worker pools. |
 | `observe` | Optional vendor-neutral lifecycle events, bounded memory history, metrics aggregation, Prometheus, JSONL, and `slog` sinks. |
-| `ai/dag` | Typed directed acyclic graphs with deterministic compilation, layered parallel execution, nested graphs, state snapshots, Mermaid rendering, and durable checkpoint/resume (HIL) semantics. |
-| `xctx` | Typed request context values, request scopes, correlation data, trace data, roles, permissions, features, and scope pooling. |
+| `xctx` | Typed request context values, pooled request scopes, request/execution/trace identity, correlation data, roles, permissions, features, progress, and deterministic controls. |
 | `xerr` | Categorized errors for validation, authorization, conflicts, not-found cases, transient failures, internal failures, and panic recovery. |
-| `stream` | Domain-neutral, typed lazy stream operators (Map, Filter, Take, Batch, Reduce, FlatMap, WithContext). No per-item allocation. |
-| `ringbuf` | Cache-line-aligned lock-free MPMC ring buffer for bounded telemetry, hot-path metrics, and lifecycle events. |
+| `xfile` / `xfs` | Typed file references and resolvers, plus confined and atomic filesystem helpers. |
+| `broadcast` / `ringbuf` | In-process topics and bounded ring buffers for event publication and telemetry. |
+| `timing` / `xsync` | Timing-wheel scheduling and generic pooling primitives. |
+| `xtest/ktest` | Allocation checks, polling/leak helpers, test contexts, action fakes, contract assertions, and fluent action test runs. |
 
 ---
 
@@ -180,6 +209,13 @@ results, err := reviewer.Do(ctx, "package main...")
 - `MemoryIdempotencyStore` provides in-memory reference coordination.
 - `IdempotencyCoordinator` defines atomic claim semantics (`Claim`, `Complete`, `Release`) with leased in-progress locks and request hash validation to detect duplicate payload conflicts.
 
+### Durable Execution Identity and Resume
+- `DigestBytes` and `DigestString` create fixed-size SHA-256 bindings without heap allocation on the comparison path.
+- `ExecutionIdentity` binds an execution to its execution namespace, source digest, input digest, and contract digest.
+- `DurableWithResume` extends `Durable` with journal-backed identity validation before replay.
+- A changed source or input returns an `xerr.Conflict`; callers may use `ResumeOptions{Force: true, ForceReason: ...}` to create an explicit successor generation.
+- `ResumeJournal` stores identity metadata alongside the existing `Journal` contract. Durable replay and singleflight remain owned by the shared Kernel runner.
+
 ---
 
 ## Distributed Coordination and Sagas
@@ -207,7 +243,7 @@ results, err := reviewer.Do(ctx, "package main...")
 ## Streaming and State Machines
 
 ### Pure O(1) Memory Streaming
-`action.NewStream` wraps Go 1.23+ `iter.Seq2` handlers under action lifecycle management:
+`action.NewStream` wraps Go 1.23+ `iter.Seq2` handlers under action lifecycle management. `NewStreamOp` composes typed stream actions, while `StreamWorkerPool` adds bounded per-item parallelism:
 
 ```go
 stream := action.NewStream("telemetry.stream", func(ctx context.Context, req Query) (iter.Seq2[Record, error], error) {
@@ -230,7 +266,7 @@ for record, err := range seq {
 }
 ```
 
-`CollectStream` materializes an iterator into an in-memory slice when streaming is not required.
+`CollectStream` materializes an iterator into an in-memory slice when streaming is not required. The `stream` package also provides time-based grouping (`BatchByTime`), sliding windows, throttling, debouncing, distinct filtering, and context-aware operators. Use the supplied context; do not substitute `context.Background()` inside an operator.
 
 ### State Machines
 `action.NewStateMachine` guards entity lifecycle transitions:
@@ -400,6 +436,7 @@ The Kernel provides execution semantics and safety contracts; applications suppl
 - **Storage & State:** Cache backends, distributed locks, idempotency stores, and database transactions are supplied via interfaces. The Kernel does not bundle concrete database drivers.
 - **Telemetry Ingestion:** `observe` captures lifecycle events and execution duration locally. Forwarding events to OpenTelemetry collectors, Datadog, or external brokers belongs to application sinks.
 - **Human-in-the-Loop & Workflows:** The Kernel manages suspension (`dag.ErrSuspended`), partial state preservation, and memoized resumption. Applications supply the human interfaces (webhooks, email dispatch, approval dashboards) and durable persistence for state snapshots.
+- **Durable Resume Binding:** `action.ExecutionIdentity` binds replay to source, input, and contract digests. A mismatch is a conflict unless the caller explicitly requests a forced successor generation with a reason.
 - **Security Decisions:** Context guards inspect metadata attached to `context.Context`. Authentication (decoding JWTs, session lookups, certificate validation) is handled at transport boundaries.
 - **Resource Ownership:** Pooled objects (`dag.State`, `xctx.RequestScope`) must be explicitly released by the caller to prevent resource leaks.
 
@@ -413,43 +450,49 @@ Streaming is O(1) in memory: `StreamAction[Req, T]` wraps Go 1.23 `iter.Seq2[T, 
 
 ### Benchmark and Quality Verification
 
-Run formatting checks, static analysis, race-detection tests, and allocation benchmarks:
+Run the repository checks through Task, using the same targets as CI:
 
 ```bash
-# Verify formatting
-gofmt -l .
+# Format
+task fmt
 
-# Run static analysis
-go vet ./...
+# Lint and static analysis
+task lint
 
-# Run test suite with race detector
-go test -race ./...
+# Run the race-enabled test gate
+task test:race
 
 # Benchmark core dispatch and allocation profiles
-go test ./... -run '^$' -bench=. -benchmem
+task bench
+
+# Run the complete CI gate
+task ci
 ```
 
 ---
 
 ## Examples Reference
 
-Complete, runnable examples are located in the [`examples/`](./examples) directory:
+Complete, runnable examples are maintained in the central [`nexssp/examples`](https://github.com/nexssp/examples/tree/main/kernel) repository. This repository keeps only [`examples/README.md`](./examples/README.md) as a pointer:
 
-- [`01_ai_dag_pipeline`](./examples/01_ai_dag_pipeline) – Multi-layer parallel DAG execution with typed outputs.
-- [`02_resilient_action`](./examples/02_resilient_action) – Deduplication, multi-layer caching, exponential jitter retry, and hooks.
-- [`03_composition_and_fanout`](./examples/03_composition_and_fanout) – Sequential pipelines (`Pipe`) and bounded concurrency (`FanOut`).
-- [`04_fenced_distributed_lock_failover`](./examples/04_fenced_distributed_lock_failover) – Monotonic fencing token renewal and lease-loss cancellation.
-- [`05_parallel_scatter_gather_recovery`](./examples/05_parallel_scatter_gather_recovery) – Transient error recovery during parallel fan-out.
-- [`06_pure_streaming_pipeline`](./examples/06_pure_streaming_pipeline) – Constant O(1) memory processing using Go 1.23+ `iter.Seq2`.
-- [`07_hierarchical_nested_dag`](./examples/07_hierarchical_nested_dag) – Embedding compiled DAGs as executable nodes within parent DAGs.
-- [`08_thundering_herd_coalescing`](./examples/08_thundering_herd_coalescing) – Request coalescing under high concurrent load.
-- [`09_retry_policies`](./examples/09_retry_policies) – Custom predicates, transient-only retries, and universal retry policies.
-- [`10_observe_lifecycle`](./examples/10_observe_lifecycle) – End-to-end lifecycle observation with Prometheus, Slog, JSONL, and Metrics sinks.
+- [`01_ai_dag_pipeline`](https://github.com/nexssp/examples/tree/main/kernel/01_ai_dag_pipeline) – Multi-layer parallel DAG execution with typed outputs.
+- [`02_resilient_action`](https://github.com/nexssp/examples/tree/main/kernel/02_resilient_action) – Deduplication, multi-layer caching, exponential jitter retry, and hooks.
+- [`03_composition_and_fanout`](https://github.com/nexssp/examples/tree/main/kernel/03_composition_and_fanout) – Sequential pipelines (`Pipe`) and bounded concurrency (`FanOut`).
+- [`04_fenced_distributed_lock_failover`](https://github.com/nexssp/examples/tree/main/kernel/04_fenced_distributed_lock_failover) – Monotonic fencing token renewal and lease-loss cancellation.
+- [`05_parallel_scatter_gather_recovery`](https://github.com/nexssp/examples/tree/main/kernel/05_parallel_scatter_gather_recovery) – Transient error recovery during parallel fan-out.
+- [`06_pure_streaming_pipeline`](https://github.com/nexssp/examples/tree/main/kernel/06_pure_streaming_pipeline) – Constant O(1) memory processing using Go 1.23+ `iter.Seq2`.
+- [`07_hierarchical_nested_dag`](https://github.com/nexssp/examples/tree/main/kernel/07_hierarchical_nested_dag) – Embedding compiled DAGs as executable nodes within parent DAGs.
+- [`08_thundering_herd_coalescing`](https://github.com/nexssp/examples/tree/main/kernel/08_thundering_herd_coalescing) – Request coalescing under high concurrent load.
+- [`09_retry_policies`](https://github.com/nexssp/examples/tree/main/kernel/09_retry_policies) – Custom predicates, transient-only retries, and universal retry policies.
+- [`10_observe_lifecycle`](https://github.com/nexssp/examples/tree/main/kernel/10_observe_lifecycle) – End-to-end lifecycle observation with Prometheus, Slog, JSONL, and Metrics sinks.
+- [`11_lazy_etl_stream`](https://github.com/nexssp/examples/tree/main/kernel/11_lazy_etl_stream) – Lazy ETL over typed streams with bounded memory.
+- [`12_stream_action_crossover`](https://github.com/nexssp/examples/tree/main/kernel/12_stream_action_crossover) – Crossing typed actions and streams.
+- [`13_resilient_mod_host`](https://github.com/nexssp/examples/tree/main/kernel/13_resilient_mod_host) – Host-owned resilience and module integration.
 
 ---
 
 ## API Stability
-Nexss Kernel is currently pre-1.0. Exported APIs may change between minor releases; downstream projects should pin an explicit released module version rather than track `main`. The current upstream tag is `v0.28.0`.
+Nexss Kernel is currently pre-1.0. Exported APIs may change between minor releases. Downstream projects should pin an explicit version from the [latest tagged releases](https://github.com/nexssp/kernel/tags) rather than track `main`.
 
 ## Contributing
 
