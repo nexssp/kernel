@@ -1,6 +1,7 @@
 # Nexss Ecosystem
 # Copyright 2018-Present Marcin Polak and Contributors
 # SPDX-License-Identifier: Apache-2.0
+# Install Task: go install github.com/go-task/task/v3/cmd/task@latest
 version: '3'
 
 vars:
@@ -43,11 +44,6 @@ tasks:
   tools:     { desc: "go install -> gotest.tools/gotestsum@latest golang.org/x/vuln/cmd/govulncheck@latest",  cmds: ["go install gotest.tools/gotestsum@latest", "go install golang.org/x/vuln/cmd/govulncheck@latest"] }
 
   setup: { desc: "[setup:files, tools]", deps: [setup:files, tools] }
-
-  examples:
-    desc: Check building all examples
-    cmds:
-      - go build ./examples/...
 
   setup:files:
     desc: "Fetch missing repo templates (LICENSE, .gitignore, configs...)"
