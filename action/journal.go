@@ -28,45 +28,42 @@ type Journal interface {
 // for using unique step names within a single execution; two different
 // steps sharing a name under the same execution ID will collide.
 func Durable[Req, Res any](journal Journal, stepName string) Middleware[Req, Res] {
+	return func(next Fn[Req, Res]) Fn[Req, Res] {
+		run := newDurableRunner(journal, stepName, next)
+		return func(ctx context.Context, req Req) (Res, error) {
+			return run(ctx, req, xctx.ExecutionIDFrom(ctx))
+		}
+	}
+}
+
+func newDurableRunner[Req, Res any](journal Journal, stepName string, next Fn[Req, Res]) func(context.Context, Req, string) (Res, error) {
 	var inflight singleflight.Group
 
-	return func(next Fn[Req, Res]) Fn[Req, Res] {
-		return func(ctx context.Context, req Req) (Res, error) {
-			var zero Res
+	return func(ctx context.Context, req Req, executionID string) (Res, error) {
+		var zero Res
+		if journal == nil || stepName == "" || executionID == "" {
+			return next(ctx, req)
+		}
 
-			if journal == nil || stepName == "" {
-				return next(ctx, req)
+		sharedCtx := context.WithoutCancel(ctx)
+		key := executionID + "\x00" + stepName
+		ch := inflight.DoChan(key, func() (any, error) {
+			return runDurableStep(sharedCtx, journal, executionID, stepName, next, req)
+		})
+
+		select {
+		case <-ctx.Done():
+			return zero, ctx.Err()
+		case result := <-ch:
+			if result.Err != nil {
+				return zero, result.Err
 			}
-
-			executionID := xctx.ExecutionIDFrom(ctx)
-			if executionID == "" {
-				return next(ctx, req)
+			res, ok := result.Val.(Res)
+			if !ok {
+				return zero, xerr.Internal(fmt.Sprintf(
+					"journal step %q: unexpected result type %T", stepName, result.Val))
 			}
-
-			// The shared execution must outlive any single caller's ctx:
-			// cancellation of one waiter must not abort work the others
-			// are still waiting for.
-			sharedCtx := context.WithoutCancel(ctx)
-			key := executionID + "\x00" + stepName
-
-			ch := inflight.DoChan(key, func() (any, error) {
-				return runDurableStep(sharedCtx, journal, executionID, stepName, next, req)
-			})
-
-			select {
-			case <-ctx.Done():
-				return zero, ctx.Err()
-			case result := <-ch:
-				if result.Err != nil {
-					return zero, result.Err
-				}
-				res, ok := result.Val.(Res)
-				if !ok {
-					return zero, xerr.Internal(fmt.Sprintf(
-						"journal step %q: unexpected result type %T", stepName, result.Val))
-				}
-				return res, nil
-			}
+			return res, nil
 		}
 	}
 }

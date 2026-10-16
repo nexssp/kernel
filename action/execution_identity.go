@@ -2,6 +2,7 @@ package action
 
 import (
 	"crypto/sha256"
+	"strconv"
 
 	"github.com/nexssp/kernel/xerr"
 )
@@ -57,6 +58,14 @@ func (id ExecutionIdentity) BindingEqual(other ExecutionIdentity) bool {
 		id.SourceDigest == other.SourceDigest &&
 		id.InputDigest == other.InputDigest &&
 		id.ContractDigest == other.ContractDigest
+}
+
+// JournalNamespace separates successor generations in a step journal.
+func (id ExecutionIdentity) JournalNamespace() string {
+	if id.Generation == 0 {
+		return id.ExecutionID
+	}
+	return id.ExecutionID + "\x00generation:" + strconv.FormatUint(id.Generation, 10)
 }
 
 // Validate checks identity invariants before persistence.
