@@ -174,8 +174,8 @@ func trimPath(path string) string {
 
 // trimFunc removes the module-path prefix, keeping only "pkg.FuncName".
 func trimFunc(fn string) string {
-	if i := strings.LastIndex(fn, "/"); i >= 0 {
-		return fn[i+1:]
+	if _, after, ok := strings.CutLast(fn, "/"); ok {
+		return after
 	}
 	return fn
 }

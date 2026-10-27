@@ -51,9 +51,11 @@ func TestMemoryIdempotencyStore_PhantomDeletePrevention(t *testing.T) {
 	store.mu.Lock()
 	store.nextSeq++
 	store.entries["test-key"] = memEntry{
-		IdempotencyEntry: IdempotencyEntry{Status: 200, Body: []byte("stale"), StoredAt: staleStoredAt},
-		ttl:              10 * time.Millisecond,
-		seq:              store.nextSeq,
+		Status:   200,
+		Body:     []byte("stale"),
+		StoredAt: staleStoredAt,
+		ttl:      10 * time.Millisecond,
+		seq:      store.nextSeq,
 	}
 	staleSeq := store.nextSeq
 	store.mu.Unlock()
