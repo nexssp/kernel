@@ -75,36 +75,67 @@ func coerceTextUnmarshaler(raw string, target reflect.Type) (any, error) {
 	return ptr.Elem().Interface(), nil
 }
 
+type parsedStringScalar struct {
+	boolValue  bool
+	intValue   int64
+	uintValue  uint64
+	floatValue float64
+}
+
+// parseStringScalar is shared by the generic string coercer and Assign's
+// reflection fast path. Keeping the parsed value typed avoids interface boxing
+// on the action binding path.
+//
+//nolint:exhaustive // supported scalar kinds are explicit; default rejects others
+func parseStringScalar(raw string, target reflect.Type) (parsedStringScalar, error) {
+	trimmed := strings.TrimSpace(raw)
+	switch target.Kind() {
+	case reflect.Bool:
+		v, err := strconv.ParseBool(trimmed)
+		return parsedStringScalar{boolValue: v}, err
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		v, err := strconv.ParseInt(trimmed, 10, target.Bits())
+		return parsedStringScalar{intValue: v}, err
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		v, err := strconv.ParseUint(trimmed, 10, target.Bits())
+		return parsedStringScalar{uintValue: v}, err
+	case reflect.Float32, reflect.Float64:
+		v, err := strconv.ParseFloat(trimmed, target.Bits())
+		return parsedStringScalar{floatValue: v}, err
+	default:
+		return parsedStringScalar{}, fmt.Errorf("unsupported scalar kind %s", target.Kind())
+	}
+}
+
 //nolint:exhaustive // default rejects unsupported kinds with a diagnostic
 func coerceKind(raw string, target reflect.Type) (any, error) {
-	trimmed := strings.TrimSpace(raw)
 	switch target.Kind() {
 	case reflect.String:
 		return reflect.ValueOf(raw).Convert(target).Interface(), nil
 	case reflect.Bool:
-		v, err := strconv.ParseBool(trimmed)
+		v, err := parseStringScalar(raw, target)
 		if err != nil {
 			return nil, fmt.Errorf("parse %s: %w", target, err)
 		}
-		return v, nil
+		return v.boolValue, nil
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		v, err := strconv.ParseInt(trimmed, 10, target.Bits())
+		v, err := parseStringScalar(raw, target)
 		if err != nil {
 			return nil, fmt.Errorf("parse %s: %w", target, err)
 		}
-		return reflect.ValueOf(v).Convert(target).Interface(), nil
+		return reflect.ValueOf(v.intValue).Convert(target).Interface(), nil
 	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-		v, err := strconv.ParseUint(trimmed, 10, target.Bits())
+		v, err := parseStringScalar(raw, target)
 		if err != nil {
 			return nil, fmt.Errorf("parse %s: %w", target, err)
 		}
-		return reflect.ValueOf(v).Convert(target).Interface(), nil
+		return reflect.ValueOf(v.uintValue).Convert(target).Interface(), nil
 	case reflect.Float32, reflect.Float64:
-		v, err := strconv.ParseFloat(trimmed, target.Bits())
+		v, err := parseStringScalar(raw, target)
 		if err != nil {
 			return nil, fmt.Errorf("parse %s: %w", target, err)
 		}
-		return reflect.ValueOf(v).Convert(target).Interface(), nil
+		return reflect.ValueOf(v.floatValue).Convert(target).Interface(), nil
 	case reflect.Slice:
 		return coerceSlice(raw, target)
 	default:

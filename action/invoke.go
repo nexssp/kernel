@@ -233,6 +233,32 @@ func indirect(src reflect.Value) reflect.Value {
 	return src
 }
 
+//nolint:exhaustive // callers route scalar kinds here; default declines unsupported kinds
+func assignStringScalar(dst, src reflect.Value) bool {
+	if src.Kind() != reflect.String {
+		return false
+	}
+
+	parsed, err := parseStringScalar(src.String(), dst.Type())
+	if err != nil {
+		return false
+	}
+
+	switch dst.Kind() {
+	case reflect.Bool:
+		dst.SetBool(parsed.boolValue)
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		dst.SetInt(parsed.intValue)
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		dst.SetUint(parsed.uintValue)
+	case reflect.Float32, reflect.Float64:
+		dst.SetFloat(parsed.floatValue)
+	default:
+		return false
+	}
+	return true
+}
+
 func assignByKind(dst, src reflect.Value) bool {
 	//nolint:exhaustive // only kinds routable via reflection are handled; others fall through to false
 	switch dst.Kind() {
@@ -252,11 +278,13 @@ func assignByKind(dst, src reflect.Value) bool {
 			dst.SetBool(src.Bool())
 			return true
 		}
+		return assignStringScalar(dst, src)
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
 		if isNumericKind(src.Kind()) {
 			dst.SetInt(toInt64(src))
 			return true
 		}
+		return assignStringScalar(dst, src)
 	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
 		if isNumericKind(src.Kind()) {
 			n := toInt64(src)
@@ -266,11 +294,13 @@ func assignByKind(dst, src reflect.Value) bool {
 			dst.SetUint(uint64(n))
 			return true
 		}
+		return assignStringScalar(dst, src)
 	case reflect.Float32, reflect.Float64:
 		if isNumericKind(src.Kind()) {
 			dst.SetFloat(toFloat64(src))
 			return true
 		}
+		return assignStringScalar(dst, src)
 	default:
 		return false
 	}
