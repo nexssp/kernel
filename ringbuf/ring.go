@@ -17,6 +17,8 @@ package ringbuf
 import (
 	"sync/atomic"
 	"unsafe"
+
+	"github.com/nexssp/kernel/internal/capacity"
 )
 
 // Slot is exactly one cache line (64 bytes on all supported
@@ -36,7 +38,7 @@ type Slot struct {
 const (
 	slotSize        = 64
 	defaultCapacity = 1024
-	maxCapacity     = 1 << 30 // sane upper bound; guards New against overflow
+	maxCapacity     = capacity.MaxPowerOfTwo // sane upper bound; guards New against overflow
 )
 
 // Compile-time assertion: Slot must be exactly slotSize bytes. The
@@ -78,16 +80,16 @@ type Ring struct {
 // defaultCapacity (1024); otherwise capacity is rounded up to the next
 // power of two and clamped to maxCapacity. The smallest ring
 // obtainable is New(2).
-func New(capacity int) *Ring {
-	if capacity < 2 {
-		capacity = defaultCapacity
+func New(requestedCapacity int) *Ring {
+	if requestedCapacity < 2 {
+		requestedCapacity = defaultCapacity
 	}
-	if capacity > maxCapacity {
-		capacity = maxCapacity
+	if requestedCapacity > maxCapacity {
+		requestedCapacity = maxCapacity
 	}
-	cap2 := 2
-	for cap2 < capacity {
-		cap2 <<= 1
+	cap2, ok := capacity.PowerOfTwoCeiling(requestedCapacity, maxCapacity)
+	if !ok {
+		return nil
 	}
 	r := &Ring{
 		slots:    make([]Slot, cap2),

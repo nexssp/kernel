@@ -52,12 +52,14 @@ func (s *RequestScope) Reset() {
 	s.Roles = s.Roles[:0]
 	s.Permissions = s.Permissions[:0]
 	s.Features = s.Features[:0]
+	s.traceMu.Lock()
 	clear(s.TraceEvents)
 	if cap(s.TraceEvents) > MaxTraceEvents {
 		s.TraceEvents = nil
 	} else {
 		s.TraceEvents = s.TraceEvents[:0]
 	}
+	s.traceMu.Unlock()
 }
 
 var scopePool = sync.Pool{New: func() any { return &RequestScope{} }}

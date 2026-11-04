@@ -30,6 +30,19 @@ func TestWindowOp(t *testing.T) {
 	ktest.RequireEqual(t, res[2], []int{5})
 }
 
+func TestWindowOpSkipsGapWhenStepExceedsSize(t *testing.T) {
+	ctx, _ := ktest.Ctx(t)
+	src := ktest.StreamOf("src", 1, 2, 3, 4, 5)
+
+	winAct := action.NewStreamOp("win", src, stream.Window[int](2, 3))
+	res, err := action.CollectStream(ctx, winAct, struct{}{})
+	ktest.RequireNoError(t, err)
+
+	ktest.RequireEqual(t, len(res), 2)
+	ktest.RequireEqual(t, res[0], []int{1, 2})
+	ktest.RequireEqual(t, res[1], []int{4, 5})
+}
+
 func TestBatchByTimeOp(t *testing.T) {
 	ctx, _ := ktest.Ctx(t)
 	src := ktest.StreamOf("src", 1, 2, 3, 4, 5)

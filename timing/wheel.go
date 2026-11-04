@@ -36,8 +36,28 @@ type Wheel struct {
 }
 
 // New creates a timing wheel with the given resolution (tick size).
-// nodeCapacity pre-allocates the fixed-size node pool.
+// nodeCapacity pre-allocates the fixed-size node pool. It returns nil for
+// invalid dimensions; use NewChecked when the caller needs the error.
 func New(resolution time.Duration, slots, nodeCapacity int) *Wheel {
+	wheel, err := NewChecked(resolution, slots, nodeCapacity)
+	if err != nil {
+		return nil
+	}
+	return wheel
+}
+
+// NewChecked creates a timing wheel and reports invalid dimensions.
+func NewChecked(resolution time.Duration, slots, nodeCapacity int) (*Wheel, error) {
+	if resolution <= 0 {
+		return nil, errors.New("timing wheel resolution must be positive")
+	}
+	if slots <= 0 {
+		return nil, errors.New("timing wheel slot count must be positive")
+	}
+	if nodeCapacity <= 0 {
+		return nil, errors.New("timing wheel node capacity must be positive")
+	}
+
 	w := &Wheel{
 		resolution: resolution,
 		slots:      make([]int, slots),
@@ -52,7 +72,7 @@ func New(resolution time.Duration, slots, nodeCapacity int) *Wheel {
 		w.nodes[i].next = i + 1
 	}
 	w.nodes[nodeCapacity-1].next = -1
-	return w
+	return w, nil
 }
 
 // Schedule adds a timeout. Returns an error if the node pool is exhausted.

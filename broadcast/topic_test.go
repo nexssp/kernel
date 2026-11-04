@@ -26,6 +26,36 @@ func TestTopic_BasicPublishRead(t *testing.T) {
 	}
 }
 
+func TestTopic_ReadsEveryItemAtExactCapacity(t *testing.T) {
+	const capacity = 8
+	topic := broadcast.NewTopic[int](capacity)
+	for value := range capacity {
+		topic.Publish(value)
+	}
+
+	var cursor broadcast.Cursor
+	items := make([]int, capacity)
+	if count := topic.Read(&cursor, items); count != capacity {
+		t.Fatalf("Read() count = %d, want %d; items=%v", count, capacity, items)
+	}
+	for index, item := range items {
+		if item != index {
+			t.Fatalf("items[%d] = %d, want %d", index, item, index)
+		}
+	}
+}
+
+func TestNewTopicCheckedRejectsUnrepresentableCapacity(t *testing.T) {
+	maximumInteger := int(^uint(0) >> 1)
+	topic, err := broadcast.NewTopicChecked[int](maximumInteger)
+	if err == nil || topic != nil {
+		t.Fatalf("NewTopicChecked(max int) = (%v, %v), want (nil, error)", topic, err)
+	}
+	if topic := broadcast.NewTopic[int](maximumInteger); topic != nil {
+		t.Fatal("NewTopic(max int) returned a topic, want nil")
+	}
+}
+
 // TestTopic_LappedConsumerReceivesOverwrittenValue stresses the lapping boundary
 // under continuous write contention with `-race` enabled.
 func TestTopic_LappedConsumerReceivesOverwrittenValue(t *testing.T) {

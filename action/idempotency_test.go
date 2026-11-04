@@ -24,6 +24,47 @@ type PaymentOrderRes struct {
 	Timestamp time.Time `json:"timestamp"`
 }
 
+type idempotencyGetBarrier struct {
+	action.IdempotencyStore
+	gets  atomic.Int32
+	want  int32
+	ready chan struct{}
+}
+
+func (s *idempotencyGetBarrier) Get(ctx context.Context, key string) (action.IdempotencyEntry, bool) {
+	entry, ok := s.IdempotencyStore.Get(ctx, key)
+	if s.gets.Add(1) == s.want {
+		close(s.ready)
+	}
+	return entry, ok
+}
+
+func TestIdempotency_UnhashableRequestFailsClosed(t *testing.T) {
+	type unhashableRequest struct {
+		Callback func()
+	}
+
+	var calls atomic.Int32
+	act := action.New("idempotency.unhashable", func(context.Context, unhashableRequest) (string, error) {
+		calls.Add(1)
+		return "unexpected", nil
+	}).Idempotent().Build()
+
+	contexts := []context.Context{
+		context.Background(),
+		ktest.RequestContext(t, "unhashable-request-key"),
+	}
+	for _, ctx := range contexts {
+		_, err := act.Do(ctx, unhashableRequest{Callback: func() {}})
+		if err == nil || xerr.KindFrom(err) != xerr.KindBadRequest {
+			t.Fatalf("unhashable request error = %v, want BadRequest", err)
+		}
+	}
+	if got := calls.Load(); got != 0 {
+		t.Fatalf("handler calls = %d, want 0", got)
+	}
+}
+
 // 1. HAPPY PATH: Cached replay returns exact output without invoking handler twice
 func TestIdempotency_HappyPath_CachedReplay(t *testing.T) {
 	t.Parallel()
@@ -144,41 +185,77 @@ func TestIdempotency_HighConcurrency_SingleExecution(t *testing.T) {
 
 	executions := ktest.NewCounter()
 	const callers = 50
+	store := &idempotencyGetBarrier{
+		IdempotencyStore: action.NewMemoryIdempotencyStore(time.Hour),
+		want:             int32(callers + 1),
+		ready:            make(chan struct{}),
+	}
+	release := make(chan struct{})
 
-	act := action.New("concurrent.transfer", func(_ context.Context, _ PaymentOrderReq) (PaymentOrderRes, error) {
+	act := action.New("concurrent.transfer", func(context.Context, PaymentOrderReq) (PaymentOrderRes, error) {
 		executions.Inc()
-		time.Sleep(20 * time.Millisecond)
+		<-release
 		return PaymentOrderRes{TxID: "tx_batch_01", Status: "SETTLED"}, nil
-	}).Idempotent().Build()
+	}).IdempotentWithConfig(action.IdempotencyConfig{
+		Enabled: true,
+		Store:   store,
+	}).Build()
 
-	// Use our ktest.Simulate barrier
-	ktest.Simulate(t, act, PaymentOrderReq{AccountID: "acc_pool", Amount: 100.0}, callers,
-		func(tb testing.TB, res PaymentOrderRes, err error) {
-			if err != nil {
-				tb.Errorf("unexpected error: %v", err)
-			}
-			if res.TxID != "tx_batch_01" || res.Status != "SETTLED" {
-				tb.Errorf("invalid result: %+v", res)
-			}
-		})
+	type result struct {
+		value PaymentOrderRes
+		err   error
+	}
+	results := make(chan result, callers)
+	start := make(chan struct{})
+	ctx := ktest.RequestContext(t, "thundering-herd")
+	request := PaymentOrderReq{AccountID: "acc_pool", Amount: 100.0}
+	for range callers {
+		go func() {
+			<-start
+			value, err := act.Do(ctx, request)
+			results <- result{value: value, err: err}
+		}()
+	}
+	close(start)
+
+	timedOut := false
+	select {
+	case <-store.ready:
+	case <-time.After(5 * time.Second):
+		timedOut = true
+	}
+	close(release)
+
+	for range callers {
+		got := <-results
+		if got.err != nil {
+			t.Errorf("unexpected error: %v", got.err)
+		}
+		if got.value.TxID != "tx_batch_01" || got.value.Status != "SETTLED" {
+			t.Errorf("invalid result: %+v", got.value)
+		}
+	}
+	if timedOut {
+		t.Fatal("timed out waiting for all concurrent idempotency lookups")
+	}
 
 	executions.Require(t, 1)
 }
 
-// 6. RESOURCE MANAGEMENT: Zero Goroutine Leaks on Close
-func TestIdempotent_NoGoroutinesSpawned(t *testing.T) {
+// 6. RESOURCE MANAGEMENT: Bound goroutine growth during construction.
+func TestIdempotent_BuildKeepsGoroutineCountBounded(t *testing.T) {
 	baseline := runtime.NumGoroutine()
 
 	for range 20 {
 		_ = ktest.Echo[string]("no.goroutine.idem").Idempotent().Build()
 	}
 
-	// Mathematical proof: actions are demand-driven and spawn 0 background workers
+	// One extra goroutine is allowed for transient testing-runtime activity.
 	xtest.RequireGoroutinesAtMost(t, baseline, 100*time.Millisecond, 1)
 }
 
-// 7. PERFORMANCE: Zero heap allocations on idempotent cache hit
-func TestIdempotency_ZeroAlloc_CacheHit(t *testing.T) {
+// 7. PERFORMANCE: Keep the measured cached-replay allocation budget explicit.
+func TestIdempotency_CacheHitAllocationBudget(t *testing.T) {
 	act := action.New("bench.idem", func(_ context.Context, req int) (int, error) {
 		return req * 2, nil
 	}).Idempotent().Build()
@@ -186,11 +263,8 @@ func TestIdempotency_ZeroAlloc_CacheHit(t *testing.T) {
 	ctx := ktest.RequestContext(t, "bench_key")
 	_, _ = act.Do(ctx, 42) // populate cache
 
-	// The idempotency middleware uses encoding/json for request hashing and
-	// response persistence. Reflection-based JSON cannot be zero-alloc, so
-	// assert a stable upper bound instead of exactly zero. The ceiling still
-	// catches per-call unbounded growth (leaks, growing slices).
-	xtest.RequireMaxAlloc(t, 1000, 5, func() {
+	// The cache-hit benchmark measures one allocation per call.
+	xtest.RequireMaxAlloc(t, 1000, 1, func() {
 		res, err := act.Do(ctx, 42)
 		if err != nil || res != 84 {
 			t.Fail()

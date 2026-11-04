@@ -81,6 +81,9 @@ func (b *Builder) Compile() (*DAG, error) {
 	if b.compileErr != nil {
 		return nil, b.compileErr
 	}
+	if len(b.edges) > 0 && len(b.conditionalEdges) > 0 {
+		return nil, xerr.BadRequest("graph compile: static and conditional edges cannot be mixed")
+	}
 
 	// Validate conditional edges point at existing nodes BEFORE we
 	// build the layer graph. A router that returns an unknown node ID

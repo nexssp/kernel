@@ -34,6 +34,42 @@ func TestAddTrace_AfterCleanupStaysOut(t *testing.T) {
 	}
 }
 
+func TestAddTraceConcurrentWithCleanup(t *testing.T) {
+	const (
+		iterations = 200
+		writers    = 8
+		writes     = 16
+	)
+
+	for range iterations {
+		ctx, scope, cleanup := xctx.NewScope(context.Background())
+		for range xctx.MaxTraceEvents {
+			xctx.AddTrace(ctx, "seed")
+		}
+
+		start := make(chan struct{})
+		var workers sync.WaitGroup
+		for range writers {
+			workers.Go(func() {
+				<-start
+				for range writes {
+					xctx.AddTrace(ctx, "concurrent")
+				}
+			})
+		}
+		workers.Go(func() {
+			<-start
+			cleanup()
+		})
+		close(start)
+		workers.Wait()
+
+		if len(scope.TraceEvents) != 0 {
+			t.Fatalf("cleanup retained trace events: %d", len(scope.TraceEvents))
+		}
+	}
+}
+
 // TestWithScope_ConcurrentOnFreshScope exercises the CAS-protected
 // generation assignment. Pre-PR-4 this was a data race under -race and
 // the loser's context ended up with a stale generation, so its AddTrace

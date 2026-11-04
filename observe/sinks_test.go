@@ -142,6 +142,33 @@ func TestMetricsSink_CountingAndIsolation(t *testing.T) {
 	}
 }
 
+func TestMetricsSink_BoundsCardinalityAndLabelLength(t *testing.T) {
+	sink := observe.NewMetricsSink()
+	ctx := context.Background()
+	for index := range observe.MaxMetricKeys + 100 {
+		sink.Emit(ctx, observe.Event{Action: "action-" + strconv.Itoa(index), Kind: observe.KindSuccess})
+	}
+
+	if got := len(sink.Snapshot()); got != observe.MaxMetricKeys {
+		t.Fatalf("retained key count = %d, want %d", got, observe.MaxMetricKeys)
+	}
+	if got := sink.OverflowCount(); got != 100 {
+		t.Fatalf("overflow count = %d, want 100", got)
+	}
+
+	existing := observe.MetricKey{Action: "action-0", Kind: observe.KindSuccess}
+	sink.Emit(ctx, observe.Event{Action: existing.Action, Kind: existing.Kind})
+	if got := sink.Snapshot()[existing]; got != 2 {
+		t.Fatalf("existing key count = %d, want 2 after capacity is reached", got)
+	}
+
+	longLabel := strings.Repeat("x", observe.MaxMetricLabelBytes+1)
+	sink.Emit(ctx, observe.Event{Action: longLabel, Kind: observe.KindSuccess})
+	if got := sink.OverflowCount(); got != 101 {
+		t.Fatalf("overflow count after long label = %d, want 101", got)
+	}
+}
+
 func TestMetricsSink_ConcurrentEmits(t *testing.T) {
 	t.Parallel()
 

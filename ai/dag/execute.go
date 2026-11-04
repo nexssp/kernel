@@ -204,7 +204,7 @@ func handleLayerError(
 		execErr.Layer = layerIdx
 		execErr.State = finalState
 		for i, res := range layerResults {
-			if res.Key != "" && res.Val != nil {
+			if res.Key != "" {
 				execErr.Completed = append(execErr.Completed, layer[i].ID)
 			}
 		}
@@ -213,12 +213,12 @@ func handleLayerError(
 	return finalState, err
 }
 
-// applyResults folds layer outputs into dst, skipping empty keys and nil
-// values. Shared by the merge and error paths so both accumulate node
+// applyResults folds layer outputs into dst, skipping empty keys. Shared
+// by the merge and error paths so both accumulate node
 // outputs with identical rules.
 func applyResults(dst *State, results []Value) {
 	for _, res := range results {
-		if res.Key != "" && res.Val != nil {
+		if res.Key != "" {
 			dst.data[res.Key] = res.Val
 		}
 	}

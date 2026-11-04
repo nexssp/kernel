@@ -17,11 +17,16 @@ func Window[T any](size, step int) StreamOp[T, []T] {
 				return
 			}
 			buffer := make([]T, 0, size)
+			skip := 0
 			for item, err := range up {
 				if err != nil {
 					var zero []T
 					yield(zero, err)
 					return
+				}
+				if skip > 0 {
+					skip--
+					continue
 				}
 				buffer = append(buffer, item)
 				if len(buffer) == size {
@@ -32,6 +37,7 @@ func Window[T any](size, step int) StreamOp[T, []T] {
 					}
 					if step >= size {
 						buffer = buffer[:0]
+						skip = step - size
 					} else {
 						copy(buffer, buffer[step:])
 						buffer = buffer[:size-step]

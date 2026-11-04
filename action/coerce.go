@@ -40,11 +40,11 @@ func coerceValue(raw string, target reflect.Type) (any, error) {
 	}
 
 	if target == reflect.TypeFor[time.Duration]() {
-		d, err := time.ParseDuration(strings.TrimSpace(raw))
+		parsed, err := parseStringScalar(raw, target)
 		if err != nil {
 			return nil, fmt.Errorf("parse %s: %w", target, err)
 		}
-		return d, nil
+		return time.Duration(parsed.intValue), nil
 	}
 
 	if reflect.PointerTo(target).Implements(textUnmarshalerType) {
@@ -89,6 +89,11 @@ type parsedStringScalar struct {
 //nolint:exhaustive // supported scalar kinds are explicit; default rejects others
 func parseStringScalar(raw string, target reflect.Type) (parsedStringScalar, error) {
 	trimmed := strings.TrimSpace(raw)
+	if target == reflect.TypeFor[time.Duration]() {
+		duration, err := time.ParseDuration(trimmed)
+		return parsedStringScalar{intValue: int64(duration)}, err
+	}
+
 	switch target.Kind() {
 	case reflect.Bool:
 		v, err := strconv.ParseBool(trimmed)

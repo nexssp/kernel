@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -32,6 +33,25 @@ func TestPrometheusSink_DeterministicAndEscaping(t *testing.T) {
 	}
 	if strings.Index(out, "a.action") > strings.Index(out, "z.action") {
 		t.Fatalf("output is not sorted: %s", out)
+	}
+}
+
+func TestPrometheusSink_ReportsOverflowCount(t *testing.T) {
+	sink := observe.NewPrometheusSink()
+	for index := range observe.MaxMetricKeys + 1 {
+		sink.Emit(context.Background(), observe.Event{
+			Action: "action-" + strconv.Itoa(index),
+			Kind:   observe.KindSuccess,
+		})
+	}
+
+	var output bytes.Buffer
+	if err := sink.WritePrometheus(&output); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output.String(), "# TYPE nexss_action_events_overflow_total counter\n") ||
+		!strings.Contains(output.String(), "nexss_action_events_overflow_total 1\n") {
+		t.Fatalf("overflow counter missing from exposition: %s", output.String())
 	}
 }
 

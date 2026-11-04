@@ -8,6 +8,41 @@ import (
 	"github.com/nexssp/kernel/xtest"
 )
 
+func TestNewCheckedRejectsInvalidDimensions(t *testing.T) {
+	tests := []struct {
+		name         string
+		resolution   time.Duration
+		slots        int
+		nodeCapacity int
+	}{
+		{name: "zero resolution", resolution: 0, slots: 8, nodeCapacity: 8},
+		{name: "negative resolution", resolution: -time.Second, slots: 8, nodeCapacity: 8},
+		{name: "zero slots", resolution: time.Second, slots: 0, nodeCapacity: 8},
+		{name: "negative slots", resolution: time.Second, slots: -1, nodeCapacity: 8},
+		{name: "zero node capacity", resolution: time.Second, slots: 8, nodeCapacity: 0},
+		{name: "negative node capacity", resolution: time.Second, slots: 8, nodeCapacity: -1},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			wheel, err := timing.NewChecked(test.resolution, test.slots, test.nodeCapacity)
+			if err == nil || wheel != nil {
+				t.Fatalf("NewChecked() = (%v, %v), want (nil, error)", wheel, err)
+			}
+			if wheel := timing.New(test.resolution, test.slots, test.nodeCapacity); wheel != nil {
+				t.Fatal("New() returned a wheel for invalid dimensions")
+			}
+		})
+	}
+}
+
+func TestNewCheckedAcceptsValidDimensions(t *testing.T) {
+	wheel, err := timing.NewChecked(10*time.Millisecond, 8, 16)
+	if err != nil || wheel == nil {
+		t.Fatalf("NewChecked() = (%v, %v), want a wheel and no error", wheel, err)
+	}
+}
+
 func TestWheel_LifecycleAndCancel(t *testing.T) {
 	w := timing.New(10*time.Millisecond, 256, 1024)
 

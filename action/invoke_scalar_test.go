@@ -3,6 +3,7 @@ package action_test
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/nexssp/kernel/action"
 )
@@ -36,10 +37,11 @@ func TestAssignStringScalars(t *testing.T) {
 	type identifier uint16
 	type ratio float32
 	type query struct {
-		Enabled bool       `json:"enabled"`
-		Limit   limit      `json:"limit"`
-		ID      identifier `json:"id"`
-		Ratio   ratio      `json:"ratio"`
+		Enabled bool          `json:"enabled"`
+		Limit   limit         `json:"limit"`
+		ID      identifier    `json:"id"`
+		Ratio   ratio         `json:"ratio"`
+		Timeout time.Duration `json:"timeout"`
 	}
 
 	var got query
@@ -48,13 +50,21 @@ func TestAssignStringScalars(t *testing.T) {
 		"limit":   " -12 ",
 		"id":      " 65535 ",
 		"ratio":   " 3.25 ",
+		"timeout": " 250ms ",
 	})
 	if err != nil {
 		t.Fatalf("Assign() error = %v", err)
 	}
-	want := query{Enabled: true, Limit: -12, ID: 65535, Ratio: 3.25}
+	want := query{Enabled: true, Limit: -12, ID: 65535, Ratio: 3.25, Timeout: 250 * time.Millisecond}
 	if got != want {
 		t.Fatalf("Assign() = %#v, want %#v", got, want)
+	}
+}
+
+func TestAssignStringDurationRejectsInvalid(t *testing.T) {
+	var got time.Duration
+	if err := action.Assign(&got, "not-a-duration"); err == nil {
+		t.Fatal("Assign() accepted an invalid time.Duration string")
 	}
 }
 

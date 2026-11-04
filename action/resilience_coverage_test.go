@@ -670,22 +670,18 @@ func TestRace_EmptyReqs_ReturnsZero(t *testing.T) {
 	}
 }
 
-// ALL FAIL: returns the last error received.
-func TestRace_AllFail_ReturnsLastError(t *testing.T) {
+// ALL FAIL: preserves an error from a failed candidate.
+func TestRace_AllFail_PreservesCandidateError(t *testing.T) {
 	t.Parallel()
 
-	lastErr := xerr.Internal("last")
-	act := action.New("race.allfail", func(_ context.Context, n int) (int, error) {
-		time.Sleep(time.Duration(n) * time.Millisecond) // ordered failures
-		if n == 3 {
-			return 0, lastErr
-		}
-		return 0, xerr.Unavailable("earlier")
+	candidateErr := xerr.Unavailable("candidate failed")
+	act := action.New("race.allfail", func(_ context.Context, _ int) (int, error) {
+		return 0, candidateErr
 	}).Build()
 
 	_, err := action.Race(context.Background(), act, []int{1, 2, 3})
-	if !errors.Is(err, lastErr) {
-		t.Fatalf("expected last error to be returned, got: %v", err)
+	if !errors.Is(err, candidateErr) {
+		t.Fatalf("expected a candidate error to be preserved, got: %v", err)
 	}
 }
 

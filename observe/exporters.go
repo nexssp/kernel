@@ -37,11 +37,19 @@ func (s *PrometheusSink) Snapshot() map[MetricKey]uint64 {
 	return s.metrics.Snapshot()
 }
 
+// OverflowCount returns events omitted from the per-key snapshot due to metrics bounds.
+func (s *PrometheusSink) OverflowCount() uint64 {
+	if s == nil || s.metrics == nil {
+		return 0
+	}
+	return s.metrics.OverflowCount()
+}
+
 func (s *PrometheusSink) WritePrometheus(w io.Writer) error {
 	if s == nil || w == nil {
 		return errors.New("observe: prometheus sink and writer are required")
 	}
-	snapshot := s.Snapshot()
+	snapshot, overflow := s.metrics.snapshotWithOverflow()
 	keys := sortedMetricKeys(snapshot)
 
 	var sb strings.Builder
@@ -55,6 +63,12 @@ func (s *PrometheusSink) WritePrometheus(w io.Writer) error {
 		sb.WriteString(escapeLabel(key.Kind))
 		sb.WriteString("\"} ")
 		sb.WriteString(strconv.FormatUint(snapshot[key], 10))
+		sb.WriteByte('\n')
+	}
+	if overflow > 0 {
+		sb.WriteString("# TYPE nexss_action_events_overflow_total counter\n")
+		sb.WriteString("nexss_action_events_overflow_total ")
+		sb.WriteString(strconv.FormatUint(overflow, 10))
 		sb.WriteByte('\n')
 	}
 

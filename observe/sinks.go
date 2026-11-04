@@ -78,10 +78,19 @@ type MetricKey struct {
 	Kind   string
 }
 
-// MetricsSink aggregates lifecycle event counts in memory.
+const (
+	// MaxMetricKeys bounds the number of distinct counters retained by MetricsSink.
+	MaxMetricKeys = 10_000
+	// MaxMetricLabelBytes bounds each action and kind label retained by MetricsSink.
+	MaxMetricLabelBytes = 128
+)
+
+// MetricsSink aggregates lifecycle event counts in memory. Events exceeding
+// the key or label limits are counted by OverflowCount instead of retained.
 type MetricsSink struct {
 	mu       sync.RWMutex
 	counters map[MetricKey]uint64
+	overflow uint64
 }
 
 // NewMetricsSink creates an empty metrics sink.
@@ -94,23 +103,48 @@ func (s *MetricsSink) Emit(_ context.Context, event Event) {
 		return
 	}
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.counters == nil {
 		s.counters = make(map[MetricKey]uint64)
 	}
-	s.counters[MetricKey{Action: event.Action, Kind: event.Kind}]++
-	s.mu.Unlock()
+	key := MetricKey{Action: event.Action, Kind: event.Kind}
+	if len(key.Action) > MaxMetricLabelBytes || len(key.Kind) > MaxMetricLabelBytes {
+		s.overflow++
+		return
+	}
+	if _, exists := s.counters[key]; !exists && len(s.counters) >= MaxMetricKeys {
+		s.overflow++
+		return
+	}
+	s.counters[key]++
 }
 
 // Snapshot returns an isolated thread-safe copy of all counters.
 func (s *MetricsSink) Snapshot() map[MetricKey]uint64 {
+	out, _ := s.snapshotWithOverflow()
+	return out
+}
+
+// OverflowCount returns events not retained because a key or label exceeded
+// the configured metrics bounds.
+func (s *MetricsSink) OverflowCount() uint64 {
 	if s == nil {
-		return nil
+		return 0
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	out := make(map[MetricKey]uint64, len(s.counters))
-	maps.Copy(out, s.counters)
-	return out
+	return s.overflow
+}
+
+func (s *MetricsSink) snapshotWithOverflow() (snapshot map[MetricKey]uint64, overflow uint64) {
+	if s == nil {
+		return nil, 0
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	snapshot = make(map[MetricKey]uint64, len(s.counters))
+	maps.Copy(snapshot, s.counters)
+	return snapshot, s.overflow
 }
 
 var (

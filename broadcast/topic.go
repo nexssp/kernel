@@ -3,9 +3,12 @@
 package broadcast
 
 import (
+	"fmt"
 	"math"
 	"sync"
 	"sync/atomic"
+
+	"github.com/nexssp/kernel/internal/capacity"
 )
 
 type slot[T any] struct {
@@ -24,11 +27,25 @@ type Topic[T any] struct {
 	buffer []slot[T]
 }
 
-// NewTopic creates a topic with a power-of-two capacity.
-func NewTopic[T any](capacity int) *Topic[T] {
-	cap2 := 2
-	for cap2 < capacity {
-		cap2 <<= 1
+// NewTopic creates a topic with a power-of-two capacity. It returns nil when
+// the requested capacity exceeds the supported maximum; use NewTopicChecked
+// when the caller needs the error.
+func NewTopic[T any](requested int) *Topic[T] {
+	topic, err := NewTopicChecked[T](requested)
+	if err != nil {
+		return nil
+	}
+	return topic
+}
+
+// NewTopicChecked creates a topic and reports unsupported capacities.
+func NewTopicChecked[T any](requested int) (*Topic[T], error) {
+	if requested > capacity.MaxPowerOfTwo {
+		return nil, fmt.Errorf("broadcast: capacity %d exceeds maximum %d", requested, capacity.MaxPowerOfTwo)
+	}
+	cap2, ok := capacity.PowerOfTwoCeiling(requested, capacity.MaxPowerOfTwo)
+	if !ok {
+		return nil, fmt.Errorf("broadcast: invalid capacity %d", requested)
 	}
 
 	t := &Topic[T]{
@@ -38,7 +55,7 @@ func NewTopic[T any](capacity int) *Topic[T] {
 	for i := range t.buffer {
 		t.buffer[i].seq.Store(math.MaxUint64) // Sentinel: uninitialized
 	}
-	return t
+	return t, nil
 }
 
 // Publish stores a message and increments the sequence.
@@ -72,9 +89,10 @@ func (t *Topic[T]) Read(c *Cursor, dst []T) int {
 	}
 
 	// The writer is actively writing at slot (head & mask).
-	// The maximum safe unread window is t.mask (capacity - 1) items.
-	if head-tail > t.mask {
-		tail = head - t.mask
+	// A full buffer remains readable until the producer advances head again.
+	bufferCapacity := t.mask + 1
+	if head-tail > bufferCapacity {
+		tail = head - bufferCapacity
 	}
 
 	n := 0

@@ -103,7 +103,8 @@ type idempotentResult struct {
 //
 // The request hash is computed before every store lookup so a reused key with
 // a different payload returns Conflict instead of silently replaying the old
-// response.
+// response. Requests that cannot be hashed are rejected before touching the
+// store or invoking the handler.
 //
 //nolint:gocyclo // the branches encode the idempotency claim state machine.
 func IdempotencyMiddleware[Req, Res any](store IdempotencyStore, cfg IdempotencyConfig) Middleware[Req, Res] {
@@ -119,12 +120,17 @@ func IdempotencyMiddleware[Req, Res any](store IdempotencyStore, cfg Idempotency
 				return next(ctx, req)
 			}
 
-			key := extractIdempotencyKey(ctx, req, cfg)
+			reqHash, hashErr := hashPayloadBytes(req)
+			if hashErr != nil {
+				var zero Res
+				return zero, xerr.BadRequest("idempotency: request payload cannot be hashed", hashErr)
+			}
+
+			key := extractIdempotencyKey(ctx, req, cfg, reqHash)
 			if key == "" {
 				return next(ctx, req)
 			}
 
-			reqHash := hashPayloadBytes(req)
 			ttl := cfg.TTL
 			if ttl <= 0 {
 				ttl = DefaultIdempotencyTTL
@@ -266,27 +272,14 @@ func IdempotencyMiddleware[Req, Res any](store IdempotencyStore, cfg Idempotency
 	}
 }
 
-func extractIdempotencyKey[Req any](ctx context.Context, req Req, cfg IdempotencyConfig) string {
+func extractIdempotencyKey[Req any](ctx context.Context, req Req, cfg IdempotencyConfig, requestHash [32]byte) string {
 	if s := xctx.ScopeFrom(ctx); s != nil && s.RequestID != "" {
 		return s.RequestID
 	}
 	if b, ok := any(req).([]byte); ok && cfg.KeyFunc != nil {
 		return cfg.KeyFunc(b)
 	}
-	return hashPayload(req)
-}
-
-// hashPayload computes a SHA-256 hash of the request payload for
-// idempotency-key collision detection.
-//
-// Hot path: for common primitive types (int, int64, uint, uint64, string,
-// []byte), this is zero-allocation — the hash is computed on stack buffers.
-// For complex types, it falls back to encoding/json (which allocates).
-//
-// The returned string is a hex-encoded SHA-256 for use as a persisted key.
-// IdempotencyMiddleware compares raw [32]byte digests on its hot path.
-func hashPayload(v any) string {
-	return hashPayloadString(hashPayloadBytes(v))
+	return hashPayloadString(requestHash)
 }
 
 func hashPayloadString(sum [32]byte) string {
@@ -336,7 +329,8 @@ func hexNibble(c byte) (byte, bool) {
 	}
 }
 
-// hashPayloadBytes returns the raw [32]byte SHA-256 of the request payload.
+// hashPayloadBytes returns the raw [32]byte SHA-256 of the request payload,
+// or an error if the payload cannot be serialized.
 // Zero-allocation for primitive types. Falls back to json.Marshal for
 // complex types (which allocates).
 //
@@ -344,38 +338,38 @@ func hexNibble(c byte) (byte, bool) {
 //
 //	if entry.RequestHashBytes != [32]byte{} && reqHashBytes != [32]byte{} &&
 //	    entry.RequestHashBytes != reqHashBytes { ... conflict }
-func hashPayloadBytes(v any) [32]byte {
+func hashPayloadBytes(v any) ([32]byte, error) {
 	switch x := v.(type) {
 	case nil:
-		return [32]byte{}
+		return sha256.Sum256([]byte("\x00nil\x00")), nil
 	case string:
-		return sha256.Sum256([]byte(x)) // ← Go runtime: zero-alloc for string→[]byte in this context
+		return sha256.Sum256([]byte(x)), nil // ← Go runtime: zero-alloc for string→[]byte in this context
 	case []byte:
-		return sha256.Sum256(x)
+		return sha256.Sum256(x), nil
 	case int:
 		// strconv.AppendInt reuses a stack buffer via strconv.Itoa fast path.
 		buf := make([]byte, 0, 20)
 		buf = strconv.AppendInt(buf, int64(x), 10)
-		return sha256.Sum256(buf)
+		return sha256.Sum256(buf), nil
 	case int64:
 		buf := make([]byte, 0, 20)
 		buf = strconv.AppendInt(buf, x, 10)
-		return sha256.Sum256(buf)
+		return sha256.Sum256(buf), nil
 	case uint:
 		buf := make([]byte, 0, 20)
 		buf = strconv.AppendUint(buf, uint64(x), 10)
-		return sha256.Sum256(buf)
+		return sha256.Sum256(buf), nil
 	case uint64:
 		buf := make([]byte, 0, 20)
 		buf = strconv.AppendUint(buf, x, 10)
-		return sha256.Sum256(buf)
+		return sha256.Sum256(buf), nil
 	}
-	// Fallback for complex types — uses json.Marshal which allocates.
+	// Fallback for complex types — uses encoding/json which allocates.
 	b, err := json.Marshal(v)
 	if err != nil {
-		return [32]byte{}
+		return [32]byte{}, fmt.Errorf("marshal request payload: %w", err)
 	}
-	return sha256.Sum256(b)
+	return sha256.Sum256(b), nil
 }
 
 type memEntry struct {

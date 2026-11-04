@@ -122,13 +122,16 @@ func (d *DAG) executeDynamic(ctx context.Context, initialState ReadState) (*Stat
 		}
 
 		var output Value
-		runErr := executeNode(ctx, node, currentState, &output)
+		var runErr error
+		if _, completed := currentState.Get(node.OutputKey); !completed {
+			runErr = executeNode(ctx, node, currentState, &output)
+		}
 
 		// Merge any node output before returning on error: a failed
 		// nested DAG stashes its inner *State under InnerStateKey so a
 		// resume caller sees the same partial state that layer mode
 		// delivers via handleLayerError.
-		if output.Key != "" && output.Val != nil {
+		if output.Key != "" {
 			currentState.Set(output.Key, output.Val)
 		}
 

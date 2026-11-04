@@ -142,15 +142,31 @@ func TestMemoryIdempotencyStore_CapacityBounded(t *testing.T) {
 }
 
 func TestRequestHashConflict_LegacyAndRawDigest(t *testing.T) {
-	digest := hashPayloadBytes("payload")
+	digest, err := hashPayloadBytes("payload")
+	if err != nil {
+		t.Fatal(err)
+	}
 	legacyEntry := IdempotencyEntry{RequestHash: hashPayloadString(digest)}
 	if requestHashConflict(legacyEntry, digest) {
 		t.Fatal("matching legacy string hash was rejected")
 	}
-	if !requestHashConflict(legacyEntry, hashPayloadBytes("different")) {
+	different, err := hashPayloadBytes("different")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !requestHashConflict(legacyEntry, different) {
 		t.Fatal("different legacy string hash was accepted")
 	}
 	if requestHashConflict(IdempotencyEntry{RequestHashBytes: digest}, digest) {
 		t.Fatal("matching raw digest without the string field was rejected")
+	}
+}
+
+func TestHashPayloadBytesRejectsUnsupportedValues(t *testing.T) {
+	if _, err := hashPayloadBytes(func() {}); err == nil {
+		t.Fatal("expected an error for an unsupported request payload")
+	}
+	if digest, err := hashPayloadBytes(nil); err != nil || digest == ([32]byte{}) {
+		t.Fatalf("nil payload hash = (%x, %v), want a non-zero digest and no error", digest, err)
 	}
 }
