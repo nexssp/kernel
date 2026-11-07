@@ -273,6 +273,20 @@ func TestStateMachineAny(t *testing.T) {
 		// Ensure the original payload was rolled back by the Set closure
 		ktest.RequireEqual(t, req["state"], "init")
 	})
+	t.Run("unknown input state rejected before action", func(t *testing.T) {
+		calls := 0
+		act := action.New("must_not_run", func(_ context.Context, req any) (any, error) {
+			calls++
+			return req, nil
+		}).Build()
+		sm := action.StateMachineAny("sm", get, set, transitions, act).Build()
+		req := map[string]any{"state": "unknown"}
+		ktest.Run(t, sm, ctx, any(req)).ErrorKind(xerr.KindConflict).ErrorContains("invalid start state")
+		if calls != 0 {
+			t.Fatalf("action calls = %d, want 0 for an unknown input state", calls)
+		}
+		ktest.RequireEqual(t, req["state"], "unknown")
+	})
 }
 
 func TestTernaryAny_MapGateFalse(t *testing.T) {

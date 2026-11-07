@@ -156,6 +156,8 @@ linters:
               desc: "Has known CVEs. Use 'github.com/golang-jwt/jwt/v5'"
             - pkg: "github.com/golang/protobuf"
               desc: "Use the new 'google.golang.org/protobuf' API"
+            - pkg: "github.com/benbjohnson/immutable"
+              desc: "Superseded upstream; use github.com/arnonrgo/immutable v0.7.0 (see docs/decisions/2026-11-07-dag-state-snapshots.md)"
 
     loggercheck: {slog: true, kitlog: false, klog: false, logr: false, zap: false}
 

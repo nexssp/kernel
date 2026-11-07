@@ -294,6 +294,10 @@ type (
 func StateMachineAny(name string, get StateExtractor, set StateSetter, transitions map[string][]string, inner AnyAction) *Builder[any, any] {
 	return New(name, func(ctx context.Context, request any) (any, error) {
 		origState := get(request)
+		allowed, exists := transitions[origState]
+		if !exists {
+			return nil, xerr.Conflict(fmt.Sprintf("statemachine: invalid start state %q", origState))
+		}
 		res, err := InvokeAny(ctx, inner, request)
 		if err != nil {
 			return nil, err
@@ -301,11 +305,6 @@ func StateMachineAny(name string, get StateExtractor, set StateSetter, transitio
 		newState := get(res)
 		if origState == newState {
 			return res, nil
-		}
-		allowed, exists := transitions[origState]
-		if !exists {
-			set(request, origState)
-			return nil, xerr.Conflict(fmt.Sprintf("statemachine: invalid start state %q", origState))
 		}
 		valid := slices.Contains(allowed, newState)
 		if !valid {

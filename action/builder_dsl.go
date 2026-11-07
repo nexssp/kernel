@@ -122,7 +122,7 @@ func (a *BuiltAction[Req, Res]) ApplyDSL(m DSLModifiers) AnyAction {
 func defaultCacheKeyFn[Req any](req Req) string {
 	data, err := json.Marshal(req)
 	if err != nil {
-		return "invalid"
+		return ""
 	}
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:])

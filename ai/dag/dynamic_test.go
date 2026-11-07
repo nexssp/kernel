@@ -41,6 +41,38 @@ func TestDynamicResumeSkipsCompletedNode(t *testing.T) {
 	}
 }
 
+func TestDynamicExecutionDoesNotMutateRetainedReadState(t *testing.T) {
+	var captured dag.ReadState
+	act := action.New("step", func(_ context.Context, node *dag.NodeContext) (string, error) {
+		captured = node.Input
+		return "done", nil
+	}).Build()
+	graph, err := dag.New(t.Name()).
+		AddNode("step", "step", act).
+		AddConditionalEdge("step", func(context.Context, dag.ReadState) (string, error) {
+			return "end", nil
+		}).
+		Compile()
+	if err != nil {
+		t.Fatal(err)
+	}
+	initial := dag.AcquireState()
+	defer initial.Release()
+	initial.Set("seed", "input")
+	state, err := graph.Execute(context.Background(), initial.AsRead())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer state.Release()
+
+	if got, ok := captured.Get("seed"); !ok || got != "input" {
+		t.Fatalf("retained seed = (%v, %t), want (input, true)", got, ok)
+	}
+	if got, ok := captured.Get(dag.OutputKey("step")); ok {
+		t.Fatalf("retained ReadState observed later output %q", got)
+	}
+}
+
 func TestCompileDoesNotAliasBuilderNodes(t *testing.T) {
 	act := action.New("step", func(context.Context, dag.ReadState) (string, error) {
 		return "ok", nil

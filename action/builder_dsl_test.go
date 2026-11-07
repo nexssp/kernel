@@ -191,6 +191,33 @@ func TestWithDSL_Hooks(t *testing.T) {
 	}
 }
 
+func TestWithDSL_CacheKeyMarshalErrorDoesNotCollide(t *testing.T) {
+	t.Parallel()
+	type request struct {
+		Value       string
+		Unsupported func()
+	}
+	calls := atomic.Int32{}
+	act := action.New("svc.cachekey_marshal_error", func(_ context.Context, req request) (string, error) {
+		calls.Add(1)
+		return req.Value, nil
+	}).WithDSL(action.DSLModifiers{CacheTTL: time.Minute}).Build()
+
+	ctx := context.Background()
+	for _, value := range []string{"first", "second"} {
+		got, err := act.Do(ctx, request{Value: value, Unsupported: func() {}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != value {
+			t.Fatalf("result = %q, want %q", got, value)
+		}
+	}
+	if n := calls.Load(); n != 2 {
+		t.Fatalf("handler calls = %d, want 2 when cache keys cannot be serialized", n)
+	}
+}
+
 func TestWithDSL_CacheKeyFnRaw(t *testing.T) {
 	t.Parallel()
 

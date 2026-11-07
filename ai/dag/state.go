@@ -1,42 +1,39 @@
 package dag
 
-import "maps"
+import "github.com/arnonrgo/immutable"
 
 // State is the mutable graph state. Only the DAG engine writes to it;
 // nodes receive a read-only view via NodeContext.Input.
 //
 // Ownership: whoever receives a *State from Execute owns it and calls
-// Release when finished. Release drops this State's reference to its
-// backing map; any outstanding ReadState view keeps the map alive. The
-// GC reclaims the map once every reference is gone.
+// Release when finished. Release drops this State's root; any outstanding
+// ReadState view keeps its immutable snapshot alive. The GC reclaims tree
+// nodes once every State and ReadState reference to them is gone.
 //
 // State is deliberately NOT pooled. Nodes receive NodeContext.Input and
 // may legally retain that reference inside their own scope; recycling
 // States across executions would create use-after-free hazards the
-// compiler cannot catch.
+// compiler cannot catch. Persistent roots preserve those snapshots while
+// dynamic execution publishes later outputs.
 type State struct {
-	data map[string]any
+	data *immutable.Map[string, any]
 }
 
-// ReadState is the read-only view of a State handed to nodes. It shares
-// the backing map with the origin State; copying a ReadState is free
-// (one map-header copy) and keeps the map alive.
+// ReadState is the read-only view of an immutable State snapshot. Copying
+// it shares the root and keeps that snapshot alive.
 type ReadState struct {
-	data map[string]any
+	data *immutable.Map[string, any]
 }
 
 // AcquireState returns a fresh, empty State. The caller owns it and
 // should call Release when finished.
 func AcquireState() *State {
-	return &State{data: make(map[string]any, 16)}
+	return &State{data: immutable.NewMap[string, any](nil)}
 }
 
-// Release drops this State's reference to its backing map. It is a
-// hint, not a lifetime operation: State is not pooled, so a forgotten
-// Release is not a leak — the GC reclaims the map once every *State
-// and ReadState view goes out of scope. Outstanding ReadState views
-// (a node that captured Input into a goroutine) keep the map readable
-// regardless of how many times Release has been called.
+// Release drops this State's reference to its immutable root. Outstanding
+// ReadState views keep their own roots alive, regardless of how many times
+// Release has been called.
 //
 // Safe on a nil receiver and safe to call multiple times.
 func (s *State) Release() {
@@ -46,8 +43,8 @@ func (s *State) Release() {
 	s.data = nil
 }
 
-// AsRead returns the read-only view of this state. Zero cost: it copies
-// the map header. Safe on a nil receiver.
+// AsRead returns the immutable snapshot of this state. Zero cost: it copies
+// the root pointer. Safe on a nil receiver.
 func (s *State) AsRead() ReadState {
 	if s == nil {
 		return ReadState{}
@@ -55,34 +52,33 @@ func (s *State) AsRead() ReadState {
 	return ReadState{data: s.data}
 }
 
-// Clone returns a fresh *State with a shallow copy of the read view's
-// backing map. Execute uses it to derive the layer's mutable state from
-// the caller's initial snapshot.
+// Clone returns a fresh *State sharing the immutable root of the read view.
 func (r ReadState) Clone() *State {
-	next := AcquireState()
-	if r.data != nil {
-		maps.Copy(next.data, r.data)
+	if r.data == nil {
+		return AcquireState()
 	}
-	return next
+	return &State{data: r.data}
 }
 
-// Get performs a zero-lock read on the read-only view.
+// Get performs a zero-lock read on the immutable snapshot.
 func (r ReadState) Get(key string) (any, bool) {
 	if r.data == nil {
 		return nil, false
 	}
-	v, ok := r.data[key]
-	return v, ok
+	return r.data.Get(key)
 }
 
-// Data returns a shallow copy of the underlying map for serialization
+// Data returns a shallow copy of the snapshot for serialization
 // or rendering. The returned map is caller-owned.
 func (r ReadState) Data() map[string]any {
 	if r.data == nil {
 		return nil
 	}
-	out := make(map[string]any, len(r.data))
-	maps.Copy(out, r.data)
+	out := make(map[string]any, r.data.Len())
+	iterator := r.data.Iterator()
+	for key, value, ok := iterator.Next(); ok; key, value, ok = iterator.Next() {
+		out[key] = value
+	}
 	return out
 }
 
@@ -103,41 +99,37 @@ func (s *State) Data() map[string]any {
 	return s.AsRead().Data()
 }
 
-// Set writes a key-value pair to the state. Mutates the underlying map,
-// which is shared with every ReadState view of this state. Only the DAG
-// engine should call this.
+// Set writes a key-value pair by replacing the persistent root. Existing
+// ReadState snapshots remain unchanged. Only the DAG engine should call this.
 func (s *State) Set(key string, val any) {
 	if s == nil {
 		return
 	}
 	if s.data == nil {
-		s.data = make(map[string]any, 16)
+		s.data = immutable.NewMap[string, any](nil)
 	}
-	s.data[key] = val
+	s.data = s.data.Set(key, val)
 }
 
-// Clone returns a fresh State with a shallow copy of the map. Values are
+// Clone returns a fresh State with the same immutable root. Values are
 // shared, not deep-copied; nodes must not return mutable values they
 // intend to modify after returning.
 func (s *State) Clone() *State {
-	next := AcquireState()
 	if s != nil && s.data != nil {
-		maps.Copy(next.data, s.data)
+		return &State{data: s.data}
 	}
-	return next
+	return AcquireState()
 }
 
-// CopyFrom replaces s's data with a shallow copy of src's data.
+// CopyFrom shares src's immutable root. Later Set calls replace only the
+// receiver's root, so source and destination diverge after either is written.
 func (s *State) CopyFrom(src *State) {
 	if s == nil || src == nil {
 		return
 	}
-	if s.data == nil {
-		s.data = make(map[string]any, len(src.data))
-	} else {
-		clear(s.data)
+	if src.data == nil {
+		s.data = immutable.NewMap[string, any](nil)
+		return
 	}
-	if src.data != nil {
-		maps.Copy(s.data, src.data)
-	}
+	s.data = src.data
 }

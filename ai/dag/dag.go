@@ -132,6 +132,7 @@ func (d *DAG) executeDynamic(ctx context.Context, initialState ReadState) (*Stat
 		// resume caller sees the same partial state that layer mode
 		// delivers via handleLayerError.
 		if output.Key != "" {
+			// A node may retain Input; persistent Set keeps that view unchanged.
 			currentState.Set(output.Key, output.Val)
 		}
 

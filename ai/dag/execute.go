@@ -219,7 +219,7 @@ func handleLayerError(
 func applyResults(dst *State, results []Value) {
 	for _, res := range results {
 		if res.Key != "" {
-			dst.data[res.Key] = res.Val
+			dst.Set(res.Key, res.Val)
 		}
 	}
 }
