@@ -21,9 +21,7 @@ func WithRequestID(ctx context.Context, id string) context.Context {
 	if id == "" {
 		return ctx
 	}
-	ctx, s := ensureScope(ctx)
-	s.RequestID = id
-	return ctx
+	return withLockedScope(ctx, func(scope *RequestScope) { scope.RequestID = id })
 }
 
 // WithExecutionID stores the id in context keys, not in a RequestScope.
@@ -50,18 +48,14 @@ func WithTraceID(ctx context.Context, id string) context.Context {
 	if id == "" {
 		return ctx
 	}
-	ctx, s := ensureScope(ctx)
-	s.TraceID = id
-	return ctx
+	return withLockedScope(ctx, func(scope *RequestScope) { scope.TraceID = id })
 }
 
 func WithSpanID(ctx context.Context, id string) context.Context {
 	if id == "" {
 		return ctx
 	}
-	ctx, s := ensureScope(ctx)
-	s.SpanID = id
-	return ctx
+	return withLockedScope(ctx, func(scope *RequestScope) { scope.SpanID = id })
 }
 
 // WithTraceContext sets TraceID and/or SpanID in one call. Empty strings
@@ -70,62 +64,54 @@ func WithTraceContext(ctx context.Context, traceID, spanID string) context.Conte
 	if traceID == "" && spanID == "" {
 		return ctx
 	}
-	ctx, s := ensureScope(ctx)
-	if traceID != "" {
-		s.TraceID = traceID
-	}
-	if spanID != "" {
-		s.SpanID = spanID
-	}
-	return ctx
+	return withLockedScope(ctx, func(scope *RequestScope) {
+		if traceID != "" {
+			scope.TraceID = traceID
+		}
+		if spanID != "" {
+			scope.SpanID = spanID
+		}
+	})
 }
 
 func WithEndpoint(ctx context.Context, endpoint string) context.Context {
-	ctx, s := ensureScope(ctx)
-	s.Endpoint = endpoint
-	return ctx
+	return withLockedScope(ctx, func(scope *RequestScope) { scope.Endpoint = endpoint })
 }
 
 func WithTenantID(ctx context.Context, id string) context.Context {
-	ctx, s := ensureScope(ctx)
-	s.TenantID = id
-	return ctx
+	return withLockedScope(ctx, func(scope *RequestScope) { scope.TenantID = id })
 }
 
 func WithUserID(ctx context.Context, id string) context.Context {
-	ctx, s := ensureScope(ctx)
-	s.UserID = id
-	return ctx
+	return withLockedScope(ctx, func(scope *RequestScope) { scope.UserID = id })
 }
 
 func WithClientIP(ctx context.Context, ip string) context.Context {
-	ctx, s := ensureScope(ctx)
-	s.ClientIP = ip
-	return ctx
+	return withLockedScope(ctx, func(scope *RequestScope) { scope.ClientIP = ip })
 }
 
 // WithRoles replaces the roles slice and sets Role to the first element.
 // Passing nil clears both.
 func WithRoles(ctx context.Context, roles []string) context.Context {
-	ctx, s := ensureScope(ctx)
-	s.Roles = append(s.Roles[:0], roles...)
-	s.Role = ""
-	if len(roles) > 0 {
-		s.Role = roles[0]
-	}
-	return ctx
+	return withLockedScope(ctx, func(scope *RequestScope) {
+		scope.Roles = append(scope.Roles[:0], roles...)
+		scope.Role = ""
+		if len(roles) > 0 {
+			scope.Role = roles[0]
+		}
+	})
 }
 
 func WithFeatures(ctx context.Context, features []string) context.Context {
-	ctx, s := ensureScope(ctx)
-	s.Features = append(s.Features[:0], features...)
-	return ctx
+	return withLockedScope(ctx, func(scope *RequestScope) {
+		scope.Features = append(scope.Features[:0], features...)
+	})
 }
 
 func WithPermissions(ctx context.Context, perms []string) context.Context {
-	ctx, s := ensureScope(ctx)
-	s.Permissions = append(s.Permissions[:0], perms...)
-	return ctx
+	return withLockedScope(ctx, func(scope *RequestScope) {
+		scope.Permissions = append(scope.Permissions[:0], perms...)
+	})
 }
 
 // ── Getters ──────────────────────────────────────────────────────────────────
@@ -133,7 +119,8 @@ func WithPermissions(ctx context.Context, perms []string) context.Context {
 // Each *From returns the field or the zero value if the scope is missing.
 
 func RequestIDFrom(ctx context.Context) string {
-	if s := ScopeFrom(ctx); s != nil {
+	if s := lockScopeForRead(ctx); s != nil {
+		defer s.mu.RUnlock()
 		return s.RequestID
 	}
 	return ""
@@ -153,42 +140,48 @@ func RootExecutionIDFrom(ctx context.Context) string {
 }
 
 func TenantIDFrom(ctx context.Context) string {
-	if s := ScopeFrom(ctx); s != nil {
+	if s := lockScopeForRead(ctx); s != nil {
+		defer s.mu.RUnlock()
 		return s.TenantID
 	}
 	return ""
 }
 
 func UserIDFrom(ctx context.Context) string {
-	if s := ScopeFrom(ctx); s != nil {
+	if s := lockScopeForRead(ctx); s != nil {
+		defer s.mu.RUnlock()
 		return s.UserID
 	}
 	return ""
 }
 
 func EndpointFrom(ctx context.Context) string {
-	if s := ScopeFrom(ctx); s != nil {
+	if s := lockScopeForRead(ctx); s != nil {
+		defer s.mu.RUnlock()
 		return s.Endpoint
 	}
 	return ""
 }
 
 func TraceIDFrom(ctx context.Context) string {
-	if s := ScopeFrom(ctx); s != nil {
+	if s := lockScopeForRead(ctx); s != nil {
+		defer s.mu.RUnlock()
 		return s.TraceID
 	}
 	return ""
 }
 
 func SpanIDFrom(ctx context.Context) string {
-	if s := ScopeFrom(ctx); s != nil {
+	if s := lockScopeForRead(ctx); s != nil {
+		defer s.mu.RUnlock()
 		return s.SpanID
 	}
 	return ""
 }
 
 func ClientIPFrom(ctx context.Context) string {
-	if s := ScopeFrom(ctx); s != nil {
+	if s := lockScopeForRead(ctx); s != nil {
+		defer s.mu.RUnlock()
 		return s.ClientIP
 	}
 	return ""
@@ -198,10 +191,14 @@ func ClientIPFrom(ctx context.Context) string {
 
 // FromClaims populates a scope from a decoded JWT claim map. Recognized
 // keys: sub, ten, jti, roles, features, perms. Unknown keys are ignored.
+// It acquires scope.mu to synchronize writes with xctx accessors; direct field
+// access still requires caller synchronization.
 func FromClaims(scope *RequestScope, claims map[string]any) {
 	if scope == nil || len(claims) == 0 {
 		return
 	}
+	scope.mu.Lock()
+	defer scope.mu.Unlock()
 	if v, _ := claims["sub"].(string); v != "" {
 		scope.UserID = v
 	}
@@ -244,7 +241,8 @@ func toStringSlice(v any) []string {
 // RolesFrom returns a defensive copy of the scope's roles. Mutating the
 // result has no effect on the scope.
 func RolesFrom(ctx context.Context) []string {
-	if s := ScopeFrom(ctx); s != nil {
+	if s := lockScopeForRead(ctx); s != nil {
+		defer s.mu.RUnlock()
 		return slices.Clone(s.Roles)
 	}
 	return nil
@@ -252,7 +250,8 @@ func RolesFrom(ctx context.Context) []string {
 
 // FeaturesFrom returns a defensive copy of the scope's features.
 func FeaturesFrom(ctx context.Context) []string {
-	if s := ScopeFrom(ctx); s != nil {
+	if s := lockScopeForRead(ctx); s != nil {
+		defer s.mu.RUnlock()
 		return slices.Clone(s.Features)
 	}
 	return nil
@@ -260,8 +259,51 @@ func FeaturesFrom(ctx context.Context) []string {
 
 // PermissionsFrom returns a defensive copy of the scope's permissions.
 func PermissionsFrom(ctx context.Context) []string {
-	if s := ScopeFrom(ctx); s != nil {
+	if s := lockScopeForRead(ctx); s != nil {
+		defer s.mu.RUnlock()
 		return slices.Clone(s.Permissions)
 	}
 	return nil
+}
+
+// ScopeSnapshot is a stable copy of request identity and authorization
+// metadata. Its slices are owned by the snapshot; TraceEvents is excluded.
+type ScopeSnapshot struct {
+	Present     bool // false when no live scope was bound to the context.
+	RequestID   string
+	TraceID     string
+	SpanID      string
+	Endpoint    string
+	UserID      string
+	TenantID    string
+	Role        string
+	ClientIP    string
+	Roles       []string
+	Permissions []string
+	Features    []string
+}
+
+// SnapshotFrom returns a stable identity/authorization copy of the live scope,
+// or a zero snapshot when ctx has no live scope. It omits TraceEvents. Slice
+// fields are copied so later scope changes cannot change the returned snapshot.
+func SnapshotFrom(ctx context.Context) ScopeSnapshot {
+	scope := lockScopeForRead(ctx)
+	if scope == nil {
+		return ScopeSnapshot{}
+	}
+	defer scope.mu.RUnlock()
+	return ScopeSnapshot{
+		Present:     true,
+		RequestID:   scope.RequestID,
+		TraceID:     scope.TraceID,
+		SpanID:      scope.SpanID,
+		Endpoint:    scope.Endpoint,
+		UserID:      scope.UserID,
+		TenantID:    scope.TenantID,
+		Role:        scope.Role,
+		ClientIP:    scope.ClientIP,
+		Roles:       slices.Clone(scope.Roles),
+		Permissions: slices.Clone(scope.Permissions),
+		Features:    slices.Clone(scope.Features),
+	}
 }

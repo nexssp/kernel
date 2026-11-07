@@ -1,6 +1,8 @@
 package action
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"testing"
 	"time"
@@ -117,6 +119,30 @@ func TestMemoryIdempotencyStore_CoordinatorClaimLifecycle(t *testing.T) {
 	}
 }
 
+func TestMemoryIdempotencyStore_ExpiredClaimCanBeTakenOver(t *testing.T) {
+	store := NewMemoryIdempotencyStore(time.Hour)
+	ctx := t.Context()
+	store.mu.Lock()
+	store.claims["expired-key"] = memClaim{
+		token:       "expired-token",
+		requestHash: "same-request",
+		expiresAt:   time.Now().Add(-time.Second),
+	}
+	store.mu.Unlock()
+
+	claim, err := store.Claim(ctx, "expired-key", "same-request", time.Hour)
+	if err != nil || claim.State != IdempotencyClaimAcquired || claim.Token == "" || claim.Token == "expired-token" {
+		t.Fatalf("expired claim takeover = (%+v, %v)", claim, err)
+	}
+	entry := IdempotencyEntry{Status: 200, Body: []byte("ok"), RequestHash: "same-request"}
+	if err := store.Complete(ctx, "expired-key", "expired-token", entry, time.Hour); err == nil {
+		t.Fatal("expired token completed the replacement claim")
+	}
+	if err := store.Complete(ctx, "expired-key", claim.Token, entry, time.Hour); err != nil {
+		t.Fatalf("replacement token failed to complete: %v", err)
+	}
+}
+
 func TestMemoryIdempotencyStore_CapacityBounded(t *testing.T) {
 	t.Parallel()
 
@@ -168,5 +194,77 @@ func TestHashPayloadBytesRejectsUnsupportedValues(t *testing.T) {
 	}
 	if digest, err := hashPayloadBytes(nil); err != nil || digest == ([32]byte{}) {
 		t.Fatalf("nil payload hash = (%x, %v), want a non-zero digest and no error", digest, err)
+	}
+}
+
+type collidingTextKey struct {
+	ID int
+}
+
+func (collidingTextKey) MarshalText() ([]byte, error) {
+	return []byte("same"), nil
+}
+
+type textMarshalerContainer struct {
+	Values map[collidingTextKey]string `json:"values"`
+}
+
+func (textMarshalerContainer) MarshalText() ([]byte, error) {
+	return []byte("ignored by json.Marshal for values"), nil
+}
+
+type recursiveTextMapPayload struct {
+	Next   *recursiveTextMapPayload
+	Values map[collidingTextKey]string
+}
+
+type jsonMarshalerContainer struct {
+	Values map[collidingTextKey]string
+}
+
+func (jsonMarshalerContainer) MarshalJSON() ([]byte, error) {
+	return []byte(`{"values":"custom"}`), nil
+}
+
+func TestHashPayloadBytesRejectsTextMarshalerMapKeys(t *testing.T) {
+	t.Parallel()
+	badMap := map[collidingTextKey]string{{ID: 1}: "same-value"}
+	cycle := &recursiveTextMapPayload{Values: badMap}
+	cycle.Next = cycle
+	payloads := []any{
+		badMap,
+		struct {
+			Values any `json:"values"`
+		}{Values: badMap},
+		&struct {
+			Values map[collidingTextKey]string `json:"values"`
+		}{Values: badMap},
+		[]map[collidingTextKey]string{badMap},
+		[1]map[collidingTextKey]string{badMap},
+		map[string]any{"nested": badMap},
+		cycle,
+		textMarshalerContainer{Values: badMap},
+	}
+	for _, payload := range payloads {
+		if _, err := hashPayloadBytes(payload); err == nil {
+			t.Fatalf("hashPayloadBytes(%T) accepted an ambiguous map key", payload)
+		}
+	}
+	first, err := json.Marshal(textMarshalerContainer{Values: map[collidingTextKey]string{{ID: 1}: "same-value"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := json.Marshal(textMarshalerContainer{Values: map[collidingTextKey]string{{ID: 2}: "same-value"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(first, second) {
+		t.Fatalf("test payloads do not collide: %s != %s", first, second)
+	}
+	if _, err := hashPayloadBytes(map[string]int{"safe": 1}); err != nil {
+		t.Fatalf("ordinary string map was rejected: %v", err)
+	}
+	if _, err := hashPayloadBytes(jsonMarshalerContainer{Values: badMap}); err != nil {
+		t.Fatalf("custom JSON marshaler was rejected: %v", err)
 	}
 }

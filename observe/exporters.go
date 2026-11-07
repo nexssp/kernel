@@ -77,16 +77,13 @@ func (s *PrometheusSink) WritePrometheus(w io.Writer) error {
 }
 
 type JSONLSink struct {
-	mu       sync.Mutex
-	writer   io.Writer
-	maxBytes int
+	mu     sync.Mutex
+	writer io.Writer
 }
 
-func NewJSONLSink(writer io.Writer, maxBytes int) *JSONLSink {
-	if maxBytes <= 0 {
-		maxBytes = 4096
-	}
-	return &JSONLSink{writer: writer, maxBytes: maxBytes}
+// NewJSONLSink accepts but ignores the legacy size argument; raw diagnostics are redacted.
+func NewJSONLSink(writer io.Writer, _ int) *JSONLSink {
+	return &JSONLSink{writer: writer}
 }
 
 func (s *JSONLSink) Emit(_ context.Context, event Event) {
@@ -107,8 +104,8 @@ func (s *JSONLSink) Emit(_ context.Context, event Event) {
 		Attempt:      event.Attempt,
 		RequestType:  safeType(event.Request),
 		ResponseType: safeType(event.Response),
-		Error:        boundedError(event.Error, s.maxBytes),
-		Recovered:    boundedValue(event.Recovered, s.maxBytes),
+		Error:        redactedDiagnostic(event.Error != nil),
+		Recovered:    redactedDiagnostic(event.Recovered != nil),
 	}
 	payload, err := json.Marshal(record)
 	if err != nil {
@@ -146,26 +143,11 @@ func safeType(value any) string {
 	return fmt.Sprintf("%T", value)
 }
 
-func boundedError(err error, maxBytes int) string {
-	if err == nil {
-		return ""
+func redactedDiagnostic(present bool) string {
+	if present {
+		return "[redacted]"
 	}
-	text := err.Error()
-	if len(text) > maxBytes {
-		return text[:maxBytes]
-	}
-	return text
-}
-
-func boundedValue(value any, maxBytes int) string {
-	if value == nil {
-		return ""
-	}
-	text := fmt.Sprint(value)
-	if len(text) > maxBytes {
-		return text[:maxBytes]
-	}
-	return text
+	return ""
 }
 
 // labelEscaper is hoisted: a *strings.Replacer is a small trie that is

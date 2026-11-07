@@ -1,17 +1,21 @@
 package observe
 
 import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"strings"
 	"testing"
 )
 
 func FuzzPrometheusEscapeLabel(f *testing.F) {
 	seeds := []string{"", "simple", `quote"`, `back\slash`, "newline\n", "tab\t"}
-	for _, s := range seeds {
-		f.Add(s)
+	for _, value := range seeds {
+		f.Add(value)
 	}
 	f.Fuzz(func(t *testing.T, input string) {
 		escaped := escapeLabel(input)
-		// Escaped string must not contain raw newline or raw quote.
 		for _, r := range escaped {
 			if r == '\n' {
 				t.Fatalf("escaped string contains newline: %q", escaped)
@@ -24,17 +28,25 @@ func FuzzPrometheusEscapeLabel(f *testing.F) {
 }
 
 func FuzzJSONLRecord(f *testing.F) {
-	// 7 seed values matching the 7 fuzz parameters:
-	// timeStr, kind, action, execID, traceID, spanID, attempt
-	f.Add("", "", "", "", "", "", 0)
-
-	f.Fuzz(func(_ *testing.T, _, _, _, _, _, _ string, _ int) {
-		// The inputs are not directly used here, but we exercise boundedError
-		// with a fixed error to ensure it never panics.
-		_ = boundedError(fakeError{}, 10)
+	f.Add("", "", "", "", "", 0)
+	f.Fuzz(func(t *testing.T, kind, action, execID, traceID, spanID string, attempt int) {
+		var output bytes.Buffer
+		sink := NewJSONLSink(&output, 0)
+		sink.Emit(context.Background(), Event{
+			Kind: kind, Action: action,
+			ExecutionID: execID, TraceID: traceID, SpanID: spanID,
+			Attempt: attempt, Error: errors.New("fuzz"), Recovered: "fuzz",
+		})
+		line := output.Bytes()
+		if strings.Count(string(line), "\n") != 1 {
+			t.Fatalf("got != 1 newline: %q", line)
+		}
+		var record jsonRecord
+		if err := json.Unmarshal(bytes.TrimSuffix(line, []byte{'\n'}), &record); err != nil {
+			t.Fatalf("invalid JSONL record: %v", err)
+		}
+		if record.Error != "[redacted]" || record.Recovered != "[redacted]" {
+			t.Fatalf("diagnostics were not redacted: %+v", record)
+		}
 	})
 }
-
-type fakeError struct{}
-
-func (fakeError) Error() string { return "some error" }

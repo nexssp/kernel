@@ -157,6 +157,37 @@ func BenchmarkResilience_Idempotency_Hit(b *testing.B) {
 	}
 }
 
+func BenchmarkResilience_Idempotency_Hit_StructPayload(b *testing.B) {
+	type payload struct {
+		ID, TenantID, Region string
+		Count, Version       int
+		Nested               struct{ Value string }
+	}
+	request := payload{
+		ID: "item-1", TenantID: "tenant-1", Region: "eu-west",
+		Count: 7, Version: 1, Nested: struct{ Value string }{Value: "nested"},
+	}
+	store := action.NewMemoryIdempotencyStore(time.Hour)
+	act := action.New("bench.idem.struct", func(_ context.Context, req payload) (payload, error) {
+		return req, nil
+	}).IdempotentWithConfig(action.IdempotencyConfig{
+		Enabled: true,
+		TTL:     time.Hour,
+		Store:   store,
+	}).Build()
+	ctx := ktest.RequestContext(b, "bench-idem-struct-key")
+	if _, err := act.Do(ctx, request); err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		if _, err := act.Do(ctx, request); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 // ─── FanOut ─────────────────────────────────────────────────────────────────
 
 // Hot path: 10 reqs × maxConcurrency=4 — bounded parallel.

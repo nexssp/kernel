@@ -201,6 +201,8 @@ func (a *StreamAction[Req, T]) Do(ctx context.Context, req Req) (seq iter.Seq2[T
 			r := recover()
 			if r != nil {
 				lastErr = xerr.PanicRecovery(r)
+			} else if lastErr == nil {
+				lastErr = ctx.Err()
 			}
 			fireStreamTerminal(ctx, a.streamHooks, req, lastErr, meta)
 			fireStreamAfterHooks(ctx, a.hooks, a.anyHooks, hooksRan, anyHooksRan, req, rawSeq, lastErr, meta)
@@ -217,6 +219,13 @@ func (a *StreamAction[Req, T]) Do(ctx context.Context, req Req) (seq iter.Seq2[T
 				return
 			}
 			fireStreamItem(ctx, a.streamHooks, req, item, itemErr, meta)
+		}
+		if lastErr == nil {
+			if err := ctx.Err(); err != nil {
+				lastErr = err
+				var zero T
+				yield(zero, err)
+			}
 		}
 	}
 	return wrappedSeq, nil

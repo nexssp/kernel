@@ -2,6 +2,7 @@ package xctx_test
 
 import (
 	"context"
+	"sync"
 	"testing"
 
 	"github.com/nexssp/kernel/xctx"
@@ -141,5 +142,215 @@ func TestWithRoles_Resetting(t *testing.T) {
 	}
 	if xctx.HasRole(ctx, "operator") {
 		t.Fatal("HasRole returned true after roles were cleared")
+	}
+}
+
+func TestScopeAccessorsConcurrentMutationAndRead(t *testing.T) {
+	t.Parallel()
+	ctx, _, cleanup := xctx.NewScope(context.Background())
+	defer cleanup()
+	ctx = xctx.WithUserID(ctx, "initial")
+	start := make(chan struct{})
+	var waitGroup sync.WaitGroup
+	waitGroup.Add(2)
+	go func() {
+		defer waitGroup.Done()
+		<-start
+		for range 10_000 {
+			_ = xctx.WithUserID(ctx, "user")
+		}
+	}()
+	go func() {
+		defer waitGroup.Done()
+		<-start
+		for range 10_000 {
+			_ = xctx.UserIDFrom(ctx)
+		}
+	}()
+	close(start)
+	waitGroup.Wait()
+}
+
+func TestSnapshotFromCopiesMetadataAndSlices(t *testing.T) {
+	t.Parallel()
+	ctx, _, cleanup := xctx.NewScope(context.Background())
+	defer cleanup()
+	ctx = xctx.WithRequestID(ctx, "request-1")
+	ctx = xctx.WithEndpoint(ctx, "/checkout")
+	ctx = xctx.WithUserID(ctx, "user-1")
+	ctx = xctx.WithTenantID(ctx, "tenant-1")
+	ctx = xctx.WithTraceID(ctx, "trace-1")
+	ctx = xctx.WithSpanID(ctx, "span-1")
+	ctx = xctx.WithClientIP(ctx, "127.0.0.1")
+	ctx = xctx.WithRoles(ctx, []string{"admin", "billing"})
+	ctx = xctx.WithPermissions(ctx, []string{"read", "*"})
+	ctx = xctx.WithFeatures(ctx, []string{"beta", "*"})
+
+	snapshot := xctx.SnapshotFrom(ctx)
+	if !snapshot.Present || snapshot.RequestID != "request-1" || snapshot.Endpoint != "/checkout" ||
+		snapshot.UserID != "user-1" || snapshot.TenantID != "tenant-1" || snapshot.TraceID != "trace-1" ||
+		snapshot.SpanID != "span-1" || snapshot.ClientIP != "127.0.0.1" {
+		t.Fatalf("snapshot identity fields = %+v", snapshot)
+	}
+	if !snapshot.HasRole("billing") || !snapshot.HasPermission("write") || !snapshot.HasFeature("beta") || !snapshot.HasFeature("arbitrary") {
+		t.Fatal("snapshot authorization helpers did not preserve scope semantics")
+	}
+	adminSnapshot := xctx.ScopeSnapshot{Present: true, Roles: []string{"system_admin"}}
+	if !adminSnapshot.HasFeature("arbitrary") || (xctx.ScopeSnapshot{}).HasRole("") {
+		t.Fatal("snapshot admin or absent-scope semantics are incorrect")
+	}
+
+	ctx = xctx.WithUserID(ctx, "user-2")
+	ctx = xctx.WithRoles(ctx, []string{"viewer"})
+	ctx = xctx.WithPermissions(ctx, []string{"other"})
+	ctx = xctx.WithFeatures(ctx, []string{"other"})
+	if snapshot.UserID != "user-1" || snapshot.Roles[0] != "admin" || snapshot.Permissions[0] != "read" ||
+		snapshot.Features[0] != "beta" {
+		t.Fatalf("scope mutation changed snapshot: %+v", snapshot)
+	}
+
+	snapshot.Roles[0] = "snapshot-mutated"
+	snapshot.Permissions[0] = "snapshot-mutated"
+	snapshot.Features[0] = "snapshot-mutated"
+	current := xctx.SnapshotFrom(ctx)
+	if current.Roles[0] != "viewer" || current.Permissions[0] != "other" || current.Features[0] != "other" {
+		t.Fatalf("snapshot mutation changed scope: %+v", current)
+	}
+}
+
+func TestSnapshotFromMissingOrStaleScope(t *testing.T) {
+	t.Parallel()
+	if snapshot := xctx.SnapshotFrom(context.Background()); snapshot.Present {
+		t.Fatal("snapshot of context without a scope is marked present")
+	}
+	ctx, scope, cleanup := xctx.NewScope(context.Background())
+	defer cleanup()
+	ctx = xctx.WithUserID(ctx, "stale-user")
+	scope.Reset()
+	if snapshot := xctx.SnapshotFrom(ctx); snapshot.Present || snapshot.UserID != "" {
+		t.Fatalf("snapshot of stale scope = %+v", snapshot)
+	}
+}
+
+func TestScopeReadDuringResetIsRaceFree(t *testing.T) {
+	t.Parallel()
+	ctx, scope, cleanup := xctx.NewScope(context.Background())
+	defer cleanup()
+	ctx = xctx.WithUserID(ctx, "user-1")
+	start := make(chan struct{})
+	var waitGroup sync.WaitGroup
+	waitGroup.Add(3)
+	go func() {
+		defer waitGroup.Done()
+		<-start
+		for range 10_000 {
+			_ = xctx.UserIDFrom(ctx)
+			_ = xctx.SnapshotFrom(ctx)
+		}
+	}()
+	go func() {
+		defer waitGroup.Done()
+		<-start
+		for range 100 {
+			scope.Reset()
+		}
+	}()
+	go func() {
+		defer waitGroup.Done()
+		<-start
+		for range 100 {
+			xctx.AddTrace(ctx, "event")
+		}
+	}()
+	close(start)
+	waitGroup.Wait()
+	if xctx.SnapshotFrom(ctx).Present {
+		t.Fatal("reset scope remained bound to its old context")
+	}
+}
+
+var (
+	benchmarkUserID        string
+	benchmarkPermissionOK  bool
+	benchmarkTenantID      string
+	benchmarkTraceID       string
+	benchmarkSpanID        string
+	benchmarkRoleOK        bool
+	benchmarkScopeSnapshot xctx.ScopeSnapshot
+)
+
+func BenchmarkUserIDFrom(b *testing.B) {
+	ctx, _, cleanup := xctx.NewScope(context.Background())
+	defer cleanup()
+	ctx = xctx.WithUserID(ctx, "user-1")
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		benchmarkUserID = xctx.UserIDFrom(ctx)
+	}
+}
+
+func BenchmarkHasPermission(b *testing.B) {
+	ctx, _, cleanup := xctx.NewScope(context.Background())
+	defer cleanup()
+	ctx = xctx.WithPermissions(ctx, []string{"read:profile", "write:profile"})
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		benchmarkPermissionOK = xctx.HasPermission(ctx, "write:profile")
+	}
+}
+
+func BenchmarkScopeReadSixFields(b *testing.B) {
+	ctx, _, cleanup := xctx.NewScope(context.Background())
+	defer cleanup()
+	ctx = xctx.WithRequestID(ctx, "request-1")
+	ctx = xctx.WithEndpoint(ctx, "/checkout")
+	ctx = xctx.WithUserID(ctx, "user-1")
+	ctx = xctx.WithTenantID(ctx, "tenant-1")
+	ctx = xctx.WithTraceID(ctx, "trace-1")
+	ctx = xctx.WithSpanID(ctx, "span-1")
+	ctx = xctx.WithClientIP(ctx, "127.0.0.1")
+	ctx = xctx.WithRoles(ctx, []string{"admin", "billing"})
+	ctx = xctx.WithPermissions(ctx, []string{"read", "write"})
+	ctx = xctx.WithFeatures(ctx, []string{"beta", "audit"})
+	xctx.AddTrace(ctx, "benchmark-event")
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		benchmarkUserID = xctx.UserIDFrom(ctx)
+		benchmarkTenantID = xctx.TenantIDFrom(ctx)
+		benchmarkTraceID = xctx.TraceIDFrom(ctx)
+		benchmarkSpanID = xctx.SpanIDFrom(ctx)
+		benchmarkRoleOK = xctx.HasRole(ctx, "admin")
+		benchmarkPermissionOK = xctx.HasPermission(ctx, "write")
+	}
+}
+
+func BenchmarkScopeSnapshotSixFields(b *testing.B) {
+	ctx, _, cleanup := xctx.NewScope(context.Background())
+	defer cleanup()
+	ctx = xctx.WithRequestID(ctx, "request-1")
+	ctx = xctx.WithEndpoint(ctx, "/checkout")
+	ctx = xctx.WithUserID(ctx, "user-1")
+	ctx = xctx.WithTenantID(ctx, "tenant-1")
+	ctx = xctx.WithTraceID(ctx, "trace-1")
+	ctx = xctx.WithSpanID(ctx, "span-1")
+	ctx = xctx.WithClientIP(ctx, "127.0.0.1")
+	ctx = xctx.WithRoles(ctx, []string{"admin", "billing"})
+	ctx = xctx.WithPermissions(ctx, []string{"read", "write"})
+	ctx = xctx.WithFeatures(ctx, []string{"beta", "audit"})
+	xctx.AddTrace(ctx, "benchmark-event")
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		snapshot := xctx.SnapshotFrom(ctx)
+		benchmarkScopeSnapshot = snapshot
+		benchmarkUserID = snapshot.UserID
+		benchmarkTenantID = snapshot.TenantID
+		benchmarkTraceID = snapshot.TraceID
+		benchmarkSpanID = snapshot.SpanID
+		benchmarkRoleOK = snapshot.HasRole("admin")
+		benchmarkPermissionOK = snapshot.HasPermission("write")
 	}
 }

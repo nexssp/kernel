@@ -18,7 +18,7 @@ type TimerID uint64
 type timerNode struct {
 	id        TimerID
 	payload   any
-	rotations int
+	rotations int64
 	next      int
 	canceled  bool
 }
@@ -84,7 +84,7 @@ func (w *Wheel) Schedule(delay time.Duration, payload any) (TimerID, error) {
 	// The deadline is measured from the current point within a tick, so a
 	// fractional tick must be rounded up rather than truncated. Decompose the
 	// duration to avoid overflowing when adding the remainder.
-	ticks := int(delay / w.resolution)
+	ticks := delay / w.resolution
 	delayRemainder := delay % w.resolution
 	if delayRemainder != 0 || w.remainder != 0 {
 		ticks++
@@ -93,11 +93,20 @@ func (w *Wheel) Schedule(delay time.Duration, payload any) (TimerID, error) {
 		}
 	}
 	ticks = max(ticks, 1)
-	slot := (w.current + ticks) % len(w.slots)
+	slotCount := len(w.slots)
+	slotCountDuration := time.Duration(slotCount)
+	current := time.Duration(w.current)
+	slotOffset := ticks % slotCountDuration
+	var slot time.Duration
+	if slotOffset < slotCountDuration-current {
+		slot = current + slotOffset
+	} else {
+		slot = slotOffset - (slotCountDuration - current)
+	}
 
 	// Subtract 1 before division so exact cycle multiples (e.g. ticks == len(slots))
 	// evaluate to 0 rotations instead of 1, firing on the first full rotation.
-	rotations := (ticks - 1) / len(w.slots)
+	rotations := int64((ticks - 1) / slotCountDuration)
 
 	nodeIdx := w.freeHead
 	w.freeHead = w.nodes[nodeIdx].next

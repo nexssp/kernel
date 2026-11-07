@@ -208,6 +208,7 @@ results, err := reviewer.Do(ctx, "package main...")
 - `.Idempotent()` and `.IdempotentWithConfig(cfg)` register idempotency metadata.
 - `MemoryIdempotencyStore` provides in-memory reference coordination.
 - `IdempotencyCoordinator` defines atomic claim semantics (`Claim`, `Complete`, `Release`) with leased in-progress locks and request hash validation to detect duplicate payload conflicts.
+- Successful responses are replayed only until the configured TTL expires. Handler errors are not cached and may be retried; expired claims may be taken over while the original handler is still running. Use downstream idempotency or fencing when repeating side effects is unsafe.
 
 ### Durable Execution Identity and Resume
 - `DigestBytes` and `DigestString` create fixed-size SHA-256 bindings without heap allocation on the comparison path.
@@ -346,7 +347,12 @@ finalState, err := graph.Execute(ctx, resumeState)
 `xctx` manages request-scoped metadata without heap allocations on standard paths:
 - `NewScope(parent)` obtains a pooled `*RequestScope`. Call the returned `cleanup()` function upon request completion to return the scope to `sync.Pool`.
 - Context helpers provide typed accessors: `WithUserID`, `WithTenantID`, `WithRoles`, `WithPermissions`, `WithFeatures`, `WithTraceID`.
+- Request-scope setters, accessors, and authorization checks synchronize mutable metadata; direct field access through `ScopeFrom` remains the caller's synchronization responsibility.
+- Each accessor acquires a scope lock. For related multi-field reads, `SnapshotFrom(ctx)` takes one read lock and returns a detached identity/authorization snapshot; it clones role, permission, and feature slices (so it may allocate) and intentionally omits the separately locked trace-event ring. Use typed accessors for isolated reads; opt into a snapshot when a coherent multi-field view justifies the copy cost.
 - `CloneForAsync(ctx)` clones request metadata into a detached context, preserving tracing and identity while decoupling from the parent cancellation tree.
+
+### Atomic Filesystem Writes (`xfs`)
+`WriteFileAtomic` syncs the parent directory after rename on POSIX and returns a sync error even though the rename may already have taken effect. Windows renames remain atomic but cannot be made crash-durable with directory fsync.
 
 ### Security and Governance Guards
 - `RequireAuth()` rejects unauthenticated contexts (`xerr.KindUnauthorized`).
@@ -373,6 +379,7 @@ return xerr.Unavailable("database connection dropped", originalErr)
 - `xerr.IsTransient(err)` checks whether an error is safe to retry.
 - `xerr.From(err)` converts arbitrary Go errors into structured `*AppError` types.
 - `appErr.Public(requestID)` returns a sanitized `ErrorResponse` suitable for API responses without leaking internal causes or stack traces.
+- Validation detail values are redacted; clients receive field names and validation rules without the submitted values.
 - `xerr.Sprint(err)` renders error trees with sanitized user stack traces in development (`ENV=dev`) and structured one-line outputs in production.
 
 ---
@@ -424,7 +431,7 @@ Every event includes `Time`, `Duration`, `Kind`, `Action`, and available correla
 - `MemorySink`: Thread-safe circular ring buffer. `Events()` returns an isolated snapshot copy in oldest-to-newest order.
 - `MetricsSink`: Aggregates counters by action name and event kind. `Snapshot()` returns an isolated map.
 - `PrometheusSink`: Generates deterministic Prometheus exposition text with escaped labels.
-- `JSONLSink`: Synchronized, bounded structured JSON writer with serialized durations. Error strings are capped at `maxBytes`.
+- `JSONLSink`: Synchronized structured JSON writer with serialized durations. Raw error and recovered panic text are replaced with `[redacted]`.
 - `SlogSink`: Dispatches structured logs including duration through standard library `log/slog`.
 
 ---

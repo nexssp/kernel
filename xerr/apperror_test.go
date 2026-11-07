@@ -1,6 +1,7 @@
 package xerr_test
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"runtime"
@@ -212,6 +213,29 @@ func TestAppError_Public_EmptyRequestID(t *testing.T) {
 	pub := xerr.NotFound("x").Public("")
 	if pub.RequestID != "" {
 		t.Fatalf("RequestID = %q, want empty", pub.RequestID)
+	}
+}
+
+func TestAppError_Public_RedactsValidationValues(t *testing.T) {
+	secret := "password=sensitive-value"
+	err := xerr.Validation("request is invalid")
+	err.ValidationDetails = xerr.ValidationDetails{{Field: "password", Validation: "invalid", Value: secret}}
+	public := err.Public("request-1")
+	if len(public.Details) != 1 || public.Details[0].Field != "password" || public.Details[0].Validation != "invalid" {
+		t.Fatalf("public validation details = %+v", public.Details)
+	}
+	if public.Details[0].Value != "" {
+		t.Fatalf("public validation value = %q, want redacted", public.Details[0].Value)
+	}
+	if err.ValidationDetails[0].Value != secret {
+		t.Fatal("Public mutated the original validation details")
+	}
+	encoded, encodeErr := json.Marshal(public)
+	if encodeErr != nil {
+		t.Fatal(encodeErr)
+	}
+	if strings.Contains(string(encoded), secret) {
+		t.Fatalf("validation value leaked into public JSON: %s", encoded)
 	}
 }
 

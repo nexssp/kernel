@@ -153,6 +153,17 @@ func TestWheel_DoubleCycleDelay(t *testing.T) {
 	}
 }
 
+func TestWheel_ExtremeDelayDoesNotOverflow(t *testing.T) {
+	w := timing.New(time.Nanosecond, 8, 1)
+	w.Advance(time.Nanosecond, nil)
+	if _, err := w.Schedule(time.Duration(1<<63-1), "far-future"); err != nil {
+		t.Fatalf("Schedule(max duration) error = %v", err)
+	}
+	if got := w.Advance(time.Nanosecond, nil); len(got) != 0 {
+		t.Fatalf("extreme timer expired early: %v", got)
+	}
+}
+
 func TestWheel_ZeroAlloc(t *testing.T) {
 	w := timing.New(10*time.Millisecond, 256, 1024)
 	dst := make([]any, 0, 16)

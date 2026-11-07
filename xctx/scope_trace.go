@@ -9,10 +9,9 @@ const MaxTraceEvents = 128
 
 // AddTrace appends a diagnostic event to the request's trace ring.
 //
-// Safe for concurrent use: it is the only method that mutates TraceEvents
-// while the request is in flight. Contention is limited to concurrent
-// PublishEvent failures on the same request — an error path, not a hot
-// path — so a plain mutex is the correct tool.
+// Safe for concurrent use. TraceEvents uses a separate lock so single-field
+// metadata reads do not contend with trace writes. Paths needing both locks
+// must acquire RequestScope.mu before traceMu.
 //
 // The generation check rejects writes to a scope that has already been
 // returned to the pool, so a goroutine holding a stale context cannot

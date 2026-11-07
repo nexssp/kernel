@@ -14,6 +14,9 @@ type (
 var globalGeneration atomic.Uint64
 
 // RequestScope carries per-request metadata.
+// Use xctx accessors for concurrent access; direct field access is unsynchronized.
+// When both locks are needed, acquire mu before traceMu; code holding traceMu
+// must not acquire mu.
 //
 // Execution identity (execution id, root execution id) does not live
 // here — it is stored in typed context keys by WithExecutionID. Only
@@ -21,6 +24,7 @@ var globalGeneration atomic.Uint64
 // live on the scope.
 type RequestScope struct {
 	generation  atomic.Uint64
+	mu          sync.RWMutex
 	RequestID   string
 	TraceID     string
 	SpanID      string
@@ -40,6 +44,8 @@ type RequestScope struct {
 // Reset clears every field, retaining slice capacity up to the trace
 // ring size. It resets generation so the scope is unbound.
 func (s *RequestScope) Reset() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.generation.Store(0)
 	s.RequestID = ""
 	s.TraceID = ""
@@ -89,8 +95,9 @@ func NewScope(parent context.Context) (context.Context, *RequestScope, func()) {
 	}
 }
 
-// ScopeFrom returns the RequestScope bound to ctx, or nil.
-// Verifies the generation so a stale context fails closed.
+// ScopeFrom returns the raw RequestScope bound to ctx, or nil. It verifies the
+// generation so a stale context fails closed. Use accessors or SnapshotFrom for
+// synchronized reads; direct field access requires caller synchronization.
 func ScopeFrom(ctx context.Context) *RequestScope {
 	if ctx == nil {
 		return nil
@@ -148,4 +155,47 @@ func ensureScope(ctx context.Context) (context.Context, *RequestScope) {
 	ctx = context.WithValue(ctx, scopeKeyT{}, s)
 	ctx = context.WithValue(ctx, scopeGenKeyT{}, gen)
 	return ctx, s
+}
+
+func lockScopeForMutation(ctx context.Context) (context.Context, *RequestScope) {
+	ctx, scope := ensureScope(ctx)
+	generation, _ := ctx.Value(scopeGenKeyT{}).(uint64)
+	return lockScopeAtGeneration(ctx, scope, generation)
+}
+
+func withLockedScope(ctx context.Context, update func(*RequestScope)) context.Context {
+	ctx, scope := lockScopeForMutation(ctx)
+	defer scope.mu.Unlock()
+	update(scope)
+	return ctx
+}
+
+func lockScopeAtGeneration(ctx context.Context, scope *RequestScope, generation uint64) (context.Context, *RequestScope) {
+	scope.mu.Lock()
+	if scope.generation.Load() == generation {
+		return ctx, scope
+	}
+	scope.mu.Unlock()
+
+	scope = &RequestScope{}
+	generation = globalGeneration.Add(1)
+	scope.generation.Store(generation)
+	ctx = context.WithValue(ctx, scopeKeyT{}, scope)
+	ctx = context.WithValue(ctx, scopeGenKeyT{}, generation)
+	scope.mu.Lock()
+	return ctx, scope
+}
+
+func lockScopeForRead(ctx context.Context) *RequestScope {
+	scope := ScopeFrom(ctx)
+	if scope == nil {
+		return nil
+	}
+	generation, _ := ctx.Value(scopeGenKeyT{}).(uint64)
+	scope.mu.RLock()
+	if scope.generation.Load() == generation {
+		return scope
+	}
+	scope.mu.RUnlock()
+	return nil
 }

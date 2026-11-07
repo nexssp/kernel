@@ -17,10 +17,11 @@ func CloneForAsync(ctx context.Context) context.Context {
 	if ctx == nil {
 		return context.Background()
 	}
-	s := ScopeFrom(ctx)
+	s := lockScopeForRead(ctx)
 	if s == nil {
 		return context.WithoutCancel(ctx)
 	}
+	defer s.mu.RUnlock()
 
 	s.traceMu.Lock()
 	traceEvents := append([]string(nil), s.TraceEvents...)

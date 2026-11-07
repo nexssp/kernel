@@ -34,6 +34,57 @@ func TestStreamHookLifecycleAndItems(t *testing.T) {
 	}
 }
 
+func TestStreamAction_CancellationAfterPartialOutputIsNotSuccess(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	yielded := make(chan struct{})
+	var success, errorsSeen, cancelSeen atomic.Int64
+	stream := action.NewStream("cancel.partial", func(ctx context.Context, _ struct{}) (iter.Seq2[int, error], error) {
+		return func(yield func(int, error) bool) {
+			if !yield(1, nil) {
+				return
+			}
+			close(yielded)
+			<-ctx.Done()
+		}, nil
+	}).UseStream(action.StreamHook[struct{}, int]{
+		OnSuccess: func(context.Context, struct{}, *action.Meta) { success.Add(1) },
+		OnError:   func(context.Context, struct{}, error, *action.Meta) { errorsSeen.Add(1) },
+		OnCancel:  func(context.Context, struct{}, *action.Meta) { cancelSeen.Add(1) },
+	})
+	seq, err := stream.Do(ctx, struct{}{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		var terminalError error
+		for _, itemError := range seq {
+			if itemError != nil {
+				terminalError = itemError
+			}
+		}
+		done <- terminalError
+	}()
+	select {
+	case <-yielded:
+	case <-time.After(2 * time.Second):
+		t.Fatal("stream did not yield its partial result")
+	}
+	cancel()
+	select {
+	case terminalError := <-done:
+		if !errors.Is(terminalError, context.Canceled) {
+			t.Fatalf("terminal error = %v, want context.Canceled", terminalError)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("stream did not terminate after cancellation")
+	}
+	if success.Load() != 0 || errorsSeen.Load() != 1 || cancelSeen.Load() != 1 {
+		t.Fatalf("success=%d errors=%d cancel=%d", success.Load(), errorsSeen.Load(), cancelSeen.Load())
+	}
+}
+
 func TestStreamHookTimeoutAndCancel(t *testing.T) {
 	for name, makeCtx := range map[string]func() (context.Context, context.CancelFunc){
 		"timeout": func() (context.Context, context.CancelFunc) {

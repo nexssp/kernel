@@ -4,12 +4,15 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"reflect"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -287,8 +290,8 @@ func idempotencyResponseEntry(ctx context.Context, res any, requestHash [32]byte
 }
 
 func extractIdempotencyKey[Req any](ctx context.Context, req Req, cfg IdempotencyConfig, requestHash [32]byte) string {
-	if s := xctx.ScopeFrom(ctx); s != nil && s.RequestID != "" {
-		return s.RequestID
+	if requestID := xctx.RequestIDFrom(ctx); requestID != "" {
+		return requestID
 	}
 	if b, ok := any(req).([]byte); ok && cfg.KeyFunc != nil {
 		return cfg.KeyFunc(b)
@@ -378,12 +381,118 @@ func hashPayloadBytes(v any) ([32]byte, error) {
 		buf = strconv.AppendUint(buf, x, 10)
 		return sha256.Sum256(buf), nil
 	}
+	if hasTextMarshalerMapKey(reflect.ValueOf(v), make(map[idempotencyMapVisit]struct{})) {
+		return [32]byte{}, errors.New("idempotency: TextMarshaler map keys are not supported")
+	}
 	// Fallback for complex types — uses encoding/json which allocates.
 	b, err := json.Marshal(v)
 	if err != nil {
 		return [32]byte{}, fmt.Errorf("marshal request payload: %w", err)
 	}
 	return sha256.Sum256(b), nil
+}
+
+type idempotencyMapVisit struct {
+	typeOf  reflect.Type
+	pointer uintptr
+	length  int
+}
+
+var (
+	jsonMarshalerType = reflect.TypeFor[json.Marshaler]()
+	textMarshalerType = reflect.TypeFor[encoding.TextMarshaler]()
+)
+
+func hasTextMarshalerMapKey(value reflect.Value, seen map[idempotencyMapVisit]struct{}) bool {
+	if !value.IsValid() || hasJSONMarshaler(value) {
+		return false
+	}
+	switch value.Kind() {
+	case reflect.Interface:
+		return !value.IsNil() && hasTextMarshalerMapKey(value.Elem(), seen)
+	case reflect.Pointer:
+		return !value.IsNil() && markIdempotencyValue(value, seen) && hasTextMarshalerMapKey(value.Elem(), seen)
+	case reflect.Map:
+		return !value.IsNil() && markIdempotencyValue(value, seen) && mapHasTextMarshalerKeys(value, seen)
+	case reflect.Slice:
+		return !value.IsNil() && markIdempotencyValue(value, seen) && sequenceHasTextMarshalerKeys(value, seen)
+	case reflect.Array:
+		return sequenceHasTextMarshalerKeys(value, seen)
+	case reflect.Struct:
+		return structHasTextMarshalerKeys(value, seen)
+	// Scalar and unsupported kinds cannot contain nested map keys.
+	case reflect.Invalid, reflect.Bool, reflect.Int, reflect.Int8, reflect.Int16,
+		reflect.Int32, reflect.Int64, reflect.Uint, reflect.Uint8, reflect.Uint16,
+		reflect.Uint32, reflect.Uint64, reflect.Uintptr, reflect.Float32, reflect.Float64,
+		reflect.Complex64, reflect.Complex128, reflect.Chan, reflect.Func,
+		reflect.String, reflect.UnsafePointer:
+		return false
+	default:
+		return false
+	}
+}
+
+func markIdempotencyValue(value reflect.Value, seen map[idempotencyMapVisit]struct{}) bool {
+	visit := idempotencyMapVisit{typeOf: value.Type(), pointer: value.Pointer()}
+	if value.Kind() == reflect.Slice {
+		visit.length = value.Len()
+	}
+	if _, ok := seen[visit]; ok {
+		return false
+	}
+	seen[visit] = struct{}{}
+	return true
+}
+
+func mapHasTextMarshalerKeys(value reflect.Value, seen map[idempotencyMapVisit]struct{}) bool {
+	keyType := value.Type().Key()
+	if keyType.Kind() != reflect.String && keyType.Implements(textMarshalerType) {
+		return true
+	}
+	iterator := value.MapRange()
+	for iterator.Next() {
+		if hasTextMarshalerMapKey(iterator.Value(), seen) {
+			return true
+		}
+	}
+	return false
+}
+
+func sequenceHasTextMarshalerKeys(value reflect.Value, seen map[idempotencyMapVisit]struct{}) bool {
+	for index := range value.Len() {
+		if hasTextMarshalerMapKey(value.Index(index), seen) {
+			return true
+		}
+	}
+	return false
+}
+
+func structHasTextMarshalerKeys(value reflect.Value, seen map[idempotencyMapVisit]struct{}) bool {
+	for index := range value.NumField() {
+		field := value.Type().Field(index)
+		if field.PkgPath != "" && !field.Anonymous {
+			continue
+		}
+		if tag, ok := field.Tag.Lookup("json"); ok {
+			name, _, _ := strings.Cut(tag, ",")
+			if name == "-" {
+				continue
+			}
+		}
+		if hasTextMarshalerMapKey(value.Field(index), seen) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasJSONMarshaler(value reflect.Value) bool {
+	typeOf := value.Type()
+	if typeOf.Implements(jsonMarshalerType) {
+		return true
+	}
+	// TextMarshaler affects map keys only; those are checked directly above.
+	return value.CanAddr() && value.Addr().Type().Implements(jsonMarshalerType)
 }
 
 type memEntry struct {

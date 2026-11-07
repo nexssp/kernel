@@ -44,8 +44,19 @@ func (e *AppError) Public(requestID string) ErrorResponse {
 		Error:     string(e.Kind),
 		Message:   message,
 		RequestID: requestID,
-		Details:   e.ValidationDetails,
+		Details:   publicValidationDetails(e.ValidationDetails),
 	}
+}
+
+func publicValidationDetails(details ValidationDetails) ValidationDetails {
+	if len(details) == 0 {
+		return nil
+	}
+	publicDetails := append(ValidationDetails(nil), details...)
+	for index := range publicDetails {
+		publicDetails[index].Value = ""
+	}
+	return publicDetails
 }
 
 // IsTransient reports whether the error may succeed on retry.

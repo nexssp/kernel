@@ -66,7 +66,7 @@ func TestPrometheusSink_NilWriterReturnsError(t *testing.T) {
 	}
 }
 
-func TestJSONLSink_FieldsAndBoundedError(t *testing.T) {
+func TestJSONLSink_FieldsAndRedactedDiagnostics(t *testing.T) {
 	t.Parallel()
 
 	var buf bytes.Buffer
@@ -75,7 +75,7 @@ func TestJSONLSink_FieldsAndBoundedError(t *testing.T) {
 		Time: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC),
 		Kind: observe.KindError, Action: "account.lookup",
 		ExecutionID: "exec-9", TraceID: "trace-8", SpanID: "span-7", Attempt: 3,
-		Request: "req-data", Error: errors.New("very long error message that exceeds max bytes"),
+		Request: "req-data", Error: errors.New("secret-token: error details"), Recovered: "panic-secret",
 	})
 	line := buf.String()
 	for _, want := range []string{`"kind":"error"`, `"action":"account.lookup"`, `"execution_id":"exec-9"`, `"trace_id":"trace-8"`, `"span_id":"span-7"`, `"attempt":3`} {
@@ -83,8 +83,11 @@ func TestJSONLSink_FieldsAndBoundedError(t *testing.T) {
 			t.Fatalf("missing %q in %s", want, line)
 		}
 	}
-	if strings.Contains(line, "very long error message") || !strings.HasSuffix(line, "\n") {
-		t.Fatalf("error was not bounded or line lacks newline: %q", line)
+	if strings.Contains(line, "secret-token") || strings.Contains(line, "panic-secret") {
+		t.Fatalf("raw diagnostic text leaked into JSONL: %q", line)
+	}
+	if !strings.Contains(line, `"error":"[redacted]"`) || !strings.Contains(line, `"recovered":"[redacted]"`) || !strings.HasSuffix(line, "\n") {
+		t.Fatalf("diagnostic markers or newline missing: %q", line)
 	}
 }
 

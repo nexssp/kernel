@@ -133,14 +133,12 @@ func safeInvokeWorker[In, Out any](
 // feedUpstream pushes items onto workChan, then reports the terminal
 // error on feedDone BEFORE closing workChan.
 //
-// Ordering is load-bearing: the feedDone send happens BEFORE close(workChan).
-// Workers cannot all exit before workChan is closed, and resultChan is closed
-// only after every worker exits, so the send also happens before drainResults
-// can observe a closed resultChan. Its non-blocking peek on feedDone can
-// therefore never miss the terminal error. The previous shape — feeding the
-// channel from feedUpstream's return value — sent AFTER close(workChan), and
-// a fast-draining pool could close resultChan first, silently dropping the
-// upstream error.
+// While ctx remains live, the feedDone send happens before close(workChan),
+// so the non-blocking peek in drainResults cannot miss the terminal error.
+// Cancellation may let workers exit before the feeder sends; drainResults
+// reports ctx.Err() instead, so dropping that terminal error is intentional.
+// The previous shape sent AFTER close(workChan), allowing a fast-draining pool
+// to miss an upstream error even when ctx remained live.
 //
 // A panic inside the upstream iterator is recovered and reported as a
 // feed error, matching the worker-level isolation.
@@ -185,11 +183,9 @@ func feedUpstreamSeq[In any](
 // feeder has finished; setting the local reference to nil thereafter
 // disables the case so the select does not busy-spin.
 //
-// The non-blocking peek on feedDone when resultChan closes is safe because
-// of the feeder's ordering guarantee: the feedDone send happens before
-// close(workChan), which happens before any worker exit, which happens
-// before close(resultChan). By the time resultChan is observed closed, the
-// terminal error is already buffered in feedDone.
+// When ctx remains live, the feeder sends to feedDone before closing workChan,
+// so the terminal error is buffered before resultChan closes. If cancellation
+// lets workers exit first, ctx.Err() takes precedence over the feeder error.
 //
 // ctx.Err() gates all upstream-error reporting: once the caller's
 // context is canceled, any upstream error is post-cancellation noise
@@ -207,6 +203,8 @@ func drainResults[Out any](
 		select {
 		case <-ctx.Done():
 			cancel()
+			var zero Out
+			yield(zero, ctx.Err())
 			return
 
 		case err := <-feedDone:
@@ -226,7 +224,10 @@ func drainResults[Out any](
 					default:
 					}
 				}
-				if upstreamError != nil {
+				if err := ctx.Err(); err != nil {
+					var zero Out
+					yield(zero, err)
+				} else if upstreamError != nil {
 					var zero Out
 					yield(zero, upstreamError)
 				}

@@ -235,6 +235,41 @@ func TestWorkerPool_ContextCanceledDuringWork(t *testing.T) {
 	}
 }
 
+func TestWorkerPool_ContextCancellationYieldsError(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	workerStarted := make(chan struct{})
+	op := stream.WorkerPool[int, int](ctx, 1, 0, func(workerCtx context.Context, _ int) (int, error) {
+		close(workerStarted)
+		<-workerCtx.Done()
+		return 0, workerCtx.Err()
+	})
+	done := make(chan error, 1)
+	go func() {
+		var terminalError error
+		for _, err := range op(source(1)) {
+			if err != nil {
+				terminalError = err
+			}
+		}
+		done <- terminalError
+	}()
+	select {
+	case <-workerStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("worker did not start")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("terminal error = %v, want context.Canceled", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("operator did not return after cancellation")
+	}
+}
+
 // TestWorkerPool_DownstreamEarlyStop asserts that stopping the consumer
 // halts the pool before the slow feeder has produced its entire stream.
 // The feeder sleeps 1ms per item, so the full 1000 items need ≥ 1s;
