@@ -212,6 +212,7 @@ func IdempotencyMiddleware[Req, Res any](store IdempotencyStore, cfg Idempotency
 					if execErr != nil {
 						return nil, execErr
 					}
+					res = normalizeJSONNullResult(res)
 
 					entry, responseErr := idempotencyResponseEntry(ctx, res, reqHash)
 					if completeErr := coord.Complete(context.WithoutCancel(ctx), key, claim.Token, entry, ttl); completeErr != nil {
@@ -230,6 +231,7 @@ func IdempotencyMiddleware[Req, Res any](store IdempotencyStore, cfg Idempotency
 				if execErr != nil {
 					return nil, execErr
 				}
+				res = normalizeJSONNullResult(res)
 
 				entry, responseErr := idempotencyResponseEntry(ctx, res, reqHash)
 				store.Set(ctx, key, entry, ttl)

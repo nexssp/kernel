@@ -70,6 +70,10 @@ The Kernel owns the lifecycle, concurrency safety, and execution semantics of an
 | `timing` / `xsync` | Timing-wheel scheduling and generic pooling primitives. |
 | `xtest/ktest` | Allocation checks, polling/leak helpers, test contexts, action fakes, contract assertions, and fluent action test runs. |
 
+### Ring buffer memory budgets
+
+`ringbuf.NewChecked(capacity)` validates the rounded allocation against the default 64 MiB per-ring budget and returns an error before allocating. For an intentional per-ring override, use `ringbuf.NewWithOptions(ringbuf.Options{Capacity: ..., MemoryBudgetBytes: ...})`. The source-compatible `ringbuf.New(capacity)` also uses the safe default and returns `nil` when validation fails; over-limit requests are never silently clamped to a smaller ring.
+
 ---
 
 ## Basic Action Usage
@@ -332,12 +336,13 @@ resumeState := dag.AcquireState()
 for k, v := range savedSnapshot { resumeState.Set(k, v) }
 defer resumeState.Release()
 
-// Completed nodes are skipped automatically; execution continues
+// Completed node actions are skipped; routing is evaluated again from entry
 finalState, err := graph.Execute(ctx, resumeState)
 ```
 
 - When a node returns `dag.ErrSuspended`, `Execute` returns `(partialState, dag.ErrSuspended)` without purging the state from memory.
-- When re-executing with an existing state, any node whose output key (`tasks.<nodeID>.output`) is already present in `State` is skipped, ensuring non-idempotent upstream actions do not re-run.
+- A resumed dynamic DAG starts traversal again at its configured entry. Node actions whose output key (`tasks.<nodeID>.output`) is already present in `State` are skipped, but conditional-edge routers run again on each traversal.
+- Make routers deterministic from persisted state and stable graph configuration when a resumed workflow must follow the same branch. Do not rely on time, randomness, or mutable external state unless a changed route on resume is intentional.
 
 ---
 

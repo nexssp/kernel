@@ -1,6 +1,7 @@
 package ringbuf_test
 
 import (
+	"errors"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -115,6 +116,55 @@ func TestRingNewRoundsToPowerOfTwo(t *testing.T) {
 			t.Errorf("New(%d).Cap() = %d, want %d", in, got, want)
 		}
 	}
+}
+
+func TestRingMemoryBudget(t *testing.T) {
+	t.Run("default budget rejects before allocation", func(t *testing.T) {
+		_, err := ringbuf.NewChecked(1 << 20)
+		if !errors.Is(err, ringbuf.ErrMemoryBudgetExceeded) {
+			t.Fatalf("NewChecked() error = %v, want ErrMemoryBudgetExceeded", err)
+		}
+		if got := ringbuf.New(1 << 20); got != nil {
+			t.Fatal("New() allocated a ring beyond its default budget")
+		}
+	})
+
+	t.Run("explicit budget applies per ring", func(t *testing.T) {
+		ring, err := ringbuf.NewWithOptions(ringbuf.Options{
+			Capacity:          1024,
+			MemoryBudgetBytes: 1 << 20,
+		})
+		if err != nil {
+			t.Fatalf("NewWithOptions() error = %v", err)
+		}
+		if ring.Cap() != 1024 {
+			t.Fatalf("ring capacity = %d, want 1024", ring.Cap())
+		}
+	})
+
+	t.Run("rounded capacity is charged", func(t *testing.T) {
+		_, err := ringbuf.NewWithOptions(ringbuf.Options{
+			Capacity:          1025,
+			MemoryBudgetBytes: 1 << 18,
+		})
+		if !errors.Is(err, ringbuf.ErrMemoryBudgetExceeded) {
+			t.Fatalf("NewWithOptions() error = %v, want ErrMemoryBudgetExceeded after rounding", err)
+		}
+	})
+
+	t.Run("invalid options do not allocate", func(t *testing.T) {
+		_, err := ringbuf.NewWithOptions(ringbuf.Options{Capacity: 2})
+		if !errors.Is(err, ringbuf.ErrMemoryBudgetExceeded) {
+			t.Fatalf("zero budget error = %v, want ErrMemoryBudgetExceeded", err)
+		}
+		_, err = ringbuf.NewWithOptions(ringbuf.Options{
+			Capacity:          int(^uint(0) >> 1),
+			MemoryBudgetBytes: ^uint64(0),
+		})
+		if !errors.Is(err, ringbuf.ErrInvalidCapacity) {
+			t.Fatalf("oversized capacity error = %v, want ErrInvalidCapacity", err)
+		}
+	})
 }
 
 func TestRingLen(t *testing.T) {

@@ -41,6 +41,41 @@ func TestDynamicResumeSkipsCompletedNode(t *testing.T) {
 	}
 }
 
+func TestDynamicResumeReevaluatesRouter(t *testing.T) {
+	var actionCalls, routerCalls int
+	act := action.New("step", func(context.Context, dag.ReadState) (string, error) {
+		actionCalls++
+		return "done", nil
+	}).Build()
+	graph, err := dag.New(t.Name()).
+		AddNode("step", "step", act).
+		AddConditionalEdge("step", func(context.Context, dag.ReadState) (string, error) {
+			routerCalls++
+			return "end", nil
+		}).
+		Compile()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	first, err := graph.Execute(context.Background(), dag.ReadState{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Release()
+	resumed, err := graph.Execute(context.Background(), first.AsRead())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resumed.Release()
+	if actionCalls != 1 {
+		t.Fatalf("node action calls = %d, want 1", actionCalls)
+	}
+	if routerCalls != 2 {
+		t.Fatalf("router calls = %d, want one call per Execute", routerCalls)
+	}
+}
+
 func TestDynamicExecutionDoesNotMutateRetainedReadState(t *testing.T) {
 	var captured dag.ReadState
 	act := action.New("step", func(_ context.Context, node *dag.NodeContext) (string, error) {

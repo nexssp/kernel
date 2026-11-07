@@ -29,6 +29,33 @@ func TestLinearBackoff(t *testing.T) {
 	}
 }
 
+func TestLinearBackoffSaturatesOverflow(t *testing.T) {
+	const (
+		maxDuration = time.Duration(1<<63 - 1)
+		minDuration = time.Duration(-1 << 63)
+	)
+	tests := []struct {
+		name string
+		step time.Duration
+		try  int
+		want time.Duration
+	}{
+		{name: "positive boundary", step: maxDuration / 2, try: 2, want: maxDuration - 1},
+		{name: "positive overflow", step: maxDuration / 2, try: 3, want: maxDuration},
+		{name: "negative boundary", step: minDuration, try: 1, want: minDuration},
+		{name: "negative step overflow", step: minDuration, try: 2, want: minDuration},
+		{name: "negative attempt overflow", step: maxDuration, try: -2, want: minDuration},
+		{name: "positive product from negatives", step: minDuration, try: -1, want: maxDuration},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := action.LinearBackoff(test.step)(test.try); got != test.want {
+				t.Fatalf("LinearBackoff(%d)(%d) = %d, want %d", test.step, test.try, got, test.want)
+			}
+		})
+	}
+}
+
 func TestConstantBackoff(t *testing.T) {
 	c := action.ConstantBackoff(123 * time.Millisecond)
 	for i := 1; i <= 3; i++ {

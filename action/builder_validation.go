@@ -18,7 +18,7 @@ func (b *Builder[Req, Res]) Validate(fn func(ctx context.Context, req Req) error
 			if fn != nil {
 				if err := fn(ctx, req); err != nil {
 					var zero Res
-					if appErr, ok := errors.AsType[*xerr.AppError](err); ok {
+					if appErr, ok := errors.AsType[*xerr.AppError](err); ok && appErr != nil {
 						return zero, appErr
 					}
 					return zero, xerr.Validation("validation failed", err)

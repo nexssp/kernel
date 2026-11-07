@@ -337,3 +337,36 @@ func TestIdempotency_ReplaysNilInterfaceResult(t *testing.T) {
 		})
 	}
 }
+
+func TestIdempotency_ReplaysTypedNilPointerAsNilInterface(t *testing.T) {
+	stores := map[string]func() action.IdempotencyStore{
+		"coordinator": func() action.IdempotencyStore {
+			return action.NewMemoryIdempotencyStore(time.Hour)
+		},
+		"store_only": func() action.IdempotencyStore {
+			return &idempotencyGetBarrier{IdempotencyStore: action.NewMemoryIdempotencyStore(time.Hour)}
+		},
+	}
+	for name, newStore := range stores {
+		t.Run(name, func(t *testing.T) {
+			type resultValue struct{}
+			var calls atomic.Int32
+			act := action.New("idempotency.typed-nil-result", func(context.Context, string) (any, error) {
+				calls.Add(1)
+				var result *resultValue
+				return result, nil
+			}).IdempotentWithConfig(action.IdempotencyConfig{Enabled: true, Store: newStore()}).Build()
+			ctx := ktest.RequestContext(t, "typed-nil-result-key")
+
+			for range 2 {
+				result, err := act.Do(ctx, "request")
+				if err != nil || result != nil {
+					t.Fatalf("typed-nil result call = %#v / %v, want nil interface / nil", result, err)
+				}
+			}
+			if got := calls.Load(); got != 1 {
+				t.Fatalf("handler calls = %d, want 1", got)
+			}
+		})
+	}
+}

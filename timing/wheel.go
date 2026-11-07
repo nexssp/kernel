@@ -8,8 +8,14 @@ package timing
 import (
 	"errors"
 	"math"
+	"slices"
 	"time"
 )
+
+const maxSimpleAdvanceTicks = 64
+
+// ErrNegativeAdvance is returned when AdvanceChecked receives a negative delta.
+var ErrNegativeAdvance = errors.New("timing wheel advance duration must not be negative")
 
 // TimerID uniquely identifies a scheduled timer for O(1) cancellation.
 // Upper 32 bits = epoch (generation), Lower 32 bits = slot index.
@@ -19,8 +25,16 @@ type timerNode struct {
 	id        TimerID
 	payload   any
 	rotations int64
+	prev      int
 	next      int
 	canceled  bool
+}
+
+type wheelEvent struct {
+	tick  int64
+	index int
+	slot  int
+	order int
 }
 
 // Wheel is an O(1) hashed timing wheel. It is demand-driven: the caller
@@ -33,6 +47,7 @@ type Wheel struct {
 	current    int
 	remainder  time.Duration
 	epoch      uint32
+	events     []wheelEvent
 }
 
 // New creates a timing wheel with the given resolution (tick size).
@@ -118,12 +133,17 @@ func (w *Wheel) Schedule(delay time.Duration, payload any) (TimerID, error) {
 	//nolint:gosec // nodeIdx is positive index in nodes array
 	id := (TimerID(w.epoch) << 32) | TimerID(nodeIdx)
 
+	next := w.slots[slot]
 	w.nodes[nodeIdx] = timerNode{
 		id:        id,
 		payload:   payload,
 		rotations: rotations,
-		next:      w.slots[slot],
+		prev:      -1,
+		next:      next,
 		canceled:  false,
+	}
+	if next != -1 {
+		w.nodes[next].prev = nodeIdx
 	}
 	w.slots[slot] = nodeIdx
 
@@ -144,15 +164,49 @@ func (w *Wheel) Cancel(id TimerID) bool {
 }
 
 // Advance moves the wheel forward by dt and appends expired payloads to dst.
+// For a negative delta it leaves the wheel unchanged; use AdvanceChecked when
+// the caller needs to observe the validation error.
 func (w *Wheel) Advance(dt time.Duration, dst []any) []any {
-	w.remainder += dt
-	ticks := int(w.remainder / w.resolution)
-	w.remainder -= time.Duration(ticks) * w.resolution
+	advanced, err := w.AdvanceChecked(dt, dst)
+	if err != nil {
+		return dst
+	}
+	return advanced
+}
 
+// AdvanceChecked advances the wheel and reports invalid negative deltas.
+// Large catch-up intervals are processed in work bounded by the node pool,
+// preserving timer firing order and cancellation cleanup semantics.
+func (w *Wheel) AdvanceChecked(dt time.Duration, dst []any) ([]any, error) {
+	if dt < 0 {
+		return dst, ErrNegativeAdvance
+	}
+	ticks, remainder := advanceTicks(dt, w.remainder, w.resolution)
+	w.remainder = remainder
+	if ticks == 0 {
+		return dst, nil
+	}
+	if ticks <= maxSimpleAdvanceTicks {
+		return w.advanceSimple(int(ticks), dst), nil
+	}
+	return w.advanceMany(ticks, dst), nil
+}
+
+func advanceTicks(dt, remainder, resolution time.Duration) (int64, time.Duration) {
+	ticks := int64(dt / resolution)
+	partial := dt % resolution
+	remaining := resolution - remainder
+	if partial >= remaining {
+		ticks++
+		return ticks, partial - remaining
+	}
+	return ticks, remainder + partial
+}
+
+func (w *Wheel) advanceSimple(ticks int, dst []any) []any {
 	for range ticks {
 		w.current = (w.current + 1) % len(w.slots)
 
-		prev := -1
 		curr := w.slots[w.current]
 
 		for curr != -1 {
@@ -160,32 +214,110 @@ func (w *Wheel) Advance(dt time.Duration, dst []any) []any {
 			next := node.next
 
 			if node.canceled {
-				w.unlinkAndFree(prev, curr, next)
+				w.unlinkAndFree(w.current, curr)
 				curr = next
 				continue
 			}
 
 			if node.rotations > 0 {
 				node.rotations--
-				prev = curr
 				curr = next
 				continue
 			}
 
 			dst = append(dst, node.payload)
-			w.unlinkAndFree(prev, curr, next)
+			w.unlinkAndFree(w.current, curr)
 			curr = next
 		}
 	}
 	return dst
 }
 
-func (w *Wheel) unlinkAndFree(prev, curr, next int) {
-	if prev == -1 {
-		w.slots[w.current] = next
-	} else {
-		w.nodes[prev].next = next
+func (w *Wheel) advanceMany(ticks int64, dst []any) []any {
+	cycle := int64(len(w.slots))
+	events := w.events[:0]
+	for slot, head := range w.slots {
+		firstVisit := int64(slot - w.current)
+		if firstVisit <= 0 {
+			firstVisit += cycle
+		}
+		var visits int64
+		if ticks >= firstVisit {
+			visits = 1 + (ticks-firstVisit)/cycle
+		}
+		order := 0
+		for index := head; index != -1; index = w.nodes[index].next {
+			node := &w.nodes[index]
+			switch {
+			case node.canceled && visits > 0:
+				events = append(events, wheelEvent{tick: firstVisit, index: index, slot: slot, order: order})
+			case !node.canceled && visits > node.rotations:
+				fireAt := firstVisit + node.rotations*cycle
+				events = append(events, wheelEvent{tick: fireAt, index: index, slot: slot, order: order})
+			case !node.canceled:
+				node.rotations -= visits
+			}
+			order++
+		}
 	}
-	w.nodes[curr].next = w.freeHead
-	w.freeHead = curr
+
+	slices.SortFunc(events, compareWheelEvents)
+	for _, event := range events {
+		node := &w.nodes[event.index]
+		if !node.canceled {
+			dst = append(dst, node.payload)
+		}
+		w.unlinkAndFree(event.slot, event.index)
+	}
+	w.events = events[:0]
+	w.advanceCurrent(ticks)
+	return dst
+}
+
+func compareWheelEvents(a, b wheelEvent) int {
+	if a.tick < b.tick {
+		return -1
+	}
+	if a.tick > b.tick {
+		return 1
+	}
+	if a.slot < b.slot {
+		return -1
+	}
+	if a.slot > b.slot {
+		return 1
+	}
+	if a.order < b.order {
+		return -1
+	}
+	if a.order > b.order {
+		return 1
+	}
+	return 0
+}
+
+func (w *Wheel) advanceCurrent(ticks int64) {
+	cycle := int64(len(w.slots))
+	offset := int(ticks % cycle)
+	untilWrap := len(w.slots) - w.current
+	if offset >= untilWrap {
+		w.current = offset - untilWrap
+		return
+	}
+	w.current += offset
+}
+
+func (w *Wheel) unlinkAndFree(slot, current int) {
+	node := &w.nodes[current]
+	if node.prev == -1 {
+		w.slots[slot] = node.next
+	} else {
+		w.nodes[node.prev].next = node.next
+	}
+	if node.next != -1 {
+		w.nodes[node.next].prev = node.prev
+	}
+	node.prev = -1
+	node.next = w.freeHead
+	w.freeHead = current
 }

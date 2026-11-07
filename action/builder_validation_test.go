@@ -65,3 +65,28 @@ func TestValidatePreservesWrappedAppError(t *testing.T) {
 		t.Fatalf("expected forbidden kind, got %s", xerr.KindFrom(err))
 	}
 }
+
+func TestValidateTypedNilAppErrorFallsBackToValidation(t *testing.T) {
+	for _, wrap := range []bool{false, true} {
+		name := "direct"
+		if wrap {
+			name = "wrapped"
+		}
+		t.Run(name, func(t *testing.T) {
+			var appErr *xerr.AppError
+			act := action.New("test.validate.typed-nil", func(_ context.Context, in string) (string, error) {
+				return in, nil
+			}).Validate(func(context.Context, string) error {
+				if wrap {
+					return fmt.Errorf("wrapped: %w", appErr)
+				}
+				return appErr
+			}).Build()
+
+			_, err := act.Do(context.Background(), "input")
+			if err == nil || xerr.KindFrom(err) != xerr.KindValidation {
+				t.Fatalf("typed-nil validation error = %v, want KindValidation", err)
+			}
+		})
+	}
+}

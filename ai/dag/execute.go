@@ -21,10 +21,11 @@ import (
 //   - Dynamic mode (when the DAG has at least one conditional edge).
 //     The engine walks from entryID, one node per step, following
 //     RouterFunc decisions until a router returns "" or "end", or
-//     until maxSteps is exceeded. Layers are ignored; resume state is
-//     honored the same way (nodes whose output key exists are not
-//     re-executed, so a resumed dynamic run continues from where it
-//     stopped).
+//     until maxSteps is exceeded. Layers are ignored. Each Execute starts
+//     at entryID: node actions with existing output keys are skipped, but
+//     conditional routers are evaluated again. Routers should be
+//     deterministic from persisted state and stable graph configuration
+//     when a resumed run must follow the same path.
 //
 // Layer callback: attach with WithLayerCallback. In layer mode it
 // fires once per completed layer. In dynamic mode it is not fired —

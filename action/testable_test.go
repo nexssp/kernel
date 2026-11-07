@@ -3,6 +3,7 @@ package action_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/nexssp/kernel/action"
@@ -72,5 +73,26 @@ func TestTestable_ExpectErrPlainError(t *testing.T) {
 	// ExpectErr should return an error because the error is NOT an xerr.AppError
 	if err := testable.ExpectErr(context.Background(), 1, string(xerr.KindValidation)); err == nil {
 		t.Fatal("expected ExpectErr to return error for non-AppError")
+	}
+}
+
+func TestTestable_ExpectErrTypedNilAppError(t *testing.T) {
+	for _, wrap := range []bool{false, true} {
+		name := "direct"
+		if wrap {
+			name = "wrapped"
+		}
+		t.Run(name, func(t *testing.T) {
+			var appErr *xerr.AppError
+			act := action.New("typed-nil", func(context.Context, int) (int, error) {
+				if wrap {
+					return 0, fmt.Errorf("wrapped: %w", appErr)
+				}
+				return 0, appErr
+			}).Build()
+			if err := action.TestFromAction(act).ExpectErr(context.Background(), 1, string(xerr.KindValidation)); err == nil {
+				t.Fatal("ExpectErr() returned nil for a typed-nil AppError")
+			}
+		})
 	}
 }

@@ -4,8 +4,9 @@
 // false-share. Power-of-two capacity; Vyukov MPMC queue discipline
 // adapted for fixed-size slots.
 //
-// Zero allocation on Push/Pop/BatchDrain in steady state. No locks. The
-// only allocation is the backing slices in New.
+// Zero allocation on Push/Pop/BatchDrain in steady state. No locks. New
+// allocates only after checking the Ring header and backing slices against
+// the configured memory budget.
 //
 // Slot fields are deliberately generic: Seq and Timestamp are owned by
 // the ring, everything else is caller-defined. If a caller needs more
@@ -15,6 +16,8 @@
 package ringbuf
 
 import (
+	"errors"
+	"fmt"
 	"sync/atomic"
 	"unsafe"
 
@@ -38,9 +41,28 @@ type Slot struct {
 const (
 	slotSize        = 64
 	defaultCapacity = 1024
-	maxCapacity     = capacity.MaxPowerOfTwo // sane upper bound; guards New against overflow
+	maxCapacity     = capacity.MaxPowerOfTwo // hard capacity bound, independent of the memory budget
 	lenMaxAttempts  = 8                      // Eight attempts tolerate brief contention while bounding Len latency.
 )
+
+// DefaultMemoryBudgetBytes is the default per-Ring memory budget (64 MiB).
+const DefaultMemoryBudgetBytes uint64 = 64 << 20
+
+var (
+	// ErrInvalidCapacity reports a capacity beyond the supported maximum.
+	ErrInvalidCapacity = errors.New("ringbuf: invalid capacity")
+	// ErrMemoryBudgetExceeded reports a ring allocation larger than its budget.
+	ErrMemoryBudgetExceeded = errors.New("ringbuf: memory budget exceeded")
+)
+
+// Options configure one Ring allocation. Capacity below 2 retains New's
+// historical default-capacity behavior. MemoryBudgetBytes is required and
+// includes the Ring header plus its backing arrays, excluding allocator
+// metadata and size-class rounding.
+type Options struct {
+	Capacity          int
+	MemoryBudgetBytes uint64
+}
 
 // Compile-time assertion: Slot must be exactly slotSize bytes. The
 // paired negative-index trick fails the build in either direction.
@@ -62,7 +84,7 @@ var (
 	_ [int(unsafe.Sizeof(paddedSeq{})) - slotSize]struct{}
 )
 
-// Ring is a fixed-capacity MPMC ring buffer. Use New.
+// Ring is a fixed-capacity MPMC ring buffer. Use New or NewWithOptions.
 //
 // head and tail are padded to cache lines so concurrent producers and
 // consumers do not false-share the two counters.
@@ -77,20 +99,43 @@ type Ring struct {
 	mask     uint64
 }
 
-// New allocates a Ring. A capacity below 2 is replaced with
-// defaultCapacity (1024); otherwise capacity is rounded up to the next
-// power of two and clamped to maxCapacity. The smallest ring
-// obtainable is New(2).
+// New allocates a Ring using the default 64 MiB budget. A capacity below 2
+// is replaced with defaultCapacity (1024); otherwise capacity is rounded up
+// to the next power of two. It returns nil when validation fails; use
+// NewChecked to inspect the error. Requests are never clamped to a smaller
+// capacity.
 func New(requestedCapacity int) *Ring {
+	ring, err := NewChecked(requestedCapacity)
+	if err != nil {
+		return nil
+	}
+	return ring
+}
+
+// NewChecked allocates a Ring using DefaultMemoryBudgetBytes and reports
+// invalid or over-budget capacities before allocating.
+func NewChecked(requestedCapacity int) (*Ring, error) {
+	return NewWithOptions(Options{
+		Capacity:          requestedCapacity,
+		MemoryBudgetBytes: DefaultMemoryBudgetBytes,
+	})
+}
+
+// NewWithOptions allocates a Ring after validating its rounded capacity and
+// estimated allocation size. MemoryBudgetBytes must be nonzero; the caller
+// may explicitly choose a budget different from DefaultMemoryBudgetBytes.
+func NewWithOptions(options Options) (*Ring, error) {
+	requestedCapacity := options.Capacity
 	if requestedCapacity < 2 {
 		requestedCapacity = defaultCapacity
 	}
-	if requestedCapacity > maxCapacity {
-		requestedCapacity = maxCapacity
-	}
 	cap2, ok := capacity.PowerOfTwoCeiling(requestedCapacity, maxCapacity)
 	if !ok {
-		return nil
+		return nil, fmt.Errorf("ringbuf: capacity %d exceeds maximum %d: %w", requestedCapacity, maxCapacity, ErrInvalidCapacity)
+	}
+	requiredBytes := ringAllocationBytes(cap2)
+	if requiredBytes > options.MemoryBudgetBytes {
+		return nil, fmt.Errorf("ringbuf: capacity %d requires %d bytes, budget is %d: %w", cap2, requiredBytes, options.MemoryBudgetBytes, ErrMemoryBudgetExceeded)
 	}
 	r := &Ring{
 		slots:    make([]Slot, cap2),
@@ -100,7 +145,14 @@ func New(requestedCapacity int) *Ring {
 	for i := range r.sequence {
 		r.sequence[i].val.Store(uint64(i))
 	}
-	return r
+	return r, nil
+}
+
+func ringAllocationBytes(capacitySlots int) uint64 {
+	bytesPerSlot := uint64(unsafe.Sizeof(Slot{})) + uint64(unsafe.Sizeof(paddedSeq{}))
+	//nolint:gosec // capacitySlots is normalized to [2, maxCapacity] before use.
+	slots := uint64(capacitySlots)
+	return slots*bytesPerSlot + uint64(unsafe.Sizeof(Ring{}))
 }
 
 // Push enqueues one slot. Returns false when the buffer is full.

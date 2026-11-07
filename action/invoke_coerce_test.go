@@ -106,6 +106,58 @@ func TestCoerce_IntegerRange(t *testing.T) {
 	}
 }
 
+func TestCoerce_Float32Range(t *testing.T) {
+	t.Parallel()
+
+	maxFloat32 := float64(math.MaxFloat32)
+	justAboveMax := math.Nextafter(maxFloat32, math.Inf(1))
+	tests := []struct {
+		name    string
+		input   float64
+		want    float32
+		wantErr bool
+	}{
+		{name: "maximum", input: maxFloat32, want: math.MaxFloat32},
+		{name: "minimum", input: -maxFloat32, want: -math.MaxFloat32},
+		{name: "in range", input: 123.25, want: 123.25},
+		{name: "just above maximum", input: justAboveMax, wantErr: true},
+		{name: "just below minimum", input: -justAboveMax, wantErr: true},
+		{name: "large finite", input: 1e300, wantErr: true},
+		{name: "positive infinity remains supported", input: math.Inf(1), want: float32(math.Inf(1))},
+		{name: "NaN remains supported", input: math.NaN(), want: float32(math.NaN())},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := action.Coerce[float32](test.input)
+			if (err != nil) != test.wantErr {
+				t.Fatalf("Coerce[float32](%g) error = %v, wantErr %t", test.input, err, test.wantErr)
+			}
+			if err == nil {
+				if math.IsNaN(float64(test.want)) {
+					if !math.IsNaN(float64(got)) {
+						t.Fatalf("Coerce[float32](%g) = %g, want NaN", test.input, got)
+					}
+				} else if got != test.want {
+					t.Fatalf("Coerce[float32](%g) = %g, want %g", test.input, got, test.want)
+				}
+			}
+		})
+	}
+
+	if _, err := action.Coerce[struct{ Value float32 }](map[string]any{"Value": 1e300}); err == nil {
+		t.Fatal("nested struct float32 overflow succeeded")
+	}
+	if _, err := action.Coerce[[]float32]([]any{1.0, 1e300}); err == nil {
+		t.Fatal("nested slice float32 overflow succeeded")
+	}
+	if _, err := action.Coerce[map[string]float32](map[string]any{"value": 1e300}); err == nil {
+		t.Fatal("nested map float32 overflow succeeded")
+	}
+	if _, err := action.Coerce[float32]("3.4028236e38"); err == nil {
+		t.Fatal("string float32 overflow succeeded")
+	}
+}
+
 func FuzzCoerceInt8Range(f *testing.F) {
 	for _, seed := range []int64{-129, -128, -1, 0, 127, 128, 256} {
 		f.Add(seed)
@@ -124,10 +176,57 @@ func FuzzCoerceInt8Range(f *testing.F) {
 	})
 }
 
+func FuzzCoerceFloat32Range(f *testing.F) {
+	maxFloat32 := float64(math.MaxFloat32)
+	for _, seed := range []float64{
+		-maxFloat32,
+		-123.5,
+		0,
+		123.5,
+		maxFloat32,
+		math.Nextafter(maxFloat32, math.Inf(1)),
+		math.Inf(1),
+		math.NaN(),
+	} {
+		f.Add(seed)
+	}
+	f.Fuzz(func(t *testing.T, input float64) {
+		got, err := action.Coerce[float32](input)
+		if !math.IsInf(input, 0) && !math.IsNaN(input) && math.Abs(input) > math.MaxFloat32 {
+			if err == nil {
+				t.Fatalf("Coerce[float32](%g) = %g, want range error", input, got)
+			}
+			return
+		}
+		if err != nil {
+			t.Fatalf("Coerce[float32](%g) error = %v", input, err)
+		}
+		want := float32(input)
+		if math.IsNaN(input) {
+			if !math.IsNaN(float64(got)) {
+				t.Fatalf("Coerce[float32](NaN) = %g, want NaN", got)
+			}
+			return
+		}
+		if got != want {
+			t.Fatalf("Coerce[float32](%g) = %g, want %g", input, got, want)
+		}
+	})
+}
+
 func BenchmarkCoerceInt8(b *testing.B) {
 	b.ReportAllocs()
 	for range b.N {
 		if _, err := action.Coerce[int8](127); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkCoerceFloat32(b *testing.B) {
+	b.ReportAllocs()
+	for range b.N {
+		if _, err := action.Coerce[float32](123.25); err != nil {
 			b.Fatal(err)
 		}
 	}

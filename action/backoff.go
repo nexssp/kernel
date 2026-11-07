@@ -67,10 +67,27 @@ func ExponentialJitter(base, maxDuration time.Duration) func(attempt int) time.D
 }
 
 // LinearBackoff increments by step each attempt.
-// 100ms → 200ms → 300ms …
+// 100ms → 200ms → 300ms … Multiplication saturates on overflow.
 func LinearBackoff(step time.Duration) func(attempt int) time.Duration {
 	return func(attempt int) time.Duration {
-		return step * time.Duration(attempt)
+		multiplier := time.Duration(attempt)
+		const (
+			maxDuration = time.Duration(1<<63 - 1)
+			minDuration = time.Duration(-1 << 63)
+		)
+		switch {
+		case step > 0 && multiplier > 0 && step > maxDuration/multiplier:
+			return maxDuration
+		case step > 0 && multiplier < 0 && multiplier < minDuration/step:
+			return minDuration
+		case step < 0 && multiplier > 0 && step < minDuration/multiplier:
+			return minDuration
+		case step < 0 && multiplier < 0 && step < maxDuration/multiplier:
+			return maxDuration
+		default:
+			//nolint:durationcheck // The bounds above prove this product is representable.
+			return step * multiplier
+		}
 	}
 }
 

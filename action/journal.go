@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"reflect"
 
 	"golang.org/x/sync/singleflight"
 
@@ -108,6 +109,7 @@ func runDurableStep[Req, Res any](
 	if err != nil {
 		return zero, err
 	}
+	result = normalizeJSONNullResult(result)
 
 	serialized, marshalErr := json.Marshal(result)
 	if marshalErr != nil {
@@ -121,6 +123,27 @@ func runDurableStep[Req, Res any](
 	}
 
 	return result, nil
+}
+
+func normalizeJSONNullResult[Res any](result Res) Res {
+	if reflect.TypeFor[Res]().Kind() != reflect.Interface {
+		return result
+	}
+	value := reflect.ValueOf(result)
+	if !value.IsValid() {
+		return result
+	}
+	//nolint:exhaustive // Only nullable kinds can encode a typed nil as JSON null.
+	switch value.Kind() {
+	case reflect.Map, reflect.Pointer, reflect.Slice:
+		if value.IsNil() {
+			var zero Res
+			return zero
+		}
+	default:
+		return result
+	}
+	return result
 }
 
 // Durable wires the memoization middleware into a builder.

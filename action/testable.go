@@ -75,7 +75,7 @@ func (t *Testable[Req, Res]) ExpectErr(ctx context.Context, req Req, expected st
 	if err == nil {
 		return fmt.Errorf("expected error %q, got nil", expected)
 	}
-	if appErr, ok := errors.AsType[*xerr.AppError](err); ok {
+	if appErr, ok := errors.AsType[*xerr.AppError](err); ok && appErr != nil {
 		if string(appErr.Kind) != expected {
 			return fmt.Errorf("expected error kind %q, got %q", expected, appErr.Kind)
 		}

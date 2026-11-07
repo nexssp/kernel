@@ -12,6 +12,7 @@ import (
 	"math"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -129,7 +130,11 @@ func Assign(target, source any) error {
 	if assignBytes(targetVal, source) {
 		return nil
 	}
-	if assignReflect(targetVal, sourceVal) {
+	assigned, err := assignReflect(targetVal, sourceVal)
+	if err != nil {
+		return err
+	}
+	if assigned {
 		return nil
 	}
 	return assignJSON(target, source)
@@ -194,19 +199,19 @@ func assignBytes(target reflect.Value, source any) bool {
 	return false
 }
 
-func assignReflect(target, source reflect.Value) bool {
+func assignReflect(target, source reflect.Value) (bool, error) {
 	return assignValue(target.Elem(), source)
 }
 
-func assignValue(dst, src reflect.Value) bool {
+func assignValue(dst, src reflect.Value) (bool, error) {
 	src = indirect(src)
 	if !src.IsValid() {
-		return false
+		return false, nil
 	}
 
 	if dst.Kind() == reflect.Interface {
 		dst.Set(src)
-		return true
+		return true, nil
 	}
 	if dst.Kind() == reflect.Pointer {
 		if dst.IsNil() {
@@ -217,7 +222,7 @@ func assignValue(dst, src reflect.Value) bool {
 
 	if src.Type().AssignableTo(dst.Type()) {
 		dst.Set(src)
-		return true
+		return true, nil
 	}
 
 	return assignByKind(dst, src)
@@ -235,14 +240,25 @@ func indirect(src reflect.Value) reflect.Value {
 }
 
 //nolint:exhaustive // callers route scalar kinds here; default declines unsupported kinds
-func assignStringScalar(dst, src reflect.Value) bool {
+func assignStringScalar(dst, src reflect.Value) (bool, error) {
 	if src.Kind() != reflect.String {
-		return false
+		return false, nil
+	}
+	if dst.Kind() == reflect.Float32 {
+		value, err := strconv.ParseFloat(strings.TrimSpace(src.String()), 64)
+		if err != nil {
+			if math.IsInf(value, 0) {
+				return false, fmt.Errorf("coerce: value %q is out of range for float32", src.String())
+			}
+			return false, nil
+		}
+		return assignFloatTarget(dst, value)
 	}
 
 	parsed, err := parseStringScalar(src.String(), dst.Type())
 	if err != nil {
-		return false
+		//nolint:nilerr // Invalid scalar strings decline this fast path for the JSON fallback.
+		return false, nil
 	}
 
 	switch dst.Kind() {
@@ -253,14 +269,14 @@ func assignStringScalar(dst, src reflect.Value) bool {
 	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
 		dst.SetUint(parsed.uintValue)
 	case reflect.Float32, reflect.Float64:
-		dst.SetFloat(parsed.floatValue)
+		return assignFloatTarget(dst, parsed.floatValue)
 	default:
-		return false
+		return false, nil
 	}
-	return true
+	return true, nil
 }
 
-func assignByKind(dst, src reflect.Value) bool {
+func assignByKind(dst, src reflect.Value) (bool, error) {
 	//nolint:exhaustive // only kinds routable via reflection are handled; others fall through to false
 	switch dst.Kind() {
 	case reflect.Struct:
@@ -272,30 +288,38 @@ func assignByKind(dst, src reflect.Value) bool {
 	case reflect.String:
 		if s, ok := stringFromValue(src); ok {
 			dst.SetString(s)
-			return true
+			return true, nil
 		}
 	case reflect.Bool:
 		if src.Kind() == reflect.Bool {
 			dst.SetBool(src.Bool())
-			return true
+			return true, nil
 		}
 		return assignStringScalar(dst, src)
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
 		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
 		if isNumericKind(src.Kind()) {
-			return assignInteger(dst, src)
+			return assignInteger(dst, src), nil
 		}
 		return assignStringScalar(dst, src)
 	case reflect.Float32, reflect.Float64:
 		if isNumericKind(src.Kind()) {
-			dst.SetFloat(toFloat64(src))
-			return true
+			return assignFloatTarget(dst, toFloat64(src))
 		}
 		return assignStringScalar(dst, src)
 	default:
-		return false
+		return false, nil
 	}
-	return false
+	return false, nil
+}
+
+func assignFloatTarget(dst reflect.Value, number float64) (bool, error) {
+	if dst.Kind() == reflect.Float32 &&
+		(number > math.MaxFloat32 || number < -math.MaxFloat32) && !math.IsInf(number, 0) {
+		return false, fmt.Errorf("coerce: value %g is out of range for float32", number)
+	}
+	dst.SetFloat(number)
+	return true, nil
 }
 
 func assignInteger(dst, src reflect.Value) bool {
@@ -412,9 +436,9 @@ func lookupStructIndex(t reflect.Type) *structIndex {
 	return idx
 }
 
-func assignStruct(dst, src reflect.Value) bool {
+func assignStruct(dst, src reflect.Value) (bool, error) {
 	if src.Kind() != reflect.Map || src.Type().Key().Kind() != reflect.String {
-		return false
+		return false, nil
 	}
 	idx := lookupStructIndex(dst.Type())
 	iter := src.MapRange()
@@ -431,16 +455,20 @@ func assignStruct(dst, src reflect.Value) bool {
 		if !field.CanSet() {
 			continue
 		}
-		if !assignValue(field, iter.Value()) {
-			return false
+		assigned, err := assignValue(field, iter.Value())
+		if err != nil {
+			return false, err
+		}
+		if !assigned {
+			return false, nil
 		}
 	}
-	return true
+	return true, nil
 }
 
-func assignSlice(dst, src reflect.Value) bool {
+func assignSlice(dst, src reflect.Value) (bool, error) {
 	if src.Kind() != reflect.Slice && src.Kind() != reflect.Array {
-		return false
+		return false, nil
 	}
 	n := src.Len()
 	out := reflect.MakeSlice(dst.Type(), n, n)
@@ -448,54 +476,62 @@ func assignSlice(dst, src reflect.Value) bool {
 	for i := range n {
 		sv := src.Index(i)
 		ev := out.Index(i)
-		if assignValue(ev, sv) {
+		assigned, err := assignValue(ev, sv)
+		if err != nil {
+			return false, err
+		}
+		if assigned {
 			continue
 		}
 		for sv.Kind() == reflect.Interface && !sv.IsNil() {
 			sv = sv.Elem()
 		}
 		if !sv.Type().AssignableTo(elemType) {
-			return false
+			return false, nil
 		}
 		ev.Set(sv)
 	}
 	dst.Set(out)
-	return true
+	return true, nil
 }
 
-func assignMap(dst, src reflect.Value) bool {
+func assignMap(dst, src reflect.Value) (bool, error) {
 	if src.Kind() != reflect.Map || src.Type().Key().Kind() != reflect.String {
-		return false
+		return false, nil
 	}
 	if dst.Type().Key().Kind() != reflect.String {
-		return false
+		return false, nil
 	}
 	out := reflect.MakeMap(dst.Type())
 	elemType := dst.Type().Elem()
 	iter := src.MapRange()
 	for iter.Next() {
 		elemPtr := reflect.New(elemType)
-		if !assignValue(elemPtr.Elem(), iter.Value()) {
+		assigned, err := assignValue(elemPtr.Elem(), iter.Value())
+		if err != nil {
+			return false, err
+		}
+		if !assigned {
 			sv := iter.Value()
 			for sv.Kind() == reflect.Interface && !sv.IsNil() {
 				sv = sv.Elem()
 			}
 			if !sv.Type().AssignableTo(elemType) {
-				return false
+				return false, nil
 			}
 			elemPtr.Elem().Set(sv)
 		}
 		key := iter.Key()
 		if !key.Type().AssignableTo(dst.Type().Key()) {
 			if !key.Type().ConvertibleTo(dst.Type().Key()) {
-				return false
+				return false, nil
 			}
 			key = key.Convert(dst.Type().Key())
 		}
 		out.SetMapIndex(key, elemPtr.Elem())
 	}
 	dst.Set(out)
-	return true
+	return true, nil
 }
 
 func isNumericKind(k reflect.Kind) bool {

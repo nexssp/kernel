@@ -48,20 +48,21 @@ func TestScopeFromContextCopiesAuthenticatedCallerAndTenant(t *testing.T) {
 
 func TestScopeFromContextDoesNotMixConcurrentIdentityUpdates(t *testing.T) {
 	ctx := newInterleavingScopeContext()
-	ctx.updateOnScopeLookup = true
+	ctx.updateOnScopeLookup = 2
 	defer ctx.finish()
 
 	got, err := xfile.ScopeFromContext(ctx)
 	if err != nil {
 		t.Fatalf("ScopeFromContext() error = %v", err)
 	}
-	if got.CallerID != "caller-new" || got.TenantID != "tenant-new" {
+	if got.CallerID != "caller-old" || got.TenantID != "tenant-old" {
 		t.Fatalf("ScopeFromContext() mixed identity versions: %#v", got)
 	}
 }
 
 func TestSeparateScopeReadsCanMixConcurrentIdentityUpdates(t *testing.T) {
 	ctx := newInterleavingScopeContext()
+	ctx.updateOnScopeLookup = 2
 	defer ctx.finish()
 
 	callerID := xctx.UserIDFrom(ctx)
@@ -95,13 +96,15 @@ type interleavingScopeContext struct {
 	startUpdate         chan struct{}
 	updated             chan struct{}
 	updateOnce          sync.Once
-	updateOnScopeLookup bool
+	updateOnScopeLookup int
+	scopeLookups        int
 }
 
 func (ctx *interleavingScopeContext) Value(key any) any {
 	value := ctx.Context.Value(key)
-	if ctx.updateOnScopeLookup {
-		if _, ok := value.(*xctx.RequestScope); ok {
+	if _, ok := value.(*xctx.RequestScope); ok {
+		ctx.scopeLookups++
+		if ctx.scopeLookups == ctx.updateOnScopeLookup {
 			ctx.triggerUpdate()
 		}
 	}
