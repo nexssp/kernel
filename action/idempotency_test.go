@@ -24,6 +24,10 @@ type PaymentOrderRes struct {
 	Timestamp time.Time `json:"timestamp"`
 }
 
+type unmarshalableIdempotencyResponse struct {
+	Value chan int `json:"value"`
+}
+
 type idempotencyGetBarrier struct {
 	action.IdempotencyStore
 	gets  atomic.Int32
@@ -270,4 +274,35 @@ func TestIdempotency_CacheHitAllocationBudget(t *testing.T) {
 			t.Fail()
 		}
 	})
+}
+
+func TestIdempotency_UnserializableResponseFailsClosed(t *testing.T) {
+	stores := map[string]func() action.IdempotencyStore{
+		"coordinator": func() action.IdempotencyStore {
+			return action.NewMemoryIdempotencyStore(time.Hour)
+		},
+		"store_only": func() action.IdempotencyStore {
+			return &idempotencyGetBarrier{IdempotencyStore: action.NewMemoryIdempotencyStore(time.Hour)}
+		},
+	}
+	for name, newStore := range stores {
+		t.Run(name, func(t *testing.T) {
+			var calls atomic.Int32
+			act := action.New("idempotency.unserializable-response", func(context.Context, struct{}) (unmarshalableIdempotencyResponse, error) {
+				calls.Add(1)
+				return unmarshalableIdempotencyResponse{Value: make(chan int)}, nil
+			}).IdempotentWithConfig(action.IdempotencyConfig{Enabled: true, Store: newStore()}).Build()
+
+			ctx := ktest.RequestContext(t, "unserializable-response-key")
+			for attempt := 1; attempt <= 2; attempt++ {
+				_, err := act.Do(ctx, struct{}{})
+				if err == nil || xerr.KindFrom(err) != xerr.KindInternal {
+					t.Fatalf("attempt %d error = %v, want Internal", attempt, err)
+				}
+			}
+			if got := calls.Load(); got != 1 {
+				t.Fatalf("handler calls = %d, want 1", got)
+			}
+		})
+	}
 }

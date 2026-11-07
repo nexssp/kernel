@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -292,26 +293,44 @@ func TestWorkerPool_NoGoroutineLeak(t *testing.T) {
 	xtest.RequireNoGoroutineLeak(t, baseline, time.Second)
 }
 
-// TestWorkerPool_DeadlockOnCanceledContextWhenUpstreamBlocks dowodzi,
-// że drainResults zawiesza się na sztywnym `<-feedDone`, gdy kontekst zostanie anulowany,
-// a upstream jest zablokowany na operacji I/O.
-func TestWorkerPool_DeadlockOnCanceledContextWhenUpstreamBlocks(t *testing.T) {
+// TestWorkerPool_CancellationReturnsWhileUpstreamBlocks verifies that
+// cancellation ends the result stream without waiting for a blocked iterator
+// or worker to return. Those callbacks are released afterward for cleanup.
+func TestWorkerPool_CancellationReturnsWhileUpstreamBlocks(t *testing.T) {
+	t.Parallel()
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	unblockUpstream := make(chan struct{})
-	defer close(unblockUpstream)
+	releaseUpstream := make(chan struct{})
+	releaseWorker := make(chan struct{})
+	upstreamBlocked := make(chan struct{})
+	workerStarted := make(chan struct{})
+	upstreamDone := make(chan struct{})
+	workerDone := make(chan struct{})
 
-	// Upstream, który emituje 1 element, a potem symuluje oczekiwanie na wolne I/O
+	var releaseOnce sync.Once
+	release := func() {
+		releaseOnce.Do(func() {
+			close(releaseUpstream)
+			close(releaseWorker)
+		})
+	}
+	defer release()
+
 	slowUpstream := func(yield func(int, error) bool) {
+		defer close(upstreamDone)
 		if !yield(1, nil) {
 			return
 		}
-		// Symulacja blokady (np. socket/kolejka bez nowych wiadomości)
-		<-unblockUpstream
+		close(upstreamBlocked)
+		<-releaseUpstream
 	}
 
 	op := stream.WorkerPool[int, int](ctx, 2, 0, func(_ context.Context, n int) (int, error) {
+		defer close(workerDone)
+		close(workerStarted)
+		<-releaseWorker
 		return n, nil
 	})
 
@@ -320,20 +339,26 @@ func TestWorkerPool_DeadlockOnCanceledContextWhenUpstreamBlocks(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		for _, err := range seq {
-			if err != nil {
-				return
-			}
-			// Po odebraniu pierwszego elementu anulujemy kontekst całego strumienia!
-			cancel()
+		for range seq {
 		}
 	}()
 
-	// DrainResults hangs on <-feedDone when context is canceled!
+	for _, started := range []<-chan struct{}{workerStarted, upstreamBlocked} {
+		select {
+		case <-started:
+		case <-time.After(2 * time.Second):
+			t.Fatal("worker pool did not reach the blocked callback state")
+		}
+	}
+	cancel()
+
 	select {
 	case <-done:
-		// Sukces: zamknięcie nastąpiło szybko
 	case <-time.After(500 * time.Millisecond):
-		t.Fatal("DEADLOCK / GOROUTINE HANG: WorkerPool zablokował się na <-feedDone mimo anulowania contextu!")
+		t.Fatal("WorkerPool did not return after context cancellation")
 	}
+
+	release()
+	<-upstreamDone
+	<-workerDone
 }

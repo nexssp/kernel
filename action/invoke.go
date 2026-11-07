@@ -418,7 +418,14 @@ func assignMap(dst, src reflect.Value) bool {
 			}
 			elemPtr.Elem().Set(sv)
 		}
-		out.SetMapIndex(iter.Key(), elemPtr.Elem())
+		key := iter.Key()
+		if !key.Type().AssignableTo(dst.Type().Key()) {
+			if !key.Type().ConvertibleTo(dst.Type().Key()) {
+				return false
+			}
+			key = key.Convert(dst.Type().Key())
+		}
+		out.SetMapIndex(key, elemPtr.Elem())
 	}
 	dst.Set(out)
 	return true

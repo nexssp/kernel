@@ -47,6 +47,32 @@ func TestGoldenJSON_AcceptsRawJSON(t *testing.T) {
 	GoldenJSON(t, "raw", []byte(`{ "hello" : "world" }`))
 }
 
+func TestGoldenJSON_RejectsTrailingJSON(t *testing.T) {
+	ExpectFatal(t, "TestGoldenJSON_RejectsTrailingJSON", "XTEST_GOLDEN_TRAILING_JSON",
+		"multiple JSON values",
+		func(t *testing.T) {
+			t.Chdir(t.TempDir())
+			GoldenJSON(t, "trailing", []byte(`{"value":1} {"extra":2}`))
+		})
+}
+
+func TestGoldenJSON_PreservesLargeIntegerPrecision(t *testing.T) {
+	t.Chdir(t.TempDir())
+
+	const raw = `{"count":9007199254740993}`
+	GoldenJSON(t, "large-integer", []byte(raw))
+	GoldenJSON(t, "large-integer", []byte(`{ "count" : 9007199254740993 }`))
+
+	body, err := os.ReadFile(filepath.Join("testdata", "large-integer.golden.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const want = "{\n  \"count\": 9007199254740993\n}\n"
+	if string(body) != want {
+		t.Fatalf("large integer changed during canonicalization:\n%s", body)
+	}
+}
+
 func TestGoldenJSON_MismatchFails(t *testing.T) {
 	ExpectFatal(t, "TestGoldenJSON_MismatchFails", "XTEST_GOLDEN_MISMATCH",
 		"mismatch",

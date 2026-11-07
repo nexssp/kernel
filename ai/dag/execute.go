@@ -204,7 +204,7 @@ func handleLayerError(
 		execErr.Layer = layerIdx
 		execErr.State = finalState
 		for i, res := range layerResults {
-			if res.Key != "" {
+			if res.Key == layer[i].OutputKey {
 				execErr.Completed = append(execErr.Completed, layer[i].ID)
 			}
 		}

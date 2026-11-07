@@ -85,6 +85,16 @@ func TestNestedDAG_InnerErrorPreservesResumeProgress(t *testing.T) {
 	if err1 == nil {
 		t.Fatal("expected error")
 	}
+	var execErr *dag.ExecutionError
+	if !errors.As(err1, &execErr) {
+		t.Fatalf("expected *dag.ExecutionError, got %T: %v", err1, err1)
+	}
+	if execErr.FailedNode != "sub_node" {
+		t.Fatalf("FailedNode = %q, want sub_node", execErr.FailedNode)
+	}
+	if len(execErr.Completed) != 0 {
+		t.Fatalf("Completed = %v, want no completed nodes", execErr.Completed)
+	}
 
 	if step1Runs != 1 || step2Runs != 1 {
 		t.Fatalf("expected 1 run each, got %d and %d", step1Runs, step2Runs)

@@ -39,6 +39,7 @@ const (
 	slotSize        = 64
 	defaultCapacity = 1024
 	maxCapacity     = capacity.MaxPowerOfTwo // sane upper bound; guards New against overflow
+	lenMaxAttempts  = 8                      // Eight attempts tolerate brief contention while bounding Len latency.
 )
 
 // Compile-time assertion: Slot must be exactly slotSize bytes. The
@@ -163,13 +164,19 @@ func (r *Ring) BatchDrain(dst []Slot) int {
 }
 
 // Len returns a best-effort snapshot of queued slots; under concurrent
-// Push/Pop it may be stale by the time it returns. Do not use it for
+// Push/Pop it may be stale by the time it returns. If no stable snapshot is
+// found within eight attempts, it returns 0. Do not use it for
 // correctness-critical decisions.
 func (r *Ring) Len() int {
-	h := r.head.Load()
-	t := r.tail.Load()
-	if h >= t {
-		return int(h - t) //nolint:gosec // h>=t checked above; diff bounded by capacity
+	for range lenMaxAttempts {
+		head := r.head.Load()
+		tail := r.tail.Load()
+		if r.head.Load() != head {
+			continue
+		}
+		// With head stable across the tail read, tail cannot legitimately be
+		// ahead of it. Unsigned subtraction also handles counter wraparound.
+		return int(head - tail) //nolint:gosec // distance is bounded by ring capacity
 	}
 	return 0
 }

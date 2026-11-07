@@ -130,15 +130,15 @@ func WithScope(ctx context.Context, s *RequestScope) context.Context {
 	return context.WithValue(ctx, scopeGenKeyT{}, gen)
 }
 
-// ensureScope returns ctx with a RequestScope bound. If one is already
-// present, it is returned unchanged; otherwise a fresh non-pooled scope
-// is created. Used by the With* setters so callers never need to call
-// NewScope first.
+// ensureScope returns ctx with a live RequestScope bound. If the context's
+// scope is stale, a fresh non-pooled scope is created rather than mutating a
+// scope that may already have been reused by another request. Used by the
+// With* setters so callers never need to call NewScope first.
 func ensureScope(ctx context.Context) (context.Context, *RequestScope) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	s, _ := ctx.Value(scopeKeyT{}).(*RequestScope)
+	s := ScopeFrom(ctx)
 	if s != nil {
 		return ctx, s
 	}

@@ -41,6 +41,33 @@ func TestDynamicResumeSkipsCompletedNode(t *testing.T) {
 	}
 }
 
+func TestCompileDoesNotAliasBuilderNodes(t *testing.T) {
+	act := action.New("step", func(context.Context, dag.ReadState) (string, error) {
+		return "ok", nil
+	}).Build()
+	builder := dag.New("immutable").
+		AddNode("start", "start", act).
+		AddConditionalEdge("start", func(context.Context, dag.ReadState) (string, error) {
+			return "added-later", nil
+		})
+	graph, err := builder.Compile()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Reusing the builder after compilation must not mutate the compiled DAG.
+	builder.AddNode("added-later", "added-later", act)
+
+	state, err := graph.Execute(context.Background(), dag.ReadState{})
+	if err == nil {
+		t.Fatal("compiled graph unexpectedly saw a node added to its builder")
+	}
+	if state == nil {
+		t.Fatal("Execute must return a state when dynamic routing fails")
+	}
+	t.Cleanup(state.Release)
+}
+
 func TestDynamicResumePreservesNilOutput(t *testing.T) {
 	calls := 0
 	act := action.New("step", func(context.Context, dag.ReadState) (any, error) {

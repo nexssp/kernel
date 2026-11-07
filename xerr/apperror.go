@@ -36,9 +36,13 @@ type ErrorResponse struct {
 
 // Public returns a safe, client-facing representation. Internal details never leak.
 func (e *AppError) Public(requestID string) ErrorResponse {
+	message := e.Message
+	if e.Kind == KindInternal {
+		message = "internal server error"
+	}
 	return ErrorResponse{
 		Error:     string(e.Kind),
-		Message:   e.Message,
+		Message:   message,
 		RequestID: requestID,
 		Details:   e.ValidationDetails,
 	}

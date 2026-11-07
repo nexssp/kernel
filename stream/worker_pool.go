@@ -24,7 +24,9 @@ type workerResult[Out any] struct {
 //     exit → resultChan closes after the WaitGroup finishes.
 //   - Downstream stops consuming (yield returns false) → cancel pool →
 //     workers and feeder observe cancellation and return.
-//   - ctx is canceled → same as above.
+//   - ctx is canceled → the result stream returns promptly. A worker or
+//     upstream iterator blocked in code that ignores cancellation cannot be
+//     forcibly stopped and may remain blocked until that code returns.
 //
 // Panic isolation: a panic inside worker or inside the upstream
 // iterator is recovered and delivered as an error on the result stream.
@@ -203,6 +205,10 @@ func drainResults[Out any](
 
 	for {
 		select {
+		case <-ctx.Done():
+			cancel()
+			return
+
 		case err := <-feedDone:
 			if err != nil && ctx.Err() == nil {
 				upstreamError = err

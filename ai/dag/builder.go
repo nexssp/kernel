@@ -137,7 +137,7 @@ func (b *Builder) Compile() (*DAG, error) {
 
 	return &DAG{
 		name:             b.name,
-		nodes:            b.nodes,
+		nodes:            maps.Clone(b.nodes),
 		edges:            slices.Clone(b.edges),
 		conditionalEdges: condEdges,
 		layers:           layers,

@@ -1,7 +1,8 @@
 package xfs
 
 import (
-	"log/slog"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -41,9 +42,25 @@ func WriteFile(path string, data []byte, perm os.FileMode) error {
 func WriteFileAtomic(path string, data []byte, perm os.FileMode) error {
 	dir := filepath.Dir(path)
 
-	tmp, err := os.CreateTemp(dir, filepath.Base(path)+".*.tmp")
-	if err != nil {
-		return xerr.Internal("atomic write: create tmp", err)
+	const maxAttempts = 10
+	var tmp *os.File
+	for range maxAttempts {
+		suffix, err := randomHex(8)
+		if err != nil {
+			return xerr.Internal("atomic write: random suffix", err)
+		}
+		tmpPath := filepath.Join(dir, filepath.Base(path)+"."+suffix+".tmp")
+		tmp, err = os.OpenFile(tmpPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, perm)
+		if errors.Is(err, os.ErrExist) {
+			continue
+		}
+		if err != nil {
+			return xerr.Internal("atomic write: create tmp", err)
+		}
+		break
+	}
+	if tmp == nil {
+		return xerr.Internal("atomic write: could not create unique temp after retries")
 	}
 	tmpName := tmp.Name()
 
@@ -51,11 +68,6 @@ func WriteFileAtomic(path string, data []byte, perm os.FileMode) error {
 		_ = tmp.Close()
 		_ = os.Remove(tmpName)
 		return xerr.Internal("atomic write: write tmp", err)
-	}
-	if err := tmp.Chmod(perm); err != nil {
-		_ = tmp.Close()
-		_ = os.Remove(tmpName)
-		return xerr.Internal("atomic write: chmod tmp", err)
 	}
 	if err := tmp.Sync(); err != nil {
 		_ = tmp.Close()
@@ -72,14 +84,34 @@ func WriteFileAtomic(path string, data []byte, perm os.FileMode) error {
 	}
 
 	if runtime.GOOS != goosWindows {
-		if d, err := os.Open(dir); err == nil {
-			if err := d.Sync(); err != nil {
-				slog.Warn("xfs_dir_fsync_failed", "dir", dir, "error", err)
-			}
-			_ = d.Close()
+		if err := syncParentDirectory(dir); err != nil {
+			return xerr.Internal("atomic write: sync parent directory", err)
 		}
 	}
 	return nil
+}
+
+func syncParentDirectory(dir string) error {
+	d, err := os.Open(dir)
+	if err != nil {
+		return fmt.Errorf("open parent directory: %w", err)
+	}
+	return syncDirectory(d)
+}
+
+func syncDirectory(d *os.File) error {
+	if d == nil {
+		return errors.New("sync directory: nil file")
+	}
+	syncErr := d.Sync()
+	closeErr := d.Close()
+	if syncErr != nil {
+		syncErr = fmt.Errorf("sync directory: %w", syncErr)
+	}
+	if closeErr != nil {
+		closeErr = fmt.Errorf("close directory: %w", closeErr)
+	}
+	return errors.Join(syncErr, closeErr)
 }
 
 // renameWithRetry retries on Windows for transient sharing violations.

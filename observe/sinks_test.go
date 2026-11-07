@@ -3,6 +3,7 @@ package observe_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"log/slog"
 	"strconv"
 	"strings"
@@ -32,6 +33,24 @@ func TestSlogSink_LevelsAndFields(t *testing.T) {
 	sink.Emit(context.Background(), observe.Event{Kind: observe.KindError, Action: "x"})
 	if !strings.Contains(buf.String(), "level=ERROR") {
 		t.Fatalf("expected ERROR level, got %s", buf.String())
+	}
+}
+
+func TestSlogSink_DoesNotLogSensitiveValues(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	sink := observe.NewSlogSink(slog.New(slog.NewTextHandler(&buf, nil)))
+	sink.Emit(context.Background(), observe.Event{
+		Kind: observe.KindPanic, Action: "user.login",
+		Request: "request-secret", Response: "response-secret",
+		Error: errors.New("error-secret"), Recovered: "panic-secret",
+	})
+
+	for _, secret := range []string{"request-secret", "response-secret", "error-secret", "panic-secret"} {
+		if strings.Contains(buf.String(), secret) {
+			t.Fatalf("sensitive value %q leaked in slog output: %s", secret, buf.String())
+		}
 	}
 }
 

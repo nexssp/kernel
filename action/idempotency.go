@@ -210,18 +210,13 @@ func IdempotencyMiddleware[Req, Res any](store IdempotencyStore, cfg Idempotency
 						return nil, execErr
 					}
 
-					if bodyBytes, mErr := json.Marshal(res); mErr == nil {
-						entry := IdempotencyEntry{
-							Status:           200,
-							Body:             bodyBytes,
-							StoredAt:         time.Now(),
-							RequestHash:      hashPayloadString(reqHash),
-							RequestHashBytes: reqHash,
-						}
-						if completeErr := coord.Complete(context.WithoutCancel(ctx), key, claim.Token, entry, ttl); completeErr != nil {
-							return nil, xerr.Unavailable("idempotency completion unavailable", completeErr)
-						}
-						completed = true
+					entry, responseErr := idempotencyResponseEntry(ctx, res, reqHash)
+					if completeErr := coord.Complete(context.WithoutCancel(ctx), key, claim.Token, entry, ttl); completeErr != nil {
+						return nil, xerr.Unavailable("idempotency completion unavailable", completeErr)
+					}
+					completed = true
+					if responseErr != nil {
+						return nil, responseErr
 					}
 
 					return idempotentResult{requestHash: reqHash, value: res}, nil
@@ -233,14 +228,10 @@ func IdempotencyMiddleware[Req, Res any](store IdempotencyStore, cfg Idempotency
 					return nil, execErr
 				}
 
-				if bodyBytes, mErr := json.Marshal(res); mErr == nil {
-					store.Set(ctx, key, IdempotencyEntry{
-						Status:           200,
-						Body:             bodyBytes,
-						StoredAt:         time.Now(),
-						RequestHash:      hashPayloadString(reqHash),
-						RequestHashBytes: reqHash,
-					}, ttl)
+				entry, responseErr := idempotencyResponseEntry(ctx, res, reqHash)
+				store.Set(ctx, key, entry, ttl)
+				if responseErr != nil {
+					return nil, responseErr
 				}
 
 				return idempotentResult{requestHash: reqHash, value: res}, nil
@@ -270,6 +261,29 @@ func IdempotencyMiddleware[Req, Res any](store IdempotencyStore, cfg Idempotency
 			return res, nil
 		}
 	}
+}
+
+// idempotencyResponseEntry always returns an entry so a successful handler
+// execution is never forgotten merely because its response cannot be encoded.
+// The invalid JSON marker makes subsequent requests fail closed rather than
+// repeating the handler's side effects.
+func idempotencyResponseEntry(ctx context.Context, res any, requestHash [32]byte) (IdempotencyEntry, error) {
+	body, err := json.Marshal(res)
+	if err != nil {
+		slog.WarnContext(ctx, "idempotency_response_marshal_failed")
+		body = []byte("!idempotency response unavailable")
+	}
+	entry := IdempotencyEntry{
+		Status:           200,
+		Body:             body,
+		StoredAt:         time.Now(),
+		RequestHash:      hashPayloadString(requestHash),
+		RequestHashBytes: requestHash,
+	}
+	if err != nil {
+		return entry, xerr.Internal("idempotency: successful response cannot be serialized for replay", err)
+	}
+	return entry, nil
 }
 
 func extractIdempotencyKey[Req any](ctx context.Context, req Req, cfg IdempotencyConfig, requestHash [32]byte) string {
