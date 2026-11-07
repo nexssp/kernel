@@ -44,3 +44,47 @@ func TestScopeFromContextCopiesAuthenticatedCallerAndTenant(t *testing.T) {
 		t.Fatalf("ScopeFromContext() = %#v", got)
 	}
 }
+
+func TestScopeFromContextDoesNotMixConcurrentIdentityUpdates(t *testing.T) {
+	base := xctx.WithTenantID(context.Background(), "tenant-old")
+	base = xctx.WithUserID(base, "caller-old")
+	ctx := &interleavingScopeContext{
+		Context: base,
+		scope:   xctx.ScopeFrom(base),
+		updated: make(chan struct{}),
+	}
+
+	got, err := xfile.ScopeFromContext(ctx)
+	if err != nil {
+		t.Fatalf("ScopeFromContext() error = %v", err)
+	}
+	if got.CallerID != "caller-old" || got.TenantID != "tenant-old" {
+		t.Fatalf("ScopeFromContext() mixed identity versions: %#v", got)
+	}
+	select {
+	case <-ctx.updated:
+		t.Fatal("identity update ran between caller and tenant reads")
+	default:
+	}
+}
+
+type interleavingScopeContext struct {
+	context.Context
+	scope    *xctx.RequestScope
+	accesses int
+	updated  chan struct{}
+}
+
+func (ctx *interleavingScopeContext) Value(key any) any {
+	ctx.accesses++
+	if ctx.accesses == 4 {
+		done := make(chan struct{})
+		go func() {
+			xctx.FromClaims(ctx.scope, map[string]any{"sub": "caller-new", "ten": "tenant-new"})
+			close(ctx.updated)
+			close(done)
+		}()
+		<-done
+	}
+	return ctx.Context.Value(key)
+}

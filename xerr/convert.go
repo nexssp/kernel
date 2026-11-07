@@ -16,7 +16,10 @@ func From(err error) *AppError {
 		return nil
 	}
 	if e, ok := errors.AsType[*AppError](err); ok {
-		return e
+		if e != nil {
+			return e
+		}
+		return Internal("internal server error")
 	}
 	if ae := classify(err); ae != nil {
 		return ae
@@ -70,6 +73,9 @@ func IsTransient(err error) bool {
 // or returns nil when err does not match any known pattern. Single shared
 // classifier used by both From and MapTransportError.
 func classify(err error) *AppError {
+	if appErr, ok := errors.AsType[*AppError](err); ok && appErr == nil {
+		return Internal("internal server error")
+	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		return Timeout("operation timed out", err)
 	}

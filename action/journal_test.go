@@ -70,6 +70,31 @@ func TestDurable_MemoizesAcrossCalls(t *testing.T) {
 	}
 }
 
+func TestDurable_ReplaysNilInterfaceResult(t *testing.T) {
+	t.Parallel()
+
+	journal := newMemJournal()
+	var calls atomic.Int32
+	step := action.New("nil-result", func(context.Context, string) (any, error) {
+		calls.Add(1)
+		return nil, nil
+	}).Durable(journal, "step").Build()
+	ctx := xctx.WithExecutionID(context.Background(), "nil-result-run")
+
+	for range 2 {
+		result, err := step.Do(ctx, "request")
+		if err != nil || result != nil {
+			t.Fatalf("nil result call = %#v / %v, want nil / nil", result, err)
+		}
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("handler calls = %d, want 1", got)
+	}
+	if got := string(journal.records["nil-result-run\x00step"]); got != "null" {
+		t.Fatalf("journal payload = %q, want JSON null", got)
+	}
+}
+
 func TestDurable_DifferentExecutionIDs(t *testing.T) {
 	t.Parallel()
 

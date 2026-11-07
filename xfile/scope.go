@@ -22,12 +22,11 @@ type Scope struct {
 // Missing caller or tenant scope is classified as Unauthorized, consistent
 // with Kernel's request authorization guards.
 func ScopeFromContext(ctx context.Context) (Scope, error) {
-	callerID := xctx.UserIDFrom(ctx)
+	callerID, tenantID := xctx.UserTenantFrom(ctx)
 	if callerID == "" {
 		return Scope{}, xerr.Unauthorized("authentication required")
 	}
 
-	tenantID := xctx.TenantIDFrom(ctx)
 	if tenantID == "" {
 		return Scope{}, xerr.Unauthorized("tenant context required")
 	}

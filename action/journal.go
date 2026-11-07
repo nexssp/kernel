@@ -19,6 +19,10 @@ type Journal interface {
 	RecordStep(ctx context.Context, executionID, stepName string, payload []byte) error
 }
 
+type durableResult[Res any] struct {
+	value Res
+}
+
 // Durable memoizes one step per (executionID, stepName). Concurrent
 // callers with the same key share a single underlying invocation; the
 // first result is persisted and returned to every waiter.
@@ -48,7 +52,11 @@ func newDurableRunner[Req, Res any](journal Journal, stepName string, next Fn[Re
 		sharedCtx := context.WithoutCancel(ctx)
 		key := executionID + "\x00" + stepName
 		ch := inflight.DoChan(key, func() (any, error) {
-			return runDurableStep(sharedCtx, journal, executionID, stepName, next, req)
+			value, err := runDurableStep(sharedCtx, journal, executionID, stepName, next, req)
+			if err != nil {
+				return nil, err
+			}
+			return durableResult[Res]{value: value}, nil
 		})
 
 		select {
@@ -58,12 +66,12 @@ func newDurableRunner[Req, Res any](journal Journal, stepName string, next Fn[Re
 			if result.Err != nil {
 				return zero, result.Err
 			}
-			res, ok := result.Val.(Res)
+			memoized, ok := result.Val.(durableResult[Res])
 			if !ok {
 				return zero, xerr.Internal(fmt.Sprintf(
 					"journal step %q: unexpected result type %T", stepName, result.Val))
 			}
-			return res, nil
+			return memoized.value, nil
 		}
 	}
 }

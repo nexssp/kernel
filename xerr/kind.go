@@ -44,7 +44,10 @@ func KindFrom(err error) Kind {
 		return ""
 	}
 	if ae, ok := errors.AsType[*AppError](err); ok {
-		return ae.Kind
+		if ae != nil {
+			return ae.Kind
+		}
+		return KindInternal
 	}
 	return KindInternal
 }

@@ -25,6 +25,8 @@ type ResumeJournal interface {
 	Journal
 	GetExecutionIdentity(ctx context.Context, executionID string) (ExecutionIdentity, bool, error)
 	RecordExecutionIdentity(ctx context.Context, identity ExecutionIdentity) error
+	// CompareAndSwapExecutionIdentity atomically replaces the expected binding, including absence.
+	CompareAndSwapExecutionIdentity(ctx context.Context, expected ExecutionIdentity, expectedFound bool, replacement ExecutionIdentity) (bool, error)
 }
 
 // ResumeIdentityFunc derives the binding for one durable request.
@@ -78,21 +80,30 @@ func DurableWithResume[Req, Res any](journal ResumeJournal, stepName string, ide
 				return zero, err
 			}
 
-			existing, found, err := journal.GetExecutionIdentity(ctx, identity.ExecutionID)
-			if err != nil {
-				return zero, xerr.Unavailable("resume identity read failed", err)
-			}
-			if found {
-				if err := ValidateResume(existing, identity, opts); err != nil {
-					return zero, err
+			for {
+				existing, found, err := journal.GetExecutionIdentity(ctx, identity.ExecutionID)
+				if err != nil {
+					return zero, xerr.Unavailable("resume identity read failed", err)
 				}
-				if !identity.BindingEqual(existing) {
-					if err := journal.RecordExecutionIdentity(ctx, identity); err != nil {
-						return zero, xerr.Unavailable("resume successor identity write failed", err)
+				if found {
+					if validationErr := ValidateResume(existing, identity, opts); validationErr != nil {
+						return zero, validationErr
+					}
+					if identity.BindingEqual(existing) {
+						break
 					}
 				}
-			} else if err := journal.RecordExecutionIdentity(ctx, identity); err != nil {
-				return zero, xerr.Unavailable("resume identity write failed", err)
+
+				committed, err := journal.CompareAndSwapExecutionIdentity(ctx, existing, found, identity)
+				if err != nil {
+					return zero, xerr.Unavailable("resume identity compare-and-swap failed", err)
+				}
+				if committed {
+					break
+				}
+				if err := ctx.Err(); err != nil {
+					return zero, err
+				}
 			}
 
 			return run(ctx, req, identity.JournalNamespace())

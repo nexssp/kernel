@@ -178,3 +178,39 @@ func TestMapTransportError_DNS(t *testing.T) {
 		t.Fatalf("expected DNS-specific message, got %q", got.Error())
 	}
 }
+
+func TestTypedNilAppErrorClassifiersAreSafe(t *testing.T) {
+	var typedNil *xerr.AppError
+	var direct error = typedNil
+	for name, err := range map[string]error{
+		"direct":  direct,
+		"wrapped": wrappedTypedNilAppError{err: direct},
+	} {
+		t.Run(name, func(t *testing.T) {
+			converted := xerr.From(err)
+			if converted == nil || converted.Kind != xerr.KindInternal {
+				t.Fatalf("From() = %#v, want non-nil Internal error", converted)
+			}
+			if got := xerr.KindFrom(err); got != xerr.KindInternal {
+				t.Fatalf("KindFrom() = %q, want Internal", got)
+			}
+			if xerr.IsTransient(err) || xerr.IsPermanent(err) {
+				t.Fatal("typed-nil AppError must remain unclassified")
+			}
+			mapped := xerr.MapTransportError(err)
+			if mapped == nil {
+				t.Fatal("MapTransportError() returned nil")
+			}
+			_ = converted.Error()
+			_ = mapped.Error()
+		})
+	}
+}
+
+type wrappedTypedNilAppError struct {
+	err error
+}
+
+func (wrappedTypedNilAppError) Error() string { return "wrapped application error" }
+
+func (err wrappedTypedNilAppError) Unwrap() error { return err.err }

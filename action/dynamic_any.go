@@ -140,10 +140,11 @@ func LoopAny(name string, body AnyAction, until func(any) bool, maxTurns int) *B
 func AssertAny(name string, predicate func(any) bool, msg string) *Builder[any, any] {
 	return New(name, func(_ context.Context, request any) (any, error) {
 		if predicate != nil && !predicate(request) {
-			if msg == "" {
-				msg = fmt.Sprintf("assertion [%s] failed", name)
+			message := msg
+			if message == "" {
+				message = fmt.Sprintf("assertion [%s] failed", name)
 			}
-			return nil, xerr.Validation(msg)
+			return nil, xerr.Validation(message)
 		}
 		return request, nil
 	}).Tag("guard", "assert")

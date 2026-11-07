@@ -6,6 +6,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/nexssp/kernel/action"
 	"github.com/nexssp/kernel/xerr"
@@ -171,6 +172,71 @@ func TestDurableWithResume_ForcedSuccessorUsesNewGeneration(t *testing.T) {
 	}
 }
 
+func TestDurableWithResume_ConflictingConcurrentBindingsCannotReplay(t *testing.T) {
+	journal := &resumeIdentityReadBarrier{
+		resumeMemoryJournal: newResumeMemoryJournal(),
+		ready:               make(chan struct{}),
+		release:             make(chan struct{}),
+	}
+	var calls atomic.Int32
+	identityFn := func(_ context.Context, input string) (action.ExecutionIdentity, error) {
+		identity := resumeIdentity()
+		identity.InputDigest = action.DigestString(input)
+		return identity, nil
+	}
+	step := action.New("resume-concurrent", func(_ context.Context, input string) (string, error) {
+		calls.Add(1)
+		return input + ":result", nil
+	}).Use(action.DurableWithResume[string, string](journal, "step", identityFn, action.ResumeOptions{})).Build()
+
+	type callResult struct {
+		input  string
+		output string
+		err    error
+	}
+	results := make(chan callResult, 2)
+	start := make(chan struct{})
+	for _, input := range []string{"input-v1", "input-v2"} {
+		go func(input string) {
+			<-start
+			output, err := step.Do(context.Background(), input)
+			results <- callResult{input: input, output: output, err: err}
+		}(input)
+	}
+	close(start)
+	select {
+	case <-journal.ready:
+	case <-time.After(5 * time.Second):
+		close(journal.release)
+		t.Fatal("both callers did not reach the identity read barrier")
+	}
+	close(journal.release)
+
+	successes := 0
+	conflicts := 0
+	for range 2 {
+		result := <-results
+		if result.err == nil {
+			successes++
+			if result.output != result.input+":result" {
+				t.Errorf("successful result %q does not match input %q", result.output, result.input)
+			}
+			continue
+		}
+		if xerr.KindFrom(result.err) != xerr.KindConflict {
+			t.Errorf("losing request error = %v, want Conflict", result.err)
+			continue
+		}
+		conflicts++
+	}
+	if successes != 1 || conflicts != 1 {
+		t.Fatalf("successes = %d, conflicts = %d; want one of each", successes, conflicts)
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("handler calls = %d, want 1", got)
+	}
+}
+
 func (resumeJournalStub) GetStep(context.Context, string, string) (payload []byte, found bool, err error) {
 	return
 }
@@ -181,6 +247,10 @@ func (resumeJournalStub) GetExecutionIdentity(context.Context, string) (action.E
 
 func (resumeJournalStub) RecordExecutionIdentity(context.Context, action.ExecutionIdentity) error {
 	return nil
+}
+
+func (resumeJournalStub) CompareAndSwapExecutionIdentity(context.Context, action.ExecutionIdentity, bool, action.ExecutionIdentity) (bool, error) {
+	return false, nil
 }
 
 type resumeMemoryJournal struct {
@@ -222,4 +292,33 @@ func (m *resumeMemoryJournal) RecordExecutionIdentity(_ context.Context, identit
 	defer m.mu.Unlock()
 	m.identities[identity.ExecutionID] = identity
 	return nil
+}
+
+func (m *resumeMemoryJournal) CompareAndSwapExecutionIdentity(_ context.Context, expected action.ExecutionIdentity, expectedFound bool, replacement action.ExecutionIdentity) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	current, found := m.identities[replacement.ExecutionID]
+	if found != expectedFound || (found && current != expected) {
+		return false, nil
+	}
+	m.identities[replacement.ExecutionID] = replacement
+	return true, nil
+}
+
+type resumeIdentityReadBarrier struct {
+	*resumeMemoryJournal
+	gets    atomic.Int32
+	ready   chan struct{}
+	release chan struct{}
+}
+
+func (j *resumeIdentityReadBarrier) GetExecutionIdentity(ctx context.Context, executionID string) (action.ExecutionIdentity, bool, error) {
+	identity, found, err := j.resumeMemoryJournal.GetExecutionIdentity(ctx, executionID)
+	if count := j.gets.Add(1); count <= 2 {
+		if count == 2 {
+			close(j.ready)
+		}
+		<-j.release
+	}
+	return identity, found, err
 }

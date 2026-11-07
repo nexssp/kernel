@@ -96,9 +96,9 @@ type IdempotencyLeaseRenewer interface {
 
 // idempotentResult carries the request hash through singleflight so
 // followers can detect a same-key/different-payload mismatch.
-type idempotentResult struct {
+type idempotentResult[Res any] struct {
 	requestHash [32]byte
-	value       any
+	value       Res
 }
 
 // IdempotencyMiddleware collapses concurrent identical requests into a single
@@ -167,7 +167,7 @@ func IdempotencyMiddleware[Req, Res any](store IdempotencyStore, cfg Idempotency
 						// Corrupted: fail closed.
 						return nil, xerr.Internal("idempotency: stored response for key is corrupted")
 					}
-					return idempotentResult{requestHash: reqHash, value: cachedRes}, nil
+					return idempotentResult[Res]{requestHash: reqHash, value: cachedRes}, nil
 				}
 
 				// Handle distributed coordinator if configured
@@ -187,7 +187,7 @@ func IdempotencyMiddleware[Req, Res any](store IdempotencyStore, cfg Idempotency
 							// Corrupted: fail closed.
 							return nil, xerr.Internal("idempotency: stored response for key is corrupted")
 						}
-						return idempotentResult{requestHash: reqHash, value: cachedRes}, nil
+						return idempotentResult[Res]{requestHash: reqHash, value: cachedRes}, nil
 					case IdempotencyClaimConflict:
 						return nil, xerr.Conflict("idempotency key already used with a different request payload")
 					case IdempotencyClaimInProgress:
@@ -222,7 +222,7 @@ func IdempotencyMiddleware[Req, Res any](store IdempotencyStore, cfg Idempotency
 						return nil, responseErr
 					}
 
-					return idempotentResult{requestHash: reqHash, value: res}, nil
+					return idempotentResult[Res]{requestHash: reqHash, value: res}, nil
 				}
 
 				// In-process local execution
@@ -237,7 +237,7 @@ func IdempotencyMiddleware[Req, Res any](store IdempotencyStore, cfg Idempotency
 					return nil, responseErr
 				}
 
-				return idempotentResult{requestHash: reqHash, value: res}, nil
+				return idempotentResult[Res]{requestHash: reqHash, value: res}, nil
 			})
 
 			if err != nil {
@@ -245,7 +245,7 @@ func IdempotencyMiddleware[Req, Res any](store IdempotencyStore, cfg Idempotency
 				return zero, err
 			}
 
-			fw, ok := val.(idempotentResult)
+			fw, ok := val.(idempotentResult[Res])
 			if !ok {
 				var zero Res
 				return zero, xerr.Internal(fmt.Sprintf("idempotency result type mismatch: got %T", val))
@@ -256,12 +256,7 @@ func IdempotencyMiddleware[Req, Res any](store IdempotencyStore, cfg Idempotency
 				var zero Res
 				return zero, xerr.Conflict("idempotency key already used with a different request payload")
 			}
-			res, ok := fw.value.(Res)
-			if !ok {
-				var zero Res
-				return zero, xerr.Internal(fmt.Sprintf("idempotency result type mismatch: got %T", fw.value))
-			}
-			return res, nil
+			return fw.value, nil
 		}
 	}
 }

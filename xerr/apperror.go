@@ -18,13 +18,21 @@ type AppError struct {
 }
 
 func (e *AppError) Error() string {
+	if e == nil {
+		return "<nil>"
+	}
 	if e.Cause != nil {
 		return fmt.Sprintf("[%s] %s: %v", e.Kind, e.Message, e.Cause)
 	}
 	return fmt.Sprintf("[%s] %s", e.Kind, e.Message)
 }
 
-func (e *AppError) Unwrap() error { return e.Cause }
+func (e *AppError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Cause
+}
 
 // ErrorResponse is the public contract sent to clients — never expose internals.
 type ErrorResponse struct {
@@ -36,6 +44,9 @@ type ErrorResponse struct {
 
 // Public returns a safe, client-facing representation. Internal details never leak.
 func (e *AppError) Public(requestID string) ErrorResponse {
+	if e == nil {
+		return ErrorResponse{Error: string(KindInternal), Message: "internal server error", RequestID: requestID}
+	}
 	message := e.Message
 	if e.Kind == KindInternal {
 		message = "internal server error"
@@ -61,11 +72,14 @@ func publicValidationDetails(details ValidationDetails) ValidationDetails {
 
 // IsTransient reports whether the error may succeed on retry.
 func (e *AppError) IsTransient() bool {
-	return kindClassOf(e.Kind) == classTransient
+	return e != nil && kindClassOf(e.Kind) == classTransient
 }
 
 // WithStack re-captures the stack. Use for bugs / unexpected internal errors.
 func (e *AppError) WithStack() *AppError {
+	if e == nil {
+		return nil
+	}
 	e.Stack = captureStack()
 	return e
 }

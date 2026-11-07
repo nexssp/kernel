@@ -455,3 +455,37 @@ func TestTapAny(t *testing.T) {
 		ktest.Run(t, tap, ctx, any("req")).ErrorContains("audit log full")
 	})
 }
+
+func TestAssertAnyConcurrentFailuresDoNotMutateCapturedMessage(t *testing.T) {
+	const callers = 32
+	ready := make(chan struct{}, callers)
+	release := make(chan struct{})
+	assertion := action.AssertAny("concurrent-assert", func(any) bool {
+		ready <- struct{}{}
+		<-release
+		return false
+	}, "").Build()
+
+	results := make(chan error, callers)
+	start := make(chan struct{})
+	for range callers {
+		go func() {
+			<-start
+			_, err := assertion.Do(context.Background(), nil)
+			results <- err
+		}()
+	}
+	close(start)
+	for range callers {
+		<-ready
+	}
+	close(release)
+
+	for range callers {
+		err := <-results
+		appErr, ok := errors.AsType[*xerr.AppError](err)
+		if !ok || appErr.Kind != xerr.KindValidation || appErr.Message != "assertion [concurrent-assert] failed" {
+			t.Errorf("assertion error = %v, want the stable default validation message", err)
+		}
+	}
+}

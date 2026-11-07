@@ -147,6 +147,15 @@ func TenantIDFrom(ctx context.Context) string {
 	return ""
 }
 
+// UserTenantFrom returns a consistent caller and tenant pair from one scope read.
+func UserTenantFrom(ctx context.Context) (userID, tenantID string) {
+	if s := lockScopeForRead(ctx); s != nil {
+		defer s.mu.RUnlock()
+		return s.UserID, s.TenantID
+	}
+	return "", ""
+}
+
 func UserIDFrom(ctx context.Context) string {
 	if s := lockScopeForRead(ctx); s != nil {
 		defer s.mu.RUnlock()
