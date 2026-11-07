@@ -32,21 +32,14 @@ func TestErrChain_Unwrap(t *testing.T) {
 func TestSprintProd_DoesNotLeakCause(t *testing.T) {
 	secret := errors.New("pq: password authentication failed for user admin")
 	err := &AppError{
-		Kind:    "internal",
-		Message: "internal error",
+		Kind:    KindInternal,
+		Message: "internal error: password=secret",
 		Cause:   secret,
 	}
 
 	out := sprintProd(err)
-
-	if !strings.Contains(out, "[internal]") {
-		t.Fatalf("missing kind: %q", out)
-	}
-	if !strings.Contains(out, "internal error") {
-		t.Fatalf("missing message: %q", out)
-	}
-	if strings.Contains(out, "password") || strings.Contains(out, "admin") {
-		t.Fatalf("cause leaked to prod: %q", out)
+	if out != "[Internal] internal server error\n" {
+		t.Fatalf("sensitive internal details leaked to prod: %q", out)
 	}
 }
 
@@ -71,7 +64,21 @@ func TestSprintProd_WrappedAppError_StillFormatted(t *testing.T) {
 }
 
 func TestSprintProd_PlainError(t *testing.T) {
-	if got := sprintProd(errors.New("boom")); got != "boom\n" {
+	if got := sprintProd(errors.New("password=secret; panic payload")); got != "[Internal] internal server error\n" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestSprintProd_PanicRecoveryDoesNotExposePanicValue(t *testing.T) {
+	err := PanicRecovery("panic-secret")
+	if got := sprintProd(err); got != "[Internal] internal server error\n" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestSprintProd_TypedNilAppError(t *testing.T) {
+	var appErr *AppError
+	if got := sprintProd(appErr); got != "[Internal] internal server error\n" {
 		t.Fatalf("got %q", got)
 	}
 }

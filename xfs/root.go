@@ -120,6 +120,8 @@ func (r *Root) WriteFile(p string, data []byte, perm os.FileMode) error {
 // in between; on POSIX a crash after the rename cannot lose the rename
 // itself. Windows has no directory fsync, so the rename is atomic but not
 // durable across power loss.
+// On POSIX an error syncing the parent directory is returned even though
+// the rename may already have taken effect.
 //
 // p is validated by Rel and every I/O goes through os.Root, so path
 // traversal is rejected before the first syscall and symlinks cannot
@@ -149,11 +151,12 @@ func (r *Root) WriteFileAtomic(p string, data []byte, perm os.FileMode) error {
 	// rename is atomic but not durable across power loss.
 	if runtime.GOOS != goosWindows {
 		dir := filepath.Dir(clean)
-		if d, openErr := r.r.Open(dir); openErr == nil {
-			if syncErr := d.Sync(); syncErr != nil {
-				slog.Warn("xfs_dir_fsync_failed", "dir", dir, "error", syncErr)
-			}
-			_ = d.Close()
+		d, openErr := r.r.Open(dir)
+		if openErr != nil {
+			return xerr.Internal("atomic write: open parent directory", openErr)
+		}
+		if syncErr := syncDirectory(d); syncErr != nil {
+			return xerr.Internal("atomic write: sync parent directory", syncErr)
 		}
 	}
 	return nil

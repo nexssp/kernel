@@ -11,6 +11,8 @@ type coerceTarget struct {
 	Name  string `json:"name"`
 }
 
+type coerceMapKey string
+
 func TestCoerce_StrictOnFailedFieldAssignment(t *testing.T) {
 	t.Parallel()
 
@@ -58,4 +60,26 @@ func TestCoerce_StrictMap(t *testing.T) {
 	if _, err := action.Coerce[map[string]int](map[string]any{"a": 1, "b": "two"}); err == nil {
 		t.Fatal("expected error for mixed-type values into map[string]int")
 	}
+}
+
+func TestCoerce_MapWithNamedStringKeys(t *testing.T) {
+	t.Run("named source key to builtin target key", func(t *testing.T) {
+		got, err := action.Coerce[map[string]int](map[coerceMapKey]any{"a": 1})
+		if err != nil {
+			t.Fatalf("Coerce returned error: %v", err)
+		}
+		if got["a"] != 1 {
+			t.Fatalf("Coerce returned %#v, want map[string]int{\"a\": 1}", got)
+		}
+	})
+
+	t.Run("builtin source key to named target key", func(t *testing.T) {
+		got, err := action.Coerce[map[coerceMapKey]int](map[string]any{"a": 1})
+		if err != nil {
+			t.Fatalf("Coerce returned error: %v", err)
+		}
+		if got[coerceMapKey("a")] != 1 {
+			t.Fatalf("Coerce returned %#v, want map[coerceMapKey]int{\"a\": 1}", got)
+		}
+	})
 }

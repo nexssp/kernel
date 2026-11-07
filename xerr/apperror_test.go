@@ -182,7 +182,7 @@ func TestAppError_Public_DoesNotLeakInternals(t *testing.T) {
 	t.Parallel()
 
 	secret := errors.New("pq: password authentication failed for user admin")
-	err := xerr.Internal("internal error", secret)
+	err := xerr.Internal("internal error: password=secret", secret)
 	err.ValidationDetails = xerr.ValidationDetails{{
 		Field: "email", Validation: "required",
 	}}
@@ -192,7 +192,7 @@ func TestAppError_Public_DoesNotLeakInternals(t *testing.T) {
 	if pub.Error != string(xerr.KindInternal) {
 		t.Errorf("Error = %q", pub.Error)
 	}
-	if pub.Message != "internal error" {
+	if pub.Message != "internal server error" {
 		t.Errorf("Message = %q", pub.Message)
 	}
 	if pub.RequestID != "req-42" {

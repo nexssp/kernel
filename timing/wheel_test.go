@@ -93,6 +93,42 @@ func TestWheel_ExactCycleDelay(t *testing.T) {
 	}
 }
 
+func TestWheel_FractionalTickDelayDoesNotExpireEarly(t *testing.T) {
+	const resolution = 10 * time.Millisecond
+
+	tests := []struct {
+		name         string
+		elapsed      time.Duration
+		delay        time.Duration
+		beforeExpiry time.Duration
+	}{
+		{name: "fractional delay", delay: 15 * time.Millisecond, beforeExpiry: 15 * time.Millisecond},
+		{name: "fractional delay after partial tick", elapsed: 9 * time.Millisecond, delay: 5 * time.Millisecond, beforeExpiry: time.Millisecond},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			w := timing.New(resolution, 8, 8)
+			var dst []any
+			if test.elapsed > 0 {
+				dst = w.Advance(test.elapsed, dst)
+			}
+			if _, err := w.Schedule(test.delay, "deadline"); err != nil {
+				t.Fatal(err)
+			}
+
+			dst = w.Advance(test.beforeExpiry, dst)
+			if len(dst) != 0 {
+				t.Fatalf("timer expired before its rounded-up deadline: %v", dst)
+			}
+			dst = w.Advance(resolution, dst)
+			if len(dst) != 1 || dst[0] != "deadline" {
+				t.Fatalf("timer did not expire on the next eligible tick: %v", dst)
+			}
+		})
+	}
+}
+
 func TestWheel_DoubleCycleDelay(t *testing.T) {
 	const (
 		resolution = 10 * time.Millisecond

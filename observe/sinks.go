@@ -38,10 +38,6 @@ func (s *SlogSink) Emit(ctx context.Context, event Event) {
 		"trace_id", event.TraceID,
 		"span_id", event.SpanID,
 		"attempt", event.Attempt,
-		"request", event.Request,
-		"response", event.Response,
-		"error", event.Error,
-		"recovered", event.Recovered,
 	)
 }
 

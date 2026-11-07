@@ -81,7 +81,18 @@ func (w *Wheel) Schedule(delay time.Duration, payload any) (TimerID, error) {
 		return 0, errors.New("timing wheel node pool exhausted")
 	}
 
-	ticks := max(int((delay+w.remainder)/w.resolution), 1)
+	// The deadline is measured from the current point within a tick, so a
+	// fractional tick must be rounded up rather than truncated. Decompose the
+	// duration to avoid overflowing when adding the remainder.
+	ticks := int(delay / w.resolution)
+	delayRemainder := delay % w.resolution
+	if delayRemainder != 0 || w.remainder != 0 {
+		ticks++
+		if delayRemainder > w.resolution-w.remainder {
+			ticks++
+		}
+	}
+	ticks = max(ticks, 1)
 	slot := (w.current + ticks) % len(w.slots)
 
 	// Subtract 1 before division so exact cycle multiples (e.g. ticks == len(slots))

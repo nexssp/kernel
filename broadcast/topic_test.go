@@ -26,6 +26,48 @@ func TestTopic_BasicPublishRead(t *testing.T) {
 	}
 }
 
+func TestTopic_ConcurrentPublishersPreserveMessages(t *testing.T) {
+	const (
+		publishers     = 4
+		messagesPerPub = 16
+		total          = publishers * messagesPerPub
+	)
+	topic := broadcast.NewTopic[int](total)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for publisher := range publishers {
+		wg.Go(func() {
+			<-start
+			for message := range messagesPerPub {
+				topic.Publish(publisher*messagesPerPub + message)
+			}
+		})
+	}
+	close(start)
+	wg.Wait()
+
+	var cursor broadcast.Cursor
+	items := make([]int, total)
+	if count := topic.Read(&cursor, items); count != total {
+		t.Fatalf("Read() count = %d, want %d", count, total)
+	}
+	seen := make([]bool, total)
+	for _, item := range items {
+		if item < 0 || item >= total {
+			t.Fatalf("unexpected message %d", item)
+		}
+		if seen[item] {
+			t.Fatalf("duplicate message %d", item)
+		}
+		seen[item] = true
+	}
+	for item, ok := range seen {
+		if !ok {
+			t.Errorf("message %d was lost", item)
+		}
+	}
+}
+
 func TestTopic_ReadsEveryItemAtExactCapacity(t *testing.T) {
 	const capacity = 8
 	topic := broadcast.NewTopic[int](capacity)

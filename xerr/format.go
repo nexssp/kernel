@@ -129,10 +129,15 @@ func sprintProd(err error) string {
 	if appErr, ok := errors.AsType[*AppError](err); ok {
 		return formatAppError(appErr)
 	}
-	return err.Error() + "\n"
+	// An unclassified error has no safe public message. In particular, error
+	// strings may contain causes, payloads, or recovered panic values.
+	return "[Internal] internal server error\n"
 }
 
 func formatAppError(appErr *AppError) string {
+	if appErr == nil || appErr.Kind == KindInternal {
+		return "[Internal] internal server error\n"
+	}
 	var b strings.Builder
 	b.Grow(len(appErr.Kind) + len(appErr.Message) + 4)
 	b.WriteByte('[')

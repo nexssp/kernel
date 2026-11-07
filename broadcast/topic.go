@@ -1,5 +1,5 @@
-// Package broadcast provides a Single-Producer Multi-Consumer (SPMC)
-// ring buffer for broadcasting state snapshots without blocking the producer.
+// Package broadcast provides a concurrent-producer, multi-consumer ring buffer
+// for broadcasting state snapshots.
 package broadcast
 
 import (
@@ -17,12 +17,13 @@ type slot[T any] struct {
 	val T
 }
 
-// Topic is an SPMC ring buffer.
-// Producer writes sequentially; consumers maintain private cursors.
+// Topic is a multi-consumer ring buffer with serialized concurrent publishers.
+// Consumers maintain private cursors.
 type Topic[T any] struct {
 	_      [56]byte
 	head   atomic.Uint64
 	_      [56]byte
+	pubMu  sync.Mutex
 	mask   uint64
 	buffer []slot[T]
 }
@@ -58,9 +59,12 @@ func NewTopicChecked[T any](requested int) (*Topic[T], error) {
 	return t, nil
 }
 
-// Publish stores a message and increments the sequence.
-// Concurrency: strictly single-producer.
+// Publish stores a message and increments the sequence. Concurrent publishers
+// are serialized; consumers may read concurrently with publishers.
 func (t *Topic[T]) Publish(msg T) {
+	t.pubMu.Lock()
+	defer t.pubMu.Unlock()
+
 	seq := t.head.Load()
 	s := &t.buffer[seq&t.mask]
 

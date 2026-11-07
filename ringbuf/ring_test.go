@@ -136,6 +136,53 @@ func TestRingLen(t *testing.T) {
 	}
 }
 
+func TestRingLen_ReturnsUnderLoad(t *testing.T) {
+	const pushers = 4
+
+	r := ringbuf.New(8)
+	stop := make(chan struct{})
+	ready := make(chan struct{}, pushers)
+	var workers sync.WaitGroup
+	for range pushers {
+		workers.Go(func() {
+			var slot, out ringbuf.Slot
+			ready <- struct{}{}
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				if !r.Push(&slot) {
+					r.Pop(&out)
+				}
+			}
+		})
+	}
+	for range pushers {
+		<-ready
+	}
+
+	done := make(chan struct{})
+	go func() {
+		for range 1000 {
+			_ = r.Len()
+		}
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		close(stop)
+		workers.Wait()
+		<-done // Let the observer finish after the counters stop changing.
+		t.Fatal("Len did not return promptly under load")
+	}
+	close(stop)
+	workers.Wait()
+}
+
 func TestBatchDrain_StopsAtEmpty(t *testing.T) {
 	r := ringbuf.New(8)
 	var s ringbuf.Slot
@@ -302,6 +349,84 @@ func TestRingConcurrentMPMC(t *testing.T) {
 	}
 	if r.Len() != 0 {
 		t.Fatalf("ring not empty after drain: Len=%d", r.Len())
+	}
+}
+
+func TestRingConcurrentMPMCDataAndOrder(t *testing.T) {
+	const (
+		producers   = 4
+		consumers   = 4
+		perProducer = 2000
+		total       = producers * perProducer
+	)
+	ring := ringbuf.New(64)
+	start := make(chan struct{})
+	results := make(chan ringbuf.Slot, total)
+	var producerWG sync.WaitGroup
+	var consumerWG sync.WaitGroup
+	var popped atomic.Int64
+
+	for producer := range producers {
+		producerWG.Go(func() {
+			<-start
+			for message := range perProducer {
+				slot := ringbuf.Slot{A: int64(producer), B: int64(message)}
+				for !ring.Push(&slot) {
+					runtime.Gosched()
+				}
+			}
+		})
+	}
+	for range consumers {
+		consumerWG.Go(func() {
+			<-start
+			var slot ringbuf.Slot
+			for popped.Load() < total {
+				if ring.Pop(&slot) {
+					results <- slot
+					popped.Add(1)
+					continue
+				}
+				runtime.Gosched()
+			}
+		})
+	}
+	close(start)
+	producerWG.Wait()
+	consumerWG.Wait()
+	close(results)
+
+	bySequence := make([]ringbuf.Slot, total)
+	seenSequence := make([]bool, total)
+	for slot := range results {
+		if slot.Seq >= uint64(total) {
+			t.Fatalf("sequence = %d, outside [0,%d)", slot.Seq, total)
+		}
+		if seenSequence[slot.Seq] {
+			t.Fatalf("duplicate sequence %d", slot.Seq)
+		}
+		if slot.A < 0 || slot.A >= int64(producers) || slot.B < 0 || slot.B >= int64(perProducer) {
+			t.Fatalf("invalid payload: producer=%d message=%d", slot.A, slot.B)
+		}
+		seenSequence[slot.Seq] = true
+		bySequence[slot.Seq] = slot
+	}
+	lastMessage := make([]int64, producers)
+	for producer := range producers {
+		lastMessage[producer] = -1
+	}
+	for sequence, slot := range bySequence {
+		if !seenSequence[sequence] {
+			t.Fatalf("sequence %d was lost", sequence)
+		}
+		producer := int(slot.A)
+		if slot.B <= lastMessage[producer] {
+			t.Fatalf("producer %d out of order at sequence %d: message %d after %d", producer, sequence, slot.B, lastMessage[producer])
+		}
+		lastMessage[producer] = slot.B
+	}
+	if got := ring.Len(); got != 0 {
+		t.Fatalf("ring not empty after all pops: Len=%d", got)
 	}
 }
 

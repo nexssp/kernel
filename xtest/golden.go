@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"flag"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -93,8 +94,17 @@ func canonicalJSON(v any) ([]byte, error) {
 		}
 	}
 
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
 	var pretty any
-	if err := json.Unmarshal(raw, &pretty); err != nil {
+	if err := decoder.Decode(&pretty); err != nil {
+		return nil, err
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		if err == nil {
+			return nil, errors.New("multiple JSON values")
+		}
 		return nil, err
 	}
 

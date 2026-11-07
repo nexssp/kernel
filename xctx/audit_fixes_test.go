@@ -52,6 +52,25 @@ func TestScopeFrom_StaleContextAfterRecycle_FailsClosed(t *testing.T) {
 	}
 }
 
+func TestSetter_FromStaleContext_DoesNotMutateReusedScope(t *testing.T) {
+	t.Parallel()
+
+	scope := &xctx.RequestScope{}
+	staleCtx := xctx.WithScope(context.Background(), scope)
+	scope.Reset()
+
+	liveCtx := xctx.WithScope(context.Background(), scope)
+	xctx.WithUserID(liveCtx, "user-B")
+
+	updatedStaleCtx := xctx.WithUserID(staleCtx, "user-A")
+	if got := xctx.UserIDFrom(liveCtx); got != "user-B" {
+		t.Fatalf("stale setter mutated the reused scope: UserID=%q", got)
+	}
+	if got := xctx.UserIDFrom(updatedStaleCtx); got != "user-A" {
+		t.Fatalf("setter did not update its stale-derived context: UserID=%q", got)
+	}
+}
+
 func TestAddTrace_FromStaleContext_Ignored(t *testing.T) {
 	t.Parallel()
 
