@@ -70,7 +70,7 @@ func sprintDev(err error) string {
 	for current != nil {
 		indent := "│  "
 
-		if appErr, ok := errors.AsType[*AppError](current); ok {
+		if appErr, ok := errors.AsType[*AppError](current); ok && appErr != nil {
 			if depth == 0 {
 				fmt.Fprintf(&b, "%sKind    : %s\n", indent, appErr.Kind)
 				fmt.Fprintf(&b, "%sMessage : %s\n", indent, appErr.Message)

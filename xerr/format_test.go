@@ -83,6 +83,19 @@ func TestSprintProd_TypedNilAppError(t *testing.T) {
 	}
 }
 
+func TestSprint_TypedNilAppErrorInDev(t *testing.T) {
+	previousDevMode := isDev
+	isDev = true
+	t.Cleanup(func() { isDev = previousDevMode })
+
+	var appErr *AppError
+	got := Sprint(appErr)
+	if !strings.Contains(got, "<nil>") || strings.Contains(got, "Kind    :") ||
+		strings.Contains(got, "Message :") || strings.Contains(got, "[Internal]") {
+		t.Fatalf("Sprint(typed nil AppError) = %q, want a safe plain nil-error rendering", got)
+	}
+}
+
 // ── trimPath ────────────────────────────────────────────────────────────────
 
 func TestTrimPath_Unix(t *testing.T) {

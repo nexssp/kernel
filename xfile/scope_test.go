@@ -2,6 +2,7 @@ package xfile_test
 
 import (
 	"context"
+	"sync"
 	"testing"
 
 	"github.com/nexssp/kernel/xctx"
@@ -19,9 +20,9 @@ func TestScopeFromContextRequiresCallerAndTenant(t *testing.T) {
 		{name: "no tenant", ctx: xctx.WithUserID(context.Background(), "caller-1")},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, err := xfile.ScopeFromContext(tt.ctx)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := xfile.ScopeFromContext(test.ctx)
 			if err == nil {
 				t.Fatalf("ScopeFromContext() = %#v, nil; want an authorization error", got)
 			}
@@ -46,45 +47,72 @@ func TestScopeFromContextCopiesAuthenticatedCallerAndTenant(t *testing.T) {
 }
 
 func TestScopeFromContextDoesNotMixConcurrentIdentityUpdates(t *testing.T) {
-	base := xctx.WithTenantID(context.Background(), "tenant-old")
-	base = xctx.WithUserID(base, "caller-old")
-	ctx := &interleavingScopeContext{
-		Context: base,
-		scope:   xctx.ScopeFrom(base),
-		updated: make(chan struct{}),
-	}
+	ctx := newInterleavingScopeContext()
+	ctx.updateOnScopeLookup = true
+	defer ctx.finish()
 
 	got, err := xfile.ScopeFromContext(ctx)
 	if err != nil {
 		t.Fatalf("ScopeFromContext() error = %v", err)
 	}
-	if got.CallerID != "caller-old" || got.TenantID != "tenant-old" {
+	if got.CallerID != "caller-new" || got.TenantID != "tenant-new" {
 		t.Fatalf("ScopeFromContext() mixed identity versions: %#v", got)
 	}
-	select {
-	case <-ctx.updated:
-		t.Fatal("identity update ran between caller and tenant reads")
-	default:
+}
+
+func TestSeparateScopeReadsCanMixConcurrentIdentityUpdates(t *testing.T) {
+	ctx := newInterleavingScopeContext()
+	defer ctx.finish()
+
+	callerID := xctx.UserIDFrom(ctx)
+	ctx.triggerUpdate()
+	tenantID := xctx.TenantIDFrom(ctx)
+	if callerID != "caller-old" || tenantID != "tenant-new" {
+		t.Fatalf("separate scope reads = (%q, %q), want forced mixed identity", callerID, tenantID)
 	}
+}
+
+func newInterleavingScopeContext() *interleavingScopeContext {
+	base := xctx.WithTenantID(context.Background(), "tenant-old")
+	base = xctx.WithUserID(base, "caller-old")
+	ctx := &interleavingScopeContext{
+		Context:     base,
+		scope:       xctx.ScopeFrom(base),
+		startUpdate: make(chan struct{}),
+		updated:     make(chan struct{}),
+	}
+	go func() {
+		<-ctx.startUpdate
+		xctx.FromClaims(ctx.scope, map[string]any{"sub": "caller-new", "ten": "tenant-new"})
+		close(ctx.updated)
+	}()
+	return ctx
 }
 
 type interleavingScopeContext struct {
 	context.Context
-	scope    *xctx.RequestScope
-	accesses int
-	updated  chan struct{}
+	scope               *xctx.RequestScope
+	startUpdate         chan struct{}
+	updated             chan struct{}
+	updateOnce          sync.Once
+	updateOnScopeLookup bool
 }
 
 func (ctx *interleavingScopeContext) Value(key any) any {
-	ctx.accesses++
-	if ctx.accesses == 4 {
-		done := make(chan struct{})
-		go func() {
-			xctx.FromClaims(ctx.scope, map[string]any{"sub": "caller-new", "ten": "tenant-new"})
-			close(ctx.updated)
-			close(done)
-		}()
-		<-done
+	value := ctx.Context.Value(key)
+	if ctx.updateOnScopeLookup {
+		if _, ok := value.(*xctx.RequestScope); ok {
+			ctx.triggerUpdate()
+		}
 	}
-	return ctx.Context.Value(key)
+	return value
+}
+
+func (ctx *interleavingScopeContext) finish() {
+	ctx.triggerUpdate()
+}
+
+func (ctx *interleavingScopeContext) triggerUpdate() {
+	ctx.updateOnce.Do(func() { close(ctx.startUpdate) })
+	<-ctx.updated
 }

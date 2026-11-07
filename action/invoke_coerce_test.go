@@ -1,6 +1,7 @@
 package action_test
 
 import (
+	"math"
 	"testing"
 
 	"github.com/nexssp/kernel/action"
@@ -59,6 +60,76 @@ func TestCoerce_StrictMap(t *testing.T) {
 	}
 	if _, err := action.Coerce[map[string]int](map[string]any{"a": 1, "b": "two"}); err == nil {
 		t.Fatal("expected error for mixed-type values into map[string]int")
+	}
+}
+
+func TestCoerce_IntegerRange(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name    string
+		input   any
+		want    int8
+		wantErr bool
+	}{
+		{name: "minimum", input: -128, want: -128},
+		{name: "maximum", input: 127, want: 127},
+		{name: "fraction truncates within range", input: 127.9, want: 127},
+		{name: "below minimum", input: -129, wantErr: true},
+		{name: "above maximum", input: 128, wantErr: true},
+		{name: "narrowing to zero", input: 256, wantErr: true},
+		{name: "float above maximum", input: 256.0, wantErr: true},
+		{name: "NaN", input: math.NaN(), wantErr: true},
+		{name: "positive infinity", input: math.Inf(1), wantErr: true},
+		{name: "negative infinity", input: math.Inf(-1), wantErr: true},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := action.Coerce[int8](test.input)
+			if (err != nil) != test.wantErr {
+				t.Fatalf("Coerce[int8](%#v) error = %v, wantErr %v", test.input, err, test.wantErr)
+			}
+			if err == nil && got != test.want {
+				t.Fatalf("Coerce[int8](%#v) = %d, want %d", test.input, got, test.want)
+			}
+		})
+	}
+
+	if _, err := action.Coerce[uint8](-1); err == nil {
+		t.Fatal("Coerce[uint8](-1) succeeded")
+	}
+	if _, err := action.Coerce[uint8](256); err == nil {
+		t.Fatal("Coerce[uint8](256) succeeded")
+	}
+	if _, err := action.Coerce[int64](uint64(1) << 63); err == nil {
+		t.Fatal("Coerce[int64](uint64(1) << 63) succeeded")
+	}
+}
+
+func FuzzCoerceInt8Range(f *testing.F) {
+	for _, seed := range []int64{-129, -128, -1, 0, 127, 128, 256} {
+		f.Add(seed)
+	}
+	f.Fuzz(func(t *testing.T, input int64) {
+		got, err := action.Coerce[int8](input)
+		if input < -128 || input > 127 {
+			if err == nil {
+				t.Fatalf("Coerce[int8](%d) = %d, want overflow error", input, got)
+			}
+			return
+		}
+		if err != nil || int64(got) != input {
+			t.Fatalf("Coerce[int8](%d) = %d, %v; want exact value", input, got, err)
+		}
+	})
+}
+
+func BenchmarkCoerceInt8(b *testing.B) {
+	b.ReportAllocs()
+	for range b.N {
+		if _, err := action.Coerce[int8](127); err != nil {
+			b.Fatal(err)
+		}
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"reflect"
 	"slices"
 	"strings"
@@ -279,20 +280,10 @@ func assignByKind(dst, src reflect.Value) bool {
 			return true
 		}
 		return assignStringScalar(dst, src)
-	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
 		if isNumericKind(src.Kind()) {
-			dst.SetInt(toInt64(src))
-			return true
-		}
-		return assignStringScalar(dst, src)
-	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-		if isNumericKind(src.Kind()) {
-			n := toInt64(src)
-			if n < 0 {
-				return false
-			}
-			dst.SetUint(uint64(n))
-			return true
+			return assignInteger(dst, src)
 		}
 		return assignStringScalar(dst, src)
 	case reflect.Float32, reflect.Float64:
@@ -305,6 +296,82 @@ func assignByKind(dst, src reflect.Value) bool {
 		return false
 	}
 	return false
+}
+
+func assignInteger(dst, src reflect.Value) bool {
+	//nolint:exhaustive // only numeric source kinds reach this helper
+	switch src.Kind() {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return assignSignedNumber(dst, src.Int())
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		return assignUnsignedNumber(dst, src.Uint())
+	case reflect.Float32, reflect.Float64:
+		return assignFloatNumber(dst, src.Float())
+	default:
+		return false
+	}
+}
+
+func assignSignedNumber(dst reflect.Value, number int64) bool {
+	//nolint:exhaustive // only signed and unsigned integer targets reach this helper
+	switch dst.Kind() {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		if dst.OverflowInt(number) {
+			return false
+		}
+		dst.SetInt(number)
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		if number < 0 || dst.OverflowUint(uint64(number)) {
+			return false
+		}
+		dst.SetUint(uint64(number))
+	default:
+		return false
+	}
+	return true
+}
+
+func assignUnsignedNumber(dst reflect.Value, number uint64) bool {
+	//nolint:exhaustive // only signed and unsigned integer targets reach this helper
+	switch dst.Kind() {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		if number > (uint64(1)<<(dst.Type().Bits()-1))-1 {
+			return false
+		}
+		dst.SetInt(int64(number)) //nolint:gosec // bounded by the signed destination's maximum above
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		if dst.OverflowUint(number) {
+			return false
+		}
+		dst.SetUint(number)
+	default:
+		return false
+	}
+	return true
+}
+
+func assignFloatNumber(dst reflect.Value, number float64) bool {
+	if math.IsNaN(number) || math.IsInf(number, 0) {
+		return false
+	}
+	truncated := math.Trunc(number)
+	//nolint:exhaustive // only signed and unsigned integer targets reach this helper
+	switch dst.Kind() {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		limit := math.Ldexp(1, dst.Type().Bits()-1)
+		if truncated < -limit || truncated >= limit {
+			return false
+		}
+		dst.SetInt(int64(truncated))
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		if truncated < 0 || truncated >= math.Ldexp(1, dst.Type().Bits()) {
+			return false
+		}
+		dst.SetUint(uint64(truncated))
+	default:
+		return false
+	}
+	return true
 }
 
 type structIndex struct {
@@ -440,20 +507,6 @@ func isNumericKind(k reflect.Kind) bool {
 		return true
 	default:
 		return false
-	}
-}
-
-func toInt64(v reflect.Value) int64 {
-	//nolint:exhaustive // only numeric kinds are converted; everything else returns 0
-	switch v.Kind() {
-	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		return v.Int()
-	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-		return int64(v.Uint()) //nolint:gosec // best-effort numeric coercion; large uint64 truncates, same as encoding/json
-	case reflect.Float32, reflect.Float64:
-		return int64(v.Float())
-	default:
-		return 0
 	}
 }
 
