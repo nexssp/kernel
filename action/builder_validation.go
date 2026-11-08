@@ -17,7 +17,7 @@ func (b *Builder[Req, Res]) Validate(fn func(ctx context.Context, req Req) error
 			if fn != nil {
 				if err := fn(ctx, req); err != nil {
 					var zero Res
-					// A typed-nil AppError falls through to generic validation handling.
+					// A typed-nil *AppError becomes Validation here; testable.go returns a diagnostic.
 					if appErr, ok := appErrorFrom(err); ok && appErr != nil {
 						return zero, appErr
 					}

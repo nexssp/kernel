@@ -69,7 +69,7 @@ func TestBuilder_IdempotencyNamespaceUsesFinalName(t *testing.T) {
 	}
 }
 
-func TestBuilder_IdempotencyRunsBeforeCacheAndRecordsCacheHits(t *testing.T) {
+func TestIdempotencyRunsBeforeCache(t *testing.T) {
 	cacheStore := newMockStore()
 	if err := cacheStore.Set(context.Background(), "shared-cache-key", "cached response", time.Minute); err != nil {
 		t.Fatalf("prepopulate cache: %v", err)

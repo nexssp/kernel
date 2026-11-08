@@ -54,17 +54,20 @@ func HasFeature(ctx context.Context, feature string) bool {
 	return hasFeature(s.Role, s.Roles, s.Features, feature)
 }
 
-// HasRole reports whether this snapshot contains the given role.
+// HasRole reports whether this snapshot contains the given role, evaluated
+// against state at the moment SnapshotFrom ran.
 func (snapshot ScopeSnapshot) HasRole(required string) bool {
 	return snapshot.Present && hasRole(snapshot.Role, snapshot.Roles, required)
 }
 
-// HasPermission reports whether this snapshot grants permission or the wildcard "*".
+// HasPermission reports whether this snapshot grants permission or the wildcard
+// "*", evaluated against state at the moment SnapshotFrom ran.
 func (snapshot ScopeSnapshot) HasPermission(permission string) bool {
 	return snapshot.Present && hasPermission(snapshot.Permissions, permission)
 }
 
-// HasFeature reports whether this snapshot enables feature, including admin and wildcard rules.
+// HasFeature reports whether this snapshot enables feature, including admin and
+// wildcard rules, evaluated against state at the moment SnapshotFrom ran.
 func (snapshot ScopeSnapshot) HasFeature(feature string) bool {
 	return snapshot.Present && hasFeature(snapshot.Role, snapshot.Roles, snapshot.Features, feature)
 }

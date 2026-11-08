@@ -172,6 +172,8 @@ func withLockedScope(ctx context.Context, update func(*RequestScope)) context.Co
 	return ctx
 }
 
+// lockScopeAtGeneration returns with scope.mu held; callers must unlock it.
+// Use withLockedScope for mutations that do not need to retain the lock.
 func lockScopeAtGeneration(ctx context.Context, scope *RequestScope, generation uint64) (context.Context, *RequestScope) {
 	scope.mu.Lock()
 	if scope.generation.Load() == generation {

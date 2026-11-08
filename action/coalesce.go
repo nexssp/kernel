@@ -94,6 +94,8 @@ func (c *Coalescer) do(ctx context.Context, key coalesceKey, fn func(context.Con
 	return result, false, execErr
 }
 
+// Waiters reports the number of callers waiting on the given key.
+// It runs in O(pending size); use it for diagnostics, not hot paths.
 func (c *Coalescer) Waiters(key string) int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
