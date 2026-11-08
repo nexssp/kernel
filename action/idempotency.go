@@ -29,10 +29,13 @@ const (
 )
 
 type IdempotencyConfig struct {
-	Enabled              bool
-	TTL                  time.Duration
-	KeyHeader            string
-	Namespace            string
+	Enabled   bool
+	TTL       time.Duration
+	KeyHeader string
+	Namespace string
+	// KeyFunc is the legacy []byte request key derivation. It is called only
+	// when the request is []byte and RequestKeyFunc is nil. For typed requests,
+	// use RequestKeyFunc.
 	KeyFunc              func(body []byte) string          `json:"-"`
 	RequestKeyFunc       func(request any) (string, error) `json:"-"`
 	MaxConcurrentFlights int

@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/nexssp/kernel/action"
+	"github.com/nexssp/kernel/xctx"
+	"github.com/nexssp/kernel/xerr"
 )
 
 func TestBuilder_Idempotent(t *testing.T) {
@@ -64,5 +66,39 @@ func TestBuilder_IdempotencyNamespaceUsesFinalName(t *testing.T) {
 
 	if got := act.GetMeta().Idempotency.Namespace; got != "after.rename" {
 		t.Fatalf("idempotency namespace = %q, want after.rename", got)
+	}
+}
+
+func TestBuilder_IdempotencyRunsBeforeCacheAndRecordsCacheHits(t *testing.T) {
+	cacheStore := newMockStore()
+	if err := cacheStore.Set(context.Background(), "shared-cache-key", "cached response", time.Minute); err != nil {
+		t.Fatalf("prepopulate cache: %v", err)
+	}
+	idempotencyStore := action.NewMemoryIdempotencyStore(time.Hour)
+	var handlerCalls, cacheHits int
+	act := action.New("idem.cache.order", func(_ context.Context, req string) (string, error) {
+		handlerCalls++
+		return "response:" + req, nil
+	}).
+		Cache(time.Minute, func(string) string { return "shared-cache-key" }, cacheStore).
+		HookCacheHit(func(context.Context, string, string, *action.Meta) { cacheHits++ }).
+		IdempotentWithConfig(action.IdempotencyConfig{Store: idempotencyStore}).
+		Build()
+
+	ctx := xctx.WithIdempotencyKey(context.Background(), "cache-order-key")
+	got, err := act.Do(ctx, "first payload")
+	if err != nil || got != "cached response" {
+		t.Fatalf("first call = %q / %v, want cached response / nil", got, err)
+	}
+	if handlerCalls != 0 || cacheHits != 1 {
+		t.Fatalf("first call handler/cache-hit counts = %d/%d, want 0/1", handlerCalls, cacheHits)
+	}
+
+	_, err = act.Do(ctx, "different payload")
+	if xerr.KindFrom(err) != xerr.KindConflict {
+		t.Fatalf("same key with different payload error = %v, want Conflict", err)
+	}
+	if handlerCalls != 0 || cacheHits != 1 {
+		t.Fatalf("conflicting call reached cache/handler: counts = %d/%d, want 0/1", handlerCalls, cacheHits)
 	}
 }
