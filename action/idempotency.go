@@ -24,8 +24,9 @@ import (
 const (
 	DefaultIdempotencyTTL                  = 24 * time.Hour
 	DefaultIdempotencyLeaseTTL             = 2 * time.Minute
+	DefaultIdempotencyFlightTimeout        = 2 * time.Minute
 	DefaultIdempotencyMaxConcurrentFlights = 256
-	idempotencyStorageKeyPrefix            = "kernel:idempotency:v1:"
+	idempotencyStorageKeyPrefix            = "kernel:idempotency:v2:"
 )
 
 type IdempotencyConfig struct {
@@ -40,6 +41,7 @@ type IdempotencyConfig struct {
 	RequestKeyFunc       func(request any) (string, error) `json:"-"`
 	MaxConcurrentFlights int
 	LeaseTTL             time.Duration
+	FlightTimeout        time.Duration
 	Store                IdempotencyStore `json:"-"`
 }
 
@@ -55,6 +57,14 @@ func (c IdempotencyConfig) EffectiveLeaseTTL() time.Duration {
 		return c.LeaseTTL
 	}
 	return DefaultIdempotencyLeaseTTL
+}
+
+// EffectiveFlightTimeout returns the configured shared execution limit.
+func (c IdempotencyConfig) EffectiveFlightTimeout() time.Duration {
+	if c.FlightTimeout > 0 {
+		return c.FlightTimeout
+	}
+	return DefaultIdempotencyFlightTimeout
 }
 
 type IdempotencyEntry struct {
@@ -115,8 +125,7 @@ type idempotencyFlight struct {
 }
 
 // idempotencyFlightGroup bounds active unique keys. The first caller executes
-// synchronously and owns the handler context; followers can stop waiting
-// without canceling the leader's work.
+// synchronously; followers can stop waiting without canceling shared work.
 type idempotencyFlightGroup struct {
 	mu      sync.Mutex
 	flights map[string]*idempotencyFlight
@@ -197,9 +206,9 @@ func (g *idempotencyFlightGroup) run(ctx context.Context, key string, flight *id
 
 // IdempotencyMiddleware replays successful responses only when a caller provides
 // an explicit idempotency key. Request IDs are for correlation and payload hashes
-// detect conflicts; neither is used as a key. The first caller owns the shared
-// handler context; its cancellation is observed by the handler and all remaining
-// waiters receive that execution's result. A canceled follower only stops waiting.
+// detect conflicts; neither is used as a key. Shared work keeps the first caller's
+// context values but not its cancellation; each caller can stop waiting using its
+// own context. FlightTimeout bounds the shared execution.
 //
 // A direct middleware must set cfg.Namespace. Builder-created middleware uses the
 // final action name unless cfg.Namespace explicitly overrides it. Transport
@@ -217,6 +226,7 @@ func IdempotencyMiddleware[Req, Res any](store IdempotencyStore, cfg Idempotency
 	if maxFlights == 0 {
 		maxFlights = DefaultIdempotencyMaxConcurrentFlights
 	}
+	flightTimeout := cfg.EffectiveFlightTimeout()
 	flights := newIdempotencyFlightGroup(maxFlights)
 
 	return func(next Fn[Req, Res]) Fn[Req, Res] {
@@ -277,6 +287,10 @@ func IdempotencyMiddleware[Req, Res any](store IdempotencyStore, cfg Idempotency
 			}
 
 			value, err := flights.Do(ctx, key, func(workCtx context.Context) (any, error) {
+				workCtx, cancelFlight := withSharedFlightTimeout(workCtx, flightTimeout)
+				if cancelFlight != nil {
+					defer cancelFlight()
+				}
 				if err := workCtx.Err(); err != nil {
 					return nil, err
 				}
@@ -358,6 +372,10 @@ func IdempotencyMiddleware[Req, Res any](store IdempotencyStore, cfg Idempotency
 				}
 				return idempotentResult[Res]{requestHash: reqHash, value: res}, nil
 			})
+			if err == nil && ctx.Err() != nil {
+				var zero Res
+				return zero, ctx.Err()
+			}
 			if err != nil {
 				var zero Res
 				return zero, err

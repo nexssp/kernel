@@ -85,8 +85,9 @@ func (b *Builder[Req, Res]) Once() *Builder[Req, Res] {
 // Dedup prevents concurrent identical requests from executing multiple times.
 // All callers with the same key block until the first one completes,
 // then share its result — exactly one handler invocation per unique key
-// at any point in time. The leader runs synchronously with its caller context
-// and the default shared-flight timeout; waiters can cancel their own waits.
+// at any point in time. Shared work keeps the leader's context values but not
+// its cancellation and uses the default shared-flight timeout. The leader runs
+// synchronously; waiters can cancel their own waits.
 //
 // keyFn returns the dedup key. An empty string disables dedup for that request.
 //
@@ -100,7 +101,7 @@ func (b *Builder[Req, Res]) Dedup(keyFn func(Req) string) *Builder[Req, Res] {
 	return b.DedupWithOptions(keyFn, SharedFlightOptions{})
 }
 
-// DedupWithOptions configures the synchronous deduplication leader's context deadline.
+// DedupWithOptions configures the shared deduplication work's deadline.
 func (b *Builder[Req, Res]) DedupWithOptions(
 	keyFn func(Req) string,
 	options SharedFlightOptions,
@@ -111,8 +112,9 @@ func (b *Builder[Req, Res]) DedupWithOptions(
 
 // Coalesce deduplicates concurrent requests using request coalescing.
 // A waiting caller whose context is canceled can bail out without canceling
-// the leader. The leader runs synchronously with its caller context and the
-// default shared-flight timeout.
+// shared work. Shared work keeps the leader's context values but not its
+// cancellation and uses the default shared-flight timeout. The leader runs
+// synchronously.
 //
 // A single *Coalescer can be shared across multiple actions:
 //
@@ -129,7 +131,7 @@ func (b *Builder[Req, Res]) Coalesce(c *Coalescer, keyFn func(Req) string) *Buil
 	return b.CoalesceWithOptions(c, keyFn, SharedFlightOptions{})
 }
 
-// CoalesceWithOptions configures the synchronous coalescing leader's context deadline.
+// CoalesceWithOptions configures the shared coalescing work's deadline.
 func (b *Builder[Req, Res]) CoalesceWithOptions(
 	c *Coalescer,
 	keyFn func(Req) string,

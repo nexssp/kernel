@@ -465,6 +465,9 @@ func assignFloatNumber(dst reflect.Value, number float64) bool {
 		return false
 	}
 	truncated := math.Trunc(number)
+	if truncated != number {
+		return false
+	}
 	//nolint:exhaustive // only signed and unsigned integer targets reach this helper
 	switch dst.Kind() {
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:

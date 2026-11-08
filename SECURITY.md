@@ -8,4 +8,4 @@ If private reporting is unavailable, contact the repository maintainers privatel
 
 ## Supported Versions
 
-Security fixes are evaluated against the latest released version. As this project is pre-1.0, downstream users should pin an explicit release and check the release notes when upgrading.
+Security fixes are applied to the latest released `v1.x` version (including the current release candidate until `v1.0.0` is published). Versions before `v1.0.0-rc1` (`v0.x`) are no longer supported; please upgrade. Pin an explicit release and check the [CHANGELOG](./CHANGELOG.md) when upgrading.

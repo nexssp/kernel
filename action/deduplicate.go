@@ -70,14 +70,16 @@ func (f *inflightMap[Res]) Do(ctx context.Context, key string, fn func() (Res, e
 }
 
 // Deduplicate returns a middleware that collapses concurrent identical requests
-// into a single execution, sharing the result with all waiting callers. The
-// leader uses its caller context and the default shared-flight timeout.
+// into a single execution, sharing the result with all waiting callers. Shared
+// work keeps the leader's context values but not its cancellation and uses the
+// default shared-flight timeout.
 func Deduplicate[Req, Res any](keyFn func(Req) string) DispatcherMiddleware[Req, Res] {
 	return DeduplicateWithOptions[Req, Res](keyFn, SharedFlightOptions{})
 }
 
-// DeduplicateWithOptions configures the synchronous leader's context deadline.
-// A waiting caller's cancellation only ends that caller's wait; it does not cancel the leader.
+// DeduplicateWithOptions configures the synchronous shared work's deadline.
+// A waiting caller's cancellation only ends that caller's wait; it does not
+// cancel the shared execution.
 func DeduplicateWithOptions[Req, Res any](
 	keyFn func(Req) string,
 	options SharedFlightOptions,

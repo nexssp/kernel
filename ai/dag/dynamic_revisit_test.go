@@ -54,7 +54,7 @@ func TestDynamicExecutionAllowsNodeRevisits(t *testing.T) {
 	}
 }
 
-func TestDynamicExecutionKeepsInitialNodeCompletedOnRevisit(t *testing.T) {
+func TestDynamicExecutionRerunsInitialNodeOnRevisit(t *testing.T) {
 	var stepCalls, reviewCalls, routeCalls int
 	step := action.New("step", func(context.Context, dag.ReadState) (string, error) {
 		stepCalls++
@@ -93,11 +93,11 @@ func TestDynamicExecutionKeepsInitialNodeCompletedOnRevisit(t *testing.T) {
 	}
 	defer state.Release()
 
-	if stepCalls != 0 || reviewCalls != 1 || routeCalls != 2 {
-		t.Fatalf("calls: step=%d review=%d routes=%d, want 0, 1, 2", stepCalls, reviewCalls, routeCalls)
+	if stepCalls != 1 || reviewCalls != 1 || routeCalls != 2 {
+		t.Fatalf("calls: step=%d review=%d routes=%d, want 1, 1, 2", stepCalls, reviewCalls, routeCalls)
 	}
-	if got, ok := state.Get(dag.OutputKey("step")); !ok || got != "saved" {
-		t.Fatalf("persisted step output = (%v, %t), want (saved, true)", got, ok)
+	if got, ok := state.Get(dag.OutputKey("step")); !ok || got != "rerun" {
+		t.Fatalf("revisited step output = (%v, %t), want (rerun, true)", got, ok)
 	}
 }
 

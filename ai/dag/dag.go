@@ -82,8 +82,8 @@ func (d *DAG) AsAction() *action.Builder[ReadState, *State] {
 // exceeded.
 //
 // The starting node is d.entryID. Actions whose outputs were in
-// initialState are skipped; other visits run the action and replace its
-// output, so routers see the cumulative result of the path so far.
+// initialState are skipped on their first visit; revisits run the action
+// and replace its output, so routers see the cumulative result of the path.
 //
 // The step limit is a hard bound: a router that keeps returning the
 // same target terminates with xerr.Timeout rather than looping forever.
@@ -101,6 +101,7 @@ func (d *DAG) executeDynamic(ctx context.Context, initialState ReadState) (*Stat
 	}
 
 	currentNodeID := d.entryID
+	visited := make(map[string]struct{})
 	limit := d.maxSteps
 	if limit <= 0 {
 		limit = 32
@@ -123,9 +124,11 @@ func (d *DAG) executeDynamic(ctx context.Context, initialState ReadState) (*Stat
 
 		var output Value
 		var runErr error
-		if _, completed := initialState.Get(node.OutputKey); !completed {
+		_, revisited := visited[currentNodeID]
+		if _, completed := initialState.Get(node.OutputKey); !completed || revisited {
 			runErr = executeNode(ctx, node, currentState, &output)
 		}
+		visited[currentNodeID] = struct{}{}
 
 		// Merge any node output before returning on error: a failed
 		// nested DAG stashes its inner *State under InnerStateKey so a

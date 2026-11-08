@@ -3,6 +3,7 @@ package action
 import (
 	"context"
 	"runtime"
+	"strconv"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -12,6 +13,11 @@ import (
 
 func TestAdaptiveTimeoutAfterFailuresSaturates(t *testing.T) {
 	const maxDuration = time.Duration(1<<63 - 1)
+	maxInt := int(^uint(0) >> 1)
+	wantAtMaxInt := maxDuration
+	if strconv.IntSize == 32 {
+		wantAtMaxInt = 10*time.Nanosecond*time.Duration(1+int64(maxInt)/10) + time.Duration(int64(maxInt)%10)
+	}
 	tests := []struct {
 		name     string
 		initial  time.Duration
@@ -22,7 +28,7 @@ func TestAdaptiveTimeoutAfterFailuresSaturates(t *testing.T) {
 		{name: "one failure", initial: time.Second, failures: 1, want: 1100 * time.Millisecond},
 		{name: "nine failures", initial: time.Second, failures: 9, want: 1900 * time.Millisecond},
 		{name: "ten failures", initial: time.Second, failures: 10, want: 2 * time.Second},
-		{name: "maximum int failure count", initial: 10 * time.Nanosecond, failures: int(^uint(0) >> 1), want: maxDuration},
+		{name: "maximum int failure count", initial: 10 * time.Nanosecond, failures: maxInt, want: wantAtMaxInt},
 		{name: "maximum initial timeout", initial: maxDuration, failures: 1, want: maxDuration},
 		{name: "nonpositive initial timeout", initial: -time.Second, failures: 1, want: 0},
 	}

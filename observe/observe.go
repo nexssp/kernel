@@ -1,3 +1,11 @@
+// Package observe turns action lifecycle hooks into structured events and
+// delivers them to pluggable sinks.
+//
+// Use Hook to adapt a Sink into an action hook. Bundled sinks cover structured
+// logging (SlogSink), JSON Lines (JSONLSink), Prometheus text exposition
+// (PrometheusSink) and in-memory capture for tests (MemorySink). The slog,
+// JSONL and Prometheus sinks do not serialize request or response payloads;
+// MemorySink retains complete events and is intended for tests.
 package observe
 
 import (

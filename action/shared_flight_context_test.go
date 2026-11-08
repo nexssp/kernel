@@ -62,11 +62,13 @@ func newSharedFlightAction(
 	}
 }
 
-func TestSharedFlightLeaderReceivesCallerDeadline(t *testing.T) {
+func TestSharedFlightWorkIgnoresCallerDeadline(t *testing.T) {
 	for _, kind := range []string{"coalesce", "deduplicate"} {
 		t.Run(kind, func(t *testing.T) {
 			release := make(chan struct{})
-			defer close(release)
+			var releaseOnce sync.Once
+			unblock := func() { releaseOnce.Do(func() { close(release) }) }
+			defer unblock()
 			handlerContexts := make(chan context.Context, 1)
 			act := newSharedFlightAction(kind, action.SharedFlightOptions{}, func(ctx context.Context, _ string) (string, error) {
 				handlerContexts <- ctx
@@ -89,9 +91,14 @@ func TestSharedFlightLeaderReceivesCallerDeadline(t *testing.T) {
 
 			handlerCtx := <-handlerContexts
 			gotDeadline, ok := handlerCtx.Deadline()
-			if !ok || !gotDeadline.Equal(callerDeadline) {
-				t.Fatalf("leader deadline = %v, present=%t; want caller deadline %v", gotDeadline, ok, callerDeadline)
+			if !ok || time.Until(gotDeadline) <= time.Minute || gotDeadline.Equal(callerDeadline) {
+				t.Fatalf("shared work deadline = %v, present=%t; want its independent timeout, not caller deadline %v", gotDeadline, ok, callerDeadline)
 			}
+			<-callerCtx.Done()
+			if err := handlerCtx.Err(); err != nil {
+				t.Fatalf("caller deadline canceled shared work: %v", err)
+			}
+			unblock()
 			if err := <-result; !errors.Is(err, context.DeadlineExceeded) {
 				t.Fatalf("leader error = %v, want context deadline exceeded", err)
 			}

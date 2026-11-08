@@ -6,6 +6,7 @@ package action
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"time"
@@ -71,6 +72,36 @@ type SagaResult[Res any] struct {
 	DurationMs         int64    `json:"duration_ms"`
 }
 
+// MarshalJSON serializes populated inline step slots and preserves the separate
+// overflow field as part of the documented JSON representation.
+func (r SagaResult[Res]) MarshalJSON() ([]byte, error) {
+	type jsonResult struct {
+		Saga               string       `json:"saga"`
+		Success            bool         `json:"success"`
+		Output             Res          `json:"output,omitempty"`
+		Steps              []StepResult `json:"steps"`
+		StepsCount         int          `json:"steps_count"`
+		StepsOverflow      []StepResult `json:"steps_overflow,omitempty"`
+		Error              string       `json:"error,omitempty"`
+		RolledBack         bool         `json:"rolled_back,omitempty"`
+		CompensationErrors []string     `json:"compensation_errors,omitempty"`
+		DurationMs         int64        `json:"duration_ms"`
+	}
+	inlineCount := min(max(r.StepsCount, 0), MaxSagaSteps)
+	return json.Marshal(jsonResult{
+		Saga:               r.Saga,
+		Success:            r.Success,
+		Output:             r.Output,
+		Steps:              r.Steps[:inlineCount],
+		StepsCount:         r.StepsCount,
+		StepsOverflow:      r.StepsOverflow,
+		Error:              r.Error,
+		RolledBack:         r.RolledBack,
+		CompensationErrors: r.CompensationErrors,
+		DurationMs:         r.DurationMs,
+	})
+}
+
 // Step returns the i-th step result, abstracting the inline/overflow split.
 func (r *SagaResult[Res]) Step(i int) StepResult {
 	if i < MaxSagaSteps {
@@ -82,12 +113,17 @@ func (r *SagaResult[Res]) Step(i int) StepResult {
 // AllSteps returns a slice view over all populated step results.
 // Allocates only if the saga overflowed the inline array.
 func (r *SagaResult[Res]) AllSteps() []StepResult {
-	if r.StepsCount <= MaxSagaSteps {
-		return r.Steps[:r.StepsCount]
+	inlineCount := min(max(r.StepsCount, 0), MaxSagaSteps)
+	overflowCount := 0
+	if r.StepsCount > MaxSagaSteps {
+		overflowCount = min(r.StepsCount-MaxSagaSteps, len(r.StepsOverflow))
 	}
-	all := make([]StepResult, 0, r.StepsCount)
-	all = append(all, r.Steps[:]...)
-	all = append(all, r.StepsOverflow...)
+	if overflowCount == 0 {
+		return r.Steps[:inlineCount]
+	}
+	all := make([]StepResult, 0, inlineCount+overflowCount)
+	all = append(all, r.Steps[:inlineCount]...)
+	all = append(all, r.StepsOverflow[:overflowCount]...)
 	return all
 }
 

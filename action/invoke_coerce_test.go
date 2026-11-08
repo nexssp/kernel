@@ -73,7 +73,7 @@ func TestCoerce_IntegerRange(t *testing.T) {
 	}{
 		{name: "minimum", input: -128, want: -128},
 		{name: "maximum", input: 127, want: 127},
-		{name: "fraction truncates within range", input: 127.9, want: 127},
+		{name: "fraction is rejected", input: 127.9, wantErr: true},
 		{name: "below minimum", input: -129, wantErr: true},
 		{name: "above maximum", input: 128, wantErr: true},
 		{name: "narrowing to zero", input: 256, wantErr: true},

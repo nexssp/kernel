@@ -317,9 +317,17 @@ func ParallelMapWithOptions[Req any](
 	actions ...AnyAction,
 ) *Builder[Req, map[string]any] {
 	routes := make(map[string]AnyAction, len(actions))
+	seen := make(map[string]struct{}, len(actions))
 	for _, a := range actions {
 		if a != nil {
-			routes[a.Describe().Name] = a
+			actionName := a.Describe().Name
+			if _, exists := seen[actionName]; exists {
+				return New(name, func(context.Context, Req) (map[string]any, error) {
+					return nil, fmt.Errorf("parallel map %q: duplicate action name %q", name, actionName)
+				}).Description(fmt.Sprintf("Heterogeneous parallel execution of %d branches", len(actions))).Tag("parallel", "named", "composer")
+			}
+			seen[actionName] = struct{}{}
+			routes[actionName] = a
 		}
 	}
 	return ParallelNamedWithOptions[Req](name, routes, options)
@@ -332,7 +340,13 @@ func BranchAny(
 	router func(context.Context, any) (string, error),
 ) *Builder[any, any] {
 	var allTags []string
-	for _, act := range routes {
+	keys := make([]string, 0, len(routes))
+	for key := range routes {
+		keys = append(keys, key)
+	}
+	slices.Sort(keys)
+	for _, key := range keys {
+		act := routes[key]
 		if act != nil {
 			allTags = append(allTags, act.Describe().Tags...)
 		}

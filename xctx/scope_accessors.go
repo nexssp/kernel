@@ -187,27 +187,50 @@ func IdempotencyScopeHashFrom(ctx context.Context) [32]byte {
 		data = append(data, length[:]...)
 		data = append(data, value...)
 	}
-	appendList := func(name string, values []string) {
+	appendList := func(name string, values []string, extra string) {
 		appendPart(name)
-		binary.BigEndian.PutUint64(length[:], uint64(len(values)))
+		count := len(values)
+		if extra != "" && !slices.Contains(values, extra) {
+			count++
+		}
+		var local [33]string
+		var sorted []string
+		if count <= len(local) {
+			sorted = local[:count]
+		} else {
+			sorted = make([]string, count)
+		}
+		copy(sorted, values)
+		if count > len(values) {
+			sorted[len(values)] = extra
+		}
+		slices.Sort(sorted)
+		unique := 0
+		for _, value := range sorted {
+			if unique == 0 || sorted[unique-1] != value {
+				sorted[unique] = value
+				unique++
+			}
+		}
+		sorted = sorted[:unique]
+		binary.BigEndian.PutUint64(length[:], uint64(len(sorted)))
 		data = append(data, length[:]...)
-		for _, value := range values {
+		for _, value := range sorted {
 			appendPart(value)
 		}
 	}
 
 	s := lockScopeForRead(ctx)
 	if s == nil {
-		appendPart("kernel-idempotency-scope-v1:absent")
+		appendPart("kernel-idempotency-scope-v2:absent")
 	} else {
 		defer s.mu.RUnlock()
-		appendPart("kernel-idempotency-scope-v1:present")
+		appendPart("kernel-idempotency-scope-v2:present")
 		appendPart(s.TenantID)
 		appendPart(s.UserID)
-		appendPart(s.Role)
-		appendList("roles", s.Roles)
-		appendList("permissions", s.Permissions)
-		appendList("features", s.Features)
+		appendList("roles", s.Roles, s.Role)
+		appendList("permissions", s.Permissions, "")
+		appendList("features", s.Features, "")
 	}
 	return sha256.Sum256(data)
 }

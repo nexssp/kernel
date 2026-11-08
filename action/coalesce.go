@@ -113,8 +113,9 @@ func CoalesceMiddleware[Req, Res any](coalescer *Coalescer, actionName string, k
 	return CoalesceMiddlewareWithOptions[Req, Res](coalescer, actionName, keyFn, SharedFlightOptions{})
 }
 
-// CoalesceMiddlewareWithOptions configures the synchronous leader's context deadline.
-// A waiting caller's cancellation only ends that caller's wait; it does not cancel the leader.
+// CoalesceMiddlewareWithOptions configures the shared work's context deadline.
+// The shared work keeps the leader's context values but not its cancellation; a
+// waiting caller's cancellation only ends that caller's wait.
 func CoalesceMiddlewareWithOptions[Req, Res any](
 	coalescer *Coalescer,
 	actionName string,
@@ -143,6 +144,10 @@ func CoalesceMiddlewareWithOptions[Req, Res any](
 				}
 				return res, nil
 			})
+			if err == nil && !shared && ctx.Err() != nil {
+				var zero Res
+				return zero, ctx.Err()
+			}
 
 			if shared {
 				hooks.OnCoalesced(ctx, req)

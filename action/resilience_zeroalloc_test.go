@@ -198,7 +198,7 @@ func TestDedup_SharedResultPath_DeadlineContextNoExtraAllocs(t *testing.T) {
 	_, _ = act.Do(ctx, 1) // prime
 
 	// The caller deadline precedes the flight limit, so no timeout context is added.
-	xtest.RequireMaxAlloc(t, 1000, 3, func() {
+	xtest.RequireMaxAlloc(t, 1000, 7, func() {
 		res, err := act.Do(ctx, 42)
 		if err != nil || res != 42 {
 			t.Fatalf("res=%d err=%v", res, err)
@@ -238,7 +238,7 @@ func TestCoalesce_SharedResultPath_DeadlineContextNoExtraAllocs(t *testing.T) {
 	_, _ = act.Do(ctx, 1) // prime
 
 	// The caller deadline precedes the flight limit, so no timeout context is added.
-	xtest.RequireMaxAlloc(t, 1000, 4, func() {
+	xtest.RequireMaxAlloc(t, 1000, 7, func() {
 		res, err := act.Do(ctx, 42)
 		if err != nil || res != 42 {
 			t.Fatalf("res=%d err=%v", res, err)

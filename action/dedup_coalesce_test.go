@@ -90,21 +90,23 @@ func TestCoalesce(t *testing.T) {
 	}
 }
 
-func TestDeduplicate_LeaderCancellationReachesHandlerAndWaiter(t *testing.T) {
+func TestDeduplicate_LeaderCancellationDoesNotFailWaiter(t *testing.T) {
 	t.Parallel()
 
 	handlerEntered := make(chan struct{})
 	handlerRelease := make(chan struct{})
-	defer close(handlerRelease)
-	handlerCanceled := make(chan struct{})
+	var releaseOnce sync.Once
+	unblock := func() { releaseOnce.Do(func() { close(handlerRelease) }) }
+	defer unblock()
+	handlerContexts := make(chan context.Context, 1)
 	var handlerCalls atomic.Int32
 
 	act := action.New("dedup.leadercancel", func(ctx context.Context, _ string) (string, error) {
 		handlerCalls.Add(1)
 		close(handlerEntered)
+		handlerContexts <- ctx
 		select {
 		case <-ctx.Done():
-			close(handlerCanceled)
 			return "", ctx.Err()
 		case <-handlerRelease:
 			return "success", nil
@@ -127,6 +129,7 @@ func TestDeduplicate_LeaderCancellationReachesHandlerAndWaiter(t *testing.T) {
 	}()
 
 	<-handlerEntered
+	handlerCtx := <-handlerContexts
 
 	go func() {
 		res2, err2 = act.Do(waiterCtx, "shared-key")
@@ -136,11 +139,10 @@ func TestDeduplicate_LeaderCancellationReachesHandlerAndWaiter(t *testing.T) {
 	<-waiterCtx.doneCalled
 
 	cancel1()
-	select {
-	case <-handlerCanceled:
-	case <-time.After(2 * time.Second):
-		t.Fatal("leader handler did not observe caller cancellation")
+	if err := handlerCtx.Err(); err != nil {
+		t.Fatalf("leader cancellation reached shared handler: %v", err)
 	}
+	unblock()
 
 	<-done1
 	<-done2
@@ -152,11 +154,11 @@ func TestDeduplicate_LeaderCancellationReachesHandlerAndWaiter(t *testing.T) {
 		t.Errorf("client 1 should receive empty result, got: %q", res1)
 	}
 
-	if err2 == nil || !errors.Is(err2, context.Canceled) {
-		t.Fatalf("client 2 should receive the leader's canceled flight error, got: %v", err2)
+	if err2 != nil {
+		t.Fatalf("healthy waiter error = %v, want nil", err2)
 	}
-	if res2 != "" {
-		t.Errorf("client 2 should receive an empty result, got: %q", res2)
+	if res2 != "success" {
+		t.Errorf("healthy waiter result = %q, want success", res2)
 	}
 	if count := handlerCalls.Load(); count != 1 {
 		t.Errorf("expected exactly one leader handler call, got %d", count)

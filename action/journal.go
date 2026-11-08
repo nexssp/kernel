@@ -92,7 +92,10 @@ func newDurableRunner[Req, Res any](journal Journal, stepName string, next Fn[Re
 
 	return func(ctx context.Context, req Req, executionID string) (Res, error) {
 		var zero Res
-		if journal == nil || stepName == "" || executionID == "" {
+		if stepName == "" {
+			return zero, xerr.Validation("durable: step name is required")
+		}
+		if journal == nil || executionID == "" {
 			return next(ctx, req)
 		}
 

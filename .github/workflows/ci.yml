@@ -55,5 +55,45 @@ jobs:
       - name: Run CI gate
         run: task ci
 
+      - name: Vulnerability scan
+        run: task vuln
+
       - name: Benchmark smoke check
         run: task bench
+
+  portability:
+    name: portability · ${{ matrix.goos }}/${{ matrix.goarch }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # 32-bit is where lock-free/atomic code and int-width assumptions break.
+          - { goos: linux,   goarch: "386",   run_tests: true }
+          - { goos: linux,   goarch: arm }
+          - { goos: linux,   goarch: arm64 }
+          - { goos: darwin,  goarch: arm64 }
+          - { goos: windows, goarch: amd64 }
+
+    env:
+      CGO_ENABLED: "0"
+      GOOS: ${{ matrix.goos }}
+      GOARCH: ${{ matrix.goarch }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Vet (compiles production and test code for the target)
+        run: go vet ./...
+
+      - name: Test
+        if: ${{ matrix.run_tests }}
+        run: go test -short -count=1 ./...

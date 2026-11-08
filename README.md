@@ -198,7 +198,7 @@ results, err := reviewer.Do(ctx, "package main...")
 - `AdaptiveLoadShedding` evaluates system statistics (CPU percentage and goroutine count) against priority tiers (`PriorityCritical`, `PriorityNormal`, `PriorityLow`), dropping non-essential traffic when thresholds are exceeded.
 
 ### Execution Primitives
-- `FanOut(ctx, act, reqs, maxConcurrency)` executes concurrent items while preserving input order in the returned slice. A non-positive concurrency limit executes with unbounded concurrency.
+- `FanOut(ctx, act, reqs, maxConcurrency)` executes concurrent items while preserving input order in the returned slice. A non-positive concurrency limit uses `DefaultAsyncMaxConcurrency` (16), and the whole call is bounded by `DefaultAsyncTimeout` (2 minutes) unless the parent context ends sooner; use `FanOutWithOptions` to change either.
 - `Race(ctx, act, reqs)` returns the first successful result and cancels losing attempts. Handlers must cooperate with context cancellation.
 
 ---
@@ -215,11 +215,11 @@ results, err := reviewer.Do(ctx, "package main...")
 
 ### Idempotency Contracts
 - `.Idempotent()` and `.IdempotentWithConfig(cfg)` enable replay only when a caller supplies an explicit key. Transport adapters should read `cfg.Header()` (default `Idempotency-Key`) and bind it with `xctx.WithIdempotencyKey(ctx, key)`. `RequestID` is correlation-only; neither it nor a payload hash is used as a fallback key. For typed requests, configure `RequestKeyFunc`; the older `KeyFunc` remains available for `[]byte` requests.
-- Builder-created actions default `Namespace` to their final action name; direct `IdempotencyMiddleware` use requires an explicit namespace. Versioned storage keys include the namespace and a fingerprint of tenant, user, and authorization scope, and do not store the raw client key. Because the persisted key format changed, old idempotency entries will not be replayed by this version; expire or migrate them as part of deployment.
+- Builder-created actions default `Namespace` to their final action name; direct `IdempotencyMiddleware` use requires an explicit namespace. Versioned v2 storage keys include the namespace and a fingerprint of tenant, user, and authorization scope, and do not store the raw client key. Because the persisted key format changed, old idempotency entries will not be replayed by this version; expire or migrate them as part of deployment.
 - `MemoryIdempotencyStore` provides in-memory reference coordination.
 - `IdempotencyCoordinator` defines atomic claim semantics (`Claim`, `Complete`, `Release`) with leased in-progress locks and request hash validation to detect duplicate payload conflicts.
 - Reusing a key for a different payload returns `Conflict`; corrupt responses or missing/corrupt saved request hashes fail closed instead of executing the handler again. Successful responses are replayed only until the configured TTL expires. Handler errors are not cached and may be retried; expired distributed claims may be taken over while the original handler is still running. Use downstream idempotency or fencing when repeating side effects is unsafe.
-- Same-process callers share one active execution. The first caller executes synchronously and owns the handler context; its cancellation is observed by the handler and the remaining waiters receive that execution's result. A follower can stop waiting on its own cancellation without canceling the leader. `MaxConcurrentFlights` bounds unique active keys (default 256); a non-cooperative leader handler retains its slot until it returns. This deliberately avoids background or detached handler goroutines.
+- Same-process callers share one active execution. Shared work keeps the leader's context values but not its cancellation; coalescing and deduplication use `DefaultSharedFlightTimeout` (2 minutes), while idempotency uses `IdempotencyConfig.FlightTimeout` (default 2 minutes). Each caller can stop waiting on its own cancellation, but the synchronous leader call may remain blocked until the handler returns or the shared timeout expires. `MaxConcurrentFlights` bounds unique idempotency keys (default 256); no background handler goroutines are started.
 - This active-flight cap applies to `Idempotency`; `Dedup` and `Coalesce` do not expose a `MaxConcurrentFlights` limit. High-cardinality distinct keys can therefore grow their in-flight state without a configured bound under load; account for this when choosing those middleware for untrusted or bursty traffic.
 - Durable and idempotent results are persisted as JSON. For empty-interface result types, including named empty interfaces, the first successful call is normalized to the same standard values returned by JSON replay (numbers are `float64`, objects are `map[string]any`, arrays are `[]any`, and typed nil pointers/maps/slices become nil). Concrete result types use normal `encoding/json` decoding into their declared `Res` type on replay. A non-empty interface generally cannot be reconstructed from JSON as its original concrete dynamic type, so use a concrete result type when replay must succeed; arbitrary dynamic Go types are not restored from persisted type names.
 - A `Journal.RecordStep` error or idempotency completion error can be ambiguous: the write may have committed before the error was returned. Durable journals do not guarantee exactly-once external side effects after an ambiguous write failure; use downstream idempotency/fencing or a storage protocol with definitive commit outcomes when repeats are unsafe.
@@ -514,7 +514,18 @@ Complete, runnable examples are maintained in the central [`nexssp/examples`](ht
 ---
 
 ## API Stability
-Nexss Kernel is currently pre-1.0. Exported APIs may change between minor releases. Downstream projects should pin an explicit version from the [latest tagged releases](https://github.com/nexssp/kernel/tags) rather than track `main`.
+
+`v1.0.0-rc1` is a release candidate for 1.0. The exported API is considered feature-complete: until `v1.0.0`, only fixes for blocking defects are expected, and any API change will be called out in the [CHANGELOG](./CHANGELOG.md). Please try the candidate and report problems through [GitHub issues](https://github.com/nexssp/kernel/issues).
+
+From `v1.0.0` the module follows [Semantic Versioning](https://semver.org): no breaking changes to exported APIs within `v1.x`. Symbols marked `Deprecated:` keep working for the lifetime of `v1`. Prior to 1.0 (`v0.x`), exported APIs could change between minor releases.
+
+Pre-release versions are never selected automatically by `go get`; opt in explicitly:
+
+```bash
+go get github.com/nexssp/kernel@v1.0.0-rc1
+```
+
+Pin an explicit version rather than tracking `main`.
 
 ## Contributing
 

@@ -70,7 +70,7 @@ func BenchmarkContention_Baseline_TypedAction_Parallel(b *testing.B) {
 // contention on the shared bucket state.
 func BenchmarkContention_RateLimit_Parallel(b *testing.B) {
 	act := action.New("bench.ratelimit.p", contentionHandler).
-		RateLimit(1e15, 1e15).Build()
+		RateLimit(1e15, 1<<30).Build()
 	ktest.BenchAction(b, act, 42)
 }
 

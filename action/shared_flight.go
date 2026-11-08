@@ -9,12 +9,13 @@ import (
 	"time"
 )
 
-// DefaultSharedFlightTimeout bounds the context passed to a coalesce or deduplication leader.
+// DefaultSharedFlightTimeout bounds the context passed to coalesced or deduplicated work.
 const DefaultSharedFlightTimeout = 2 * time.Minute
 
-// SharedFlightOptions configures the context deadline for a coalesced or deduplicated leader.
-// A non-positive Timeout selects DefaultSharedFlightTimeout. The handler still runs synchronously;
-// handlers that ignore context cancellation cannot be forcibly stopped and may delay the caller.
+// SharedFlightOptions configures the deadline for coalesced or deduplicated work.
+// A non-positive Timeout selects DefaultSharedFlightTimeout. Shared work keeps
+// the leader's context values but ignores caller cancellation. It runs
+// synchronously; handlers that ignore the shared timeout may delay the caller.
 type SharedFlightOptions struct {
 	// Timeout bounds the leader context; non-positive values use the default.
 	Timeout time.Duration
@@ -28,8 +29,8 @@ func (options SharedFlightOptions) withDefaults() SharedFlightOptions {
 }
 
 func withSharedFlightTimeout(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
-	if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) <= timeout {
-		return ctx, nil
+	if _, hasDeadline := ctx.Deadline(); hasDeadline || ctx.Done() != nil {
+		ctx = context.WithoutCancel(ctx)
 	}
 	return context.WithTimeout(ctx, timeout)
 }

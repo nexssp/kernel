@@ -260,6 +260,19 @@ func TestIdempotencyScopeHashFromIdentityAndAuthFields(t *testing.T) {
 	ctx = xctx.WithPermissions(ctx, []string{"invoice:read"})
 	ctx = xctx.WithFeatures(ctx, []string{"billing"})
 	first := xctx.IdempotencyScopeHashFrom(ctx)
+	ctx = xctx.WithRoles(ctx, []string{"reader", "operator"})
+	ctx = xctx.WithPermissions(ctx, []string{"invoice:read", "invoice:write"})
+	ctx = xctx.WithFeatures(ctx, []string{"billing", "reports"})
+	ordered := xctx.IdempotencyScopeHashFrom(ctx)
+	ctx = xctx.WithRoles(ctx, []string{"operator", "reader"})
+	ctx = xctx.WithPermissions(ctx, []string{"invoice:write", "invoice:read"})
+	ctx = xctx.WithFeatures(ctx, []string{"reports", "billing"})
+	if got := xctx.IdempotencyScopeHashFrom(ctx); got != ordered {
+		t.Fatal("reordered authorization sets changed the scope fingerprint")
+	}
+	ctx = xctx.WithRoles(ctx, []string{"operator", "reader"})
+	ctx = xctx.WithPermissions(ctx, []string{"invoice:read"})
+	ctx = xctx.WithFeatures(ctx, []string{"billing"})
 
 	ctx = xctx.WithRequestID(ctx, "new-correlation-id")
 	ctx = xctx.WithIdempotencyKey(ctx, "new-client-key")
