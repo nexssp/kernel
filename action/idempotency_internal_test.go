@@ -186,6 +186,12 @@ func TestRequestHashConflict_LegacyAndRawDigest(t *testing.T) {
 	if requestHashConflict(IdempotencyEntry{RequestHashBytes: digest}, digest) {
 		t.Fatal("matching raw digest without the string field was rejected")
 	}
+	if requestHashMissing(legacyEntry) || requestHashMissing(IdempotencyEntry{RequestHashBytes: digest}) {
+		t.Fatal("valid stored request hash was reported missing")
+	}
+	if !requestHashMissing(IdempotencyEntry{}) || !requestHashMissing(IdempotencyEntry{RequestHash: "invalid"}) {
+		t.Fatal("missing or invalid stored request hash was accepted")
+	}
 }
 
 func TestHashPayloadBytesRejectsUnsupportedValues(t *testing.T) {

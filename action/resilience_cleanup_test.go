@@ -233,7 +233,7 @@ func TestCleanup_ExclusiveFenced_NoGoroutineLeak(t *testing.T) {
 	xtest.RequireGoroutinesAtMost(t, baseline, 1*time.Second, 2)
 }
 
-// ─── Idempotency: no goroutine leak after singleflight collapse ──────────────
+// ─── Idempotency: no goroutine leak after shared-flight completion ──────────
 
 func TestCleanup_Idempotency_NoGoroutineLeak(t *testing.T) {
 	t.Parallel()
@@ -244,10 +244,10 @@ func TestCleanup_Idempotency_NoGoroutineLeak(t *testing.T) {
 		return 42, nil
 	}).Idempotent().Build()
 
-	ctx := ktest.RequestContext(t, "cleanup-idem-key")
+	ctx := ktest.IdempotencyContext(t, "cleanup-idem-key")
 
 	// 100 concurrent callers with the same idempotency key collapse via
-	// singleflight — no leaked goroutines after completion.
+	// shared flight — no leaked goroutines after completion.
 	errs := make([]error, 100)
 	var wg sync.WaitGroup
 	start := make(chan struct{})

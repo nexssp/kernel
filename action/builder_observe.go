@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/nexssp/kernel/ringbuf"
 	"github.com/nexssp/kernel/xctx"
 )
 
@@ -35,23 +36,61 @@ func (b *Builder[Req, Res]) Emits(subject string, mapper func(res Res) any) *Bui
 	})
 }
 
-// WithHistory attaches a ring-buffer execution history to the action
-// AND returns the *History[Req, Res] handle for inspection.
-// Replaces the two-return-value .WithHistory pattern with a single
-// method that stores the handle on the builder for later retrieval.
+// WithHistory attaches a ring-buffer execution history and returns its handle.
+// If allocation is rejected, the handle is nil and a built action returns the
+// configuration error before running; use WithHistoryChecked to handle it now.
+func (b *Builder[Req, Res]) WithHistory(capacity int) (*Builder[Req, Res], *History[Req, Res]) {
+	builder, history, err := b.WithHistoryChecked(capacity)
+	if err != nil {
+		b.history = nil
+		b.historyErr = fmt.Errorf("allocation: %w", err)
+		return b, nil
+	}
+	return builder, history
+}
+
+// WithHistoryChecked attaches history using the default memory budget and
+// returns an allocation error immediately.
+func (b *Builder[Req, Res]) WithHistoryChecked(capacity int) (*Builder[Req, Res], *History[Req, Res], error) {
+	return b.WithHistoryWithOptions(ringbuf.BufferOptions{
+		Capacity:          capacity,
+		MemoryBudgetBytes: ringbuf.DefaultMemoryBudgetBytes,
+	})
+}
+
+// WithHistoryWithOptions attaches history using explicit buffer options and
+// returns an allocation error immediately.
+func (b *Builder[Req, Res]) WithHistoryWithOptions(options ringbuf.BufferOptions) (*Builder[Req, Res], *History[Req, Res], error) {
+	history, err := NewHistoryWithOptions[Req, Res](options)
+	if err != nil {
+		return b, nil, err
+	}
+	b.history = history
+	b.historyErr = nil
+	b.Use(HistoryMiddleware(history))
+	return b, history, nil
+}
+
+// RecordHistory attaches a ring-buffer execution history to the action.
+// If allocation is rejected, Build().Do returns the configuration error before
+// the action runs; use RecordHistoryChecked to handle it immediately.
 //
-// The built action keeps the last cap records (newest-first via Snapshot).
-//
-// Usage:
-//
-//	paymentAct := action.New("payment.charge", chargeCard).
-//	    RecordHistory(200).
-//	    Build()
-//
-//	hist := paymentAct.History() // nil if RecordHistory was not called
+// The built action keeps the last capacity records (newest-first via Snapshot).
 func (b *Builder[Req, Res]) RecordHistory(capacity int) *Builder[Req, Res] {
 	b, _ = b.WithHistory(capacity)
 	return b
+}
+
+// RecordHistoryChecked is the fluent form of WithHistoryChecked.
+func (b *Builder[Req, Res]) RecordHistoryChecked(capacity int) (*Builder[Req, Res], error) {
+	builder, _, err := b.WithHistoryChecked(capacity)
+	return builder, err
+}
+
+// RecordHistoryWithOptions is the fluent form of WithHistoryWithOptions.
+func (b *Builder[Req, Res]) RecordHistoryWithOptions(options ringbuf.BufferOptions) (*Builder[Req, Res], error) {
+	builder, _, err := b.WithHistoryWithOptions(options)
+	return builder, err
 }
 
 // LogCalls injects a structured log entry for every call using the provided logger.

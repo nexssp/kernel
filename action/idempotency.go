@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -16,24 +17,27 @@ import (
 	"sync"
 	"time"
 
-	"golang.org/x/sync/singleflight"
-
 	"github.com/nexssp/kernel/xctx"
 	"github.com/nexssp/kernel/xerr"
 )
 
 const (
-	DefaultIdempotencyTTL      = 24 * time.Hour
-	DefaultIdempotencyLeaseTTL = 2 * time.Minute
+	DefaultIdempotencyTTL                  = 24 * time.Hour
+	DefaultIdempotencyLeaseTTL             = 2 * time.Minute
+	DefaultIdempotencyMaxConcurrentFlights = 256
+	idempotencyStorageKeyPrefix            = "kernel:idempotency:v1:"
 )
 
 type IdempotencyConfig struct {
-	Enabled   bool
-	TTL       time.Duration
-	KeyHeader string
-	KeyFunc   func(body []byte) string
-	LeaseTTL  time.Duration
-	Store     IdempotencyStore
+	Enabled              bool
+	TTL                  time.Duration
+	KeyHeader            string
+	Namespace            string
+	KeyFunc              func(body []byte) string          `json:"-"`
+	RequestKeyFunc       func(request any) (string, error) `json:"-"`
+	MaxConcurrentFlights int
+	LeaseTTL             time.Duration
+	Store                IdempotencyStore `json:"-"`
 }
 
 func (c IdempotencyConfig) Header() string {
@@ -94,33 +98,157 @@ type IdempotencyLeaseRenewer interface {
 	RenewClaim(ctx context.Context, key, token string, leaseTTL time.Duration) error
 }
 
-// idempotentResult carries the request hash through singleflight so
+// idempotentResult carries the request hash through a shared flight so
 // followers can detect a same-key/different-payload mismatch.
 type idempotentResult[Res any] struct {
 	requestHash [32]byte
 	value       Res
 }
 
-// IdempotencyMiddleware collapses concurrent identical requests into a single
-// handler execution and replays the stored response for later calls.
+type idempotencyFlight struct {
+	done  chan struct{}
+	value any
+	err   error
+}
+
+// idempotencyFlightGroup bounds active unique keys. The first caller executes
+// synchronously and owns the handler context; followers can stop waiting
+// without canceling the leader's work.
+type idempotencyFlightGroup struct {
+	mu      sync.Mutex
+	flights map[string]*idempotencyFlight
+	max     int
+}
+
+func newIdempotencyFlightGroup(maxFlights int) *idempotencyFlightGroup {
+	if maxFlights <= 0 {
+		maxFlights = DefaultIdempotencyMaxConcurrentFlights
+	}
+	return &idempotencyFlightGroup{flights: make(map[string]*idempotencyFlight), max: maxFlights}
+}
+
+func (g *idempotencyFlightGroup) Do(ctx context.Context, key string, fn func(context.Context) (any, error)) (any, error) {
+	if ctx == nil {
+		return nil, xerr.Validation("idempotency: context is required")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	g.mu.Lock()
+	if err := ctx.Err(); err != nil {
+		g.mu.Unlock()
+		return nil, err
+	}
+	flight := g.flights[key]
+	if flight != nil {
+		g.mu.Unlock()
+		select {
+		case <-flight.done:
+			return flight.value, flight.err
+		case <-ctx.Done():
+			select {
+			case <-flight.done:
+				return flight.value, flight.err
+			default:
+				return nil, ctx.Err()
+			}
+		}
+	}
+	if len(g.flights) >= g.max {
+		g.mu.Unlock()
+		return nil, xerr.Unavailable("idempotency: concurrent flight capacity reached")
+	}
+	flight = &idempotencyFlight{done: make(chan struct{})}
+	g.flights[key] = flight
+	g.mu.Unlock()
+
+	return g.run(ctx, key, flight, fn)
+}
+
+func (g *idempotencyFlightGroup) run(ctx context.Context, key string, flight *idempotencyFlight, fn func(context.Context) (any, error)) (value any, err error) {
+	returned := false
+	defer func() {
+		if !returned {
+			if recovered := recover(); recovered != nil {
+				err = xerr.Internal("idempotency: shared execution panicked", fmt.Errorf("%v", recovered))
+			} else {
+				err = xerr.Internal("idempotency: shared execution exited without returning")
+			}
+			value = nil
+		}
+		g.mu.Lock()
+		flight.value = value
+		flight.err = err
+		if g.flights[key] == flight {
+			delete(g.flights, key)
+		}
+		close(flight.done)
+		g.mu.Unlock()
+	}()
+
+	value, err = fn(ctx)
+	returned = true
+	return value, err
+}
+
+// IdempotencyMiddleware replays successful responses only when a caller provides
+// an explicit idempotency key. Request IDs are for correlation and payload hashes
+// detect conflicts; neither is used as a key. The first caller owns the shared
+// handler context; its cancellation is observed by the handler and all remaining
+// waiters receive that execution's result. A canceled follower only stops waiting.
 //
-// The request hash is computed before every store lookup so a reused key with
-// a different payload returns Conflict instead of silently replaying the old
-// response. Requests that cannot be hashed are rejected before touching the
-// store or invoking the handler.
+// A direct middleware must set cfg.Namespace. Builder-created middleware uses the
+// final action name unless cfg.Namespace explicitly overrides it. Transport
+// adapters should read cfg.Header() and bind the value with xctx.WithIdempotencyKey.
 //
 //nolint:gocyclo // the branches encode the idempotency claim state machine.
 func IdempotencyMiddleware[Req, Res any](store IdempotencyStore, cfg IdempotencyConfig) Middleware[Req, Res] {
 	if store == nil {
+		store = cfg.Store
+	}
+	if store == nil {
 		store = NewMemoryIdempotencyStore(cfg.TTL)
 	}
-
-	var sf singleflight.Group
+	maxFlights := cfg.MaxConcurrentFlights
+	if maxFlights == 0 {
+		maxFlights = DefaultIdempotencyMaxConcurrentFlights
+	}
+	flights := newIdempotencyFlightGroup(maxFlights)
 
 	return func(next Fn[Req, Res]) Fn[Req, Res] {
 		return func(ctx context.Context, req Req) (Res, error) {
 			if !cfg.Enabled {
 				return next(ctx, req)
+			}
+			if ctx == nil {
+				var zero Res
+				return zero, xerr.Validation("idempotency: context is required")
+			}
+			if err := ctx.Err(); err != nil {
+				var zero Res
+				return zero, err
+			}
+			if maxFlights < 0 {
+				var zero Res
+				return zero, xerr.Validation("idempotency: MaxConcurrentFlights must not be negative")
+			}
+
+			token, keyErr := extractIdempotencyKey(ctx, req, cfg)
+			if keyErr != nil {
+				var zero Res
+				return zero, xerr.BadRequest("idempotency: could not derive request key", keyErr)
+			}
+			if token == "" {
+				return next(ctx, req)
+			}
+			if err := validateIdempotencyKey(token); err != nil {
+				var zero Res
+				return zero, xerr.BadRequest("idempotency: invalid request key", err)
+			}
+			if cfg.Namespace == "" {
+				var zero Res
+				return zero, xerr.Validation("idempotency: a stable action namespace is required")
 			}
 
 			reqHash, hashErr := hashPayloadBytes(req)
@@ -128,137 +256,119 @@ func IdempotencyMiddleware[Req, Res any](store IdempotencyStore, cfg Idempotency
 				var zero Res
 				return zero, xerr.BadRequest("idempotency: request payload cannot be hashed", hashErr)
 			}
-
-			key := extractIdempotencyKey(ctx, req, cfg, reqHash)
-			if key == "" {
-				return next(ctx, req)
-			}
+			scopeHash := xctx.IdempotencyScopeHashFrom(ctx)
+			key := scopedIdempotencyKey(cfg.Namespace, scopeHash, token)
 
 			ttl := cfg.TTL
 			if ttl <= 0 {
 				ttl = DefaultIdempotencyTTL
 			}
 
-			// Fast path: replay cached result, but only after verifying the
-			// payload hash matches. A hash mismatch is a Conflict, not a hit.
 			if entry, ok := store.Get(ctx, key); ok {
-				if requestHashConflict(entry, reqHash) {
+				cached, err := replayIdempotencyEntry[Res](entry, reqHash)
+				if err != nil {
 					var zero Res
-					return zero, xerr.Conflict("idempotency key already used with a different request payload")
+					return zero, err
 				}
-				var cachedRes Res
-				if err := json.Unmarshal(entry.Body, &cachedRes); err != nil {
-					// Corrupted: fail closed, never re-execute.
-					var zero Res
-					return zero, xerr.Internal("idempotency: stored response for key is corrupted")
-				}
-				return cachedRes, nil
+				return cached.value, nil
 			}
 
-			// SingleFlight synchronizes concurrent in-flight executions within the process
-			val, err, _ := sf.Do(key, func() (any, error) {
-				// Re-check inside flight in case a concurrent caller completed it
-				if entry, ok := store.Get(ctx, key); ok {
-					if requestHashConflict(entry, reqHash) {
-						return nil, xerr.Conflict("idempotency key already used with a different request payload")
-					}
-					var cachedRes Res
-					if err := json.Unmarshal(entry.Body, &cachedRes); err != nil {
-						// Corrupted: fail closed.
-						return nil, xerr.Internal("idempotency: stored response for key is corrupted")
-					}
-					return idempotentResult[Res]{requestHash: reqHash, value: cachedRes}, nil
+			value, err := flights.Do(ctx, key, func(workCtx context.Context) (any, error) {
+				if err := workCtx.Err(); err != nil {
+					return nil, err
+				}
+				if entry, ok := store.Get(workCtx, key); ok {
+					return replayIdempotencyEntry[Res](entry, reqHash)
 				}
 
-				// Handle distributed coordinator if configured
 				if coord, ok := store.(IdempotencyCoordinator); ok {
-					claim, err := coord.Claim(ctx, key, hashPayloadString(reqHash), cfg.EffectiveLeaseTTL())
+					claim, err := coord.Claim(workCtx, key, hashPayloadString(reqHash), cfg.EffectiveLeaseTTL())
 					if err != nil {
-						if ctxErr := ctx.Err(); ctxErr != nil {
+						if ctxErr := workCtx.Err(); ctxErr != nil {
 							return nil, ctxErr
 						}
 						return nil, xerr.Unavailable("idempotency coordination unavailable", err)
 					}
-
 					switch claim.State {
 					case IdempotencyClaimCompleted:
-						var cachedRes Res
-						if err := json.Unmarshal(claim.Entry.Body, &cachedRes); err != nil {
-							// Corrupted: fail closed.
-							return nil, xerr.Internal("idempotency: stored response for key is corrupted")
-						}
-						return idempotentResult[Res]{requestHash: reqHash, value: cachedRes}, nil
+						return replayIdempotencyEntry[Res](claim.Entry, reqHash)
 					case IdempotencyClaimConflict:
 						return nil, xerr.Conflict("idempotency key already used with a different request payload")
 					case IdempotencyClaimInProgress:
 						return nil, xerr.Conflict("an identical request is currently in progress")
 					case IdempotencyClaimAcquired:
+					default:
+						return nil, xerr.Internal("idempotency: coordinator returned an unknown claim state")
 					}
 
 					var completed bool
 					defer func() {
 						if !completed {
-							if releaseErr := coord.Release(context.WithoutCancel(ctx), key, claim.Token); releaseErr != nil {
-								slog.WarnContext(ctx, "idempotency_claim_release_failed", "key", key, "error", releaseErr)
+							if releaseErr := coord.Release(context.WithoutCancel(workCtx), key, claim.Token); releaseErr != nil {
+								slog.WarnContext(workCtx, "idempotency_claim_release_failed", "key", key, "error", releaseErr)
 							}
 						}
 					}()
 
-					// LIFO defer order stops the renewer BEFORE Release.
-					stopRenewal := startLeaseRenewal(ctx, coord, key, claim.Token, cfg.EffectiveLeaseTTL())
-					defer stopRenewal()
+					stopRenewal := startLeaseRenewal(workCtx, coord, key, claim.Token, cfg.EffectiveLeaseTTL())
+					renewalRunning := true
+					defer func() {
+						if renewalRunning {
+							stopRenewal()
+						}
+					}()
 
-					res, execErr := next(ctx, req)
+					if err := workCtx.Err(); err != nil {
+						return nil, err
+					}
+					res, execErr := next(workCtx, req)
 					if execErr != nil {
 						return nil, execErr
 					}
 					res = normalizeJSONNullResult(res)
+					stopRenewal()
+					renewalRunning = false
 
-					entry, responseErr := idempotencyResponseEntry(ctx, res, reqHash)
-					if completeErr := coord.Complete(context.WithoutCancel(ctx), key, claim.Token, entry, ttl); completeErr != nil {
+					entry, res, responseErr := idempotencyResponseEntry(workCtx, res, reqHash)
+					if completeErr := coord.Complete(context.WithoutCancel(workCtx), key, claim.Token, entry, ttl); completeErr != nil {
 						return nil, xerr.Unavailable("idempotency completion unavailable", completeErr)
 					}
 					completed = true
 					if responseErr != nil {
 						return nil, responseErr
 					}
-
 					return idempotentResult[Res]{requestHash: reqHash, value: res}, nil
 				}
 
-				// In-process local execution
-				res, execErr := next(ctx, req)
+				if err := workCtx.Err(); err != nil {
+					return nil, err
+				}
+				res, execErr := next(workCtx, req)
 				if execErr != nil {
 					return nil, execErr
 				}
 				res = normalizeJSONNullResult(res)
-
-				entry, responseErr := idempotencyResponseEntry(ctx, res, reqHash)
-				store.Set(ctx, key, entry, ttl)
+				entry, res, responseErr := idempotencyResponseEntry(workCtx, res, reqHash)
+				store.Set(context.WithoutCancel(workCtx), key, entry, ttl)
 				if responseErr != nil {
 					return nil, responseErr
 				}
-
 				return idempotentResult[Res]{requestHash: reqHash, value: res}, nil
 			})
-
 			if err != nil {
 				var zero Res
 				return zero, err
 			}
-
-			fw, ok := val.(idempotentResult[Res])
+			result, ok := value.(idempotentResult[Res])
 			if !ok {
 				var zero Res
-				return zero, xerr.Internal(fmt.Sprintf("idempotency result type mismatch: got %T", val))
+				return zero, xerr.Internal(fmt.Sprintf("idempotency result type mismatch: got %T", value))
 			}
-			// Followers never run the flight function — the only place
-			// a payload mismatch can be caught.
-			if fw.requestHash != ([32]byte{}) && reqHash != ([32]byte{}) && fw.requestHash != reqHash {
+			if result.requestHash != reqHash {
 				var zero Res
 				return zero, xerr.Conflict("idempotency key already used with a different request payload")
 			}
-			return fw.value, nil
+			return result.value, nil
 		}
 	}
 }
@@ -267,8 +377,11 @@ func IdempotencyMiddleware[Req, Res any](store IdempotencyStore, cfg Idempotency
 // execution is never forgotten merely because its response cannot be encoded.
 // The invalid JSON marker makes subsequent requests fail closed rather than
 // repeating the handler's side effects.
-func idempotencyResponseEntry(ctx context.Context, res any, requestHash [32]byte) (IdempotencyEntry, error) {
+func idempotencyResponseEntry[Res any](ctx context.Context, res Res, requestHash [32]byte) (IdempotencyEntry, Res, error) {
 	body, err := json.Marshal(res)
+	if err == nil {
+		res, err = normalizeJSONReplayResult(res, body)
+	}
 	if err != nil {
 		slog.WarnContext(ctx, "idempotency_response_marshal_failed")
 		body = []byte("!idempotency response unavailable")
@@ -281,19 +394,72 @@ func idempotencyResponseEntry(ctx context.Context, res any, requestHash [32]byte
 		RequestHashBytes: requestHash,
 	}
 	if err != nil {
-		return entry, xerr.Internal("idempotency: successful response cannot be serialized for replay", err)
+		return entry, res, xerr.Internal("idempotency: successful response cannot be serialized for replay", err)
 	}
-	return entry, nil
+	return entry, res, nil
 }
 
-func extractIdempotencyKey[Req any](ctx context.Context, req Req, cfg IdempotencyConfig, requestHash [32]byte) string {
-	if requestID := xctx.RequestIDFrom(ctx); requestID != "" {
-		return requestID
+func extractIdempotencyKey(ctx context.Context, req any, cfg IdempotencyConfig) (string, error) {
+	if key := xctx.IdempotencyKeyFrom(ctx); key != "" {
+		return key, nil
 	}
-	if b, ok := any(req).([]byte); ok && cfg.KeyFunc != nil {
-		return cfg.KeyFunc(b)
+	if cfg.RequestKeyFunc != nil {
+		return cfg.RequestKeyFunc(req)
 	}
-	return hashPayloadString(requestHash)
+	if body, ok := req.([]byte); ok && cfg.KeyFunc != nil {
+		return cfg.KeyFunc(body), nil
+	}
+	return "", nil
+}
+
+func validateIdempotencyKey(key string) error {
+	if key == "" || len(key) > 255 {
+		return errors.New("key must contain 1 to 255 printable ASCII bytes")
+	}
+	for index := range len(key) {
+		if key[index] < 0x21 || key[index] > 0x7e {
+			return errors.New("key must contain only printable ASCII bytes without whitespace")
+		}
+	}
+	return nil
+}
+
+func scopedIdempotencyKey(namespace string, scopeHash [32]byte, token string) string {
+	var storage [1024]byte
+	data := storage[:0]
+	var length [8]byte
+	binary.BigEndian.PutUint64(length[:], uint64(len("kernel-idempotency-v1")))
+	data = append(data, length[:]...)
+	data = append(data, "kernel-idempotency-v1"...)
+	binary.BigEndian.PutUint64(length[:], uint64(len(namespace)))
+	data = append(data, length[:]...)
+	data = append(data, namespace...)
+	binary.BigEndian.PutUint64(length[:], uint64(len("scope-hash")))
+	data = append(data, length[:]...)
+	data = append(data, "scope-hash"...)
+	data = append(data, scopeHash[:]...)
+	binary.BigEndian.PutUint64(length[:], uint64(len(token)))
+	data = append(data, length[:]...)
+	data = append(data, token...)
+	sum := sha256.Sum256(data)
+	var encoded [len(idempotencyStorageKeyPrefix) + sha256.Size*2]byte
+	copy(encoded[:], idempotencyStorageKeyPrefix)
+	hex.Encode(encoded[len(idempotencyStorageKeyPrefix):], sum[:])
+	return string(encoded[:])
+}
+
+func replayIdempotencyEntry[Res any](entry IdempotencyEntry, requestHash [32]byte) (idempotentResult[Res], error) {
+	if requestHashMissing(entry) {
+		return idempotentResult[Res]{}, xerr.Internal("idempotency: stored response is missing a valid request hash")
+	}
+	if requestHashConflict(entry, requestHash) {
+		return idempotentResult[Res]{}, xerr.Conflict("idempotency key already used with a different request payload")
+	}
+	var cached Res
+	if err := json.Unmarshal(entry.Body, &cached); err != nil {
+		return idempotentResult[Res]{}, xerr.Internal("idempotency: stored response for key is corrupted")
+	}
+	return idempotentResult[Res]{requestHash: requestHash, value: cached}, nil
 }
 
 func hashPayloadString(sum [32]byte) string {
@@ -304,14 +470,18 @@ func hashPayloadString(sum [32]byte) string {
 }
 
 func requestHashConflict(entry IdempotencyEntry, requestHash [32]byte) bool {
-	if requestHash == ([32]byte{}) || (entry.RequestHash == "" && entry.RequestHashBytes == ([32]byte{})) {
-		return false
-	}
 	stored := entry.RequestHashBytes
 	if stored == ([32]byte{}) {
 		stored = decodeRequestHash(entry.RequestHash)
 	}
 	return stored != requestHash
+}
+
+func requestHashMissing(entry IdempotencyEntry) bool {
+	if entry.RequestHashBytes != ([32]byte{}) {
+		return false
+	}
+	return decodeRequestHash(entry.RequestHash) == ([32]byte{})
 }
 
 func decodeRequestHash(encoded string) [32]byte {
@@ -705,7 +875,11 @@ func startLeaseRenewal(
 	}
 
 	stop := make(chan struct{})
+	done := make(chan struct{})
+	renewCtx, cancelRenew := context.WithCancel(ctx)
+	var stopOnce sync.Once
 	go func() {
+		defer close(done)
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 		for {
@@ -713,7 +887,7 @@ func startLeaseRenewal(
 			case <-stop:
 				return
 			case <-ticker.C:
-				rCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), interval)
+				rCtx, cancel := context.WithTimeout(renewCtx, interval)
 				renewErr := renewer.RenewClaim(rCtx, key, token, leaseTTL)
 				cancel()
 				if renewErr != nil {
@@ -729,7 +903,13 @@ func startLeaseRenewal(
 			}
 		}
 	}()
-	return func() { close(stop) }
+	return func() {
+		stopOnce.Do(func() {
+			close(stop)
+			cancelRenew()
+		})
+		<-done
+	}
 }
 
 func newClaimToken() (string, error) {

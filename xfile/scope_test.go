@@ -48,15 +48,20 @@ func TestScopeFromContextCopiesAuthenticatedCallerAndTenant(t *testing.T) {
 
 func TestScopeFromContextDoesNotMixConcurrentIdentityUpdates(t *testing.T) {
 	ctx := newInterleavingScopeContext()
-	ctx.updateOnScopeLookup = 2
+	// The fake context completes a concurrent identity update inside the
+	// lookup that supplies the atomic caller/tenant pair.
+	ctx.updateOnScopeLookup = 1
 	defer ctx.finish()
 
 	got, err := xfile.ScopeFromContext(ctx)
 	if err != nil {
 		t.Fatalf("ScopeFromContext() error = %v", err)
 	}
-	if got.CallerID != "caller-old" || got.TenantID != "tenant-old" {
-		t.Fatalf("ScopeFromContext() mixed identity versions: %#v", got)
+	if got.CallerID != "caller-new" || got.TenantID != "tenant-new" {
+		t.Fatalf("ScopeFromContext() did not return the updated caller/tenant pair: %#v", got)
+	}
+	if ctx.scopeLookups != 1 {
+		t.Fatalf("ScopeFromContext() performed %d scope lookups, want one atomic pair read", ctx.scopeLookups)
 	}
 }
 

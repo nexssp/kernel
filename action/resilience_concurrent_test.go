@@ -191,34 +191,56 @@ func TestConcurrencyLimit_Concurrent_NeverExceedsLimit(t *testing.T) {
 
 // ─── Idempotency: 200 concurrent → exactly 1 handler invocation ─────────────
 
+type registrationSignalContext struct {
+	context.Context
+	registered chan<- struct{}
+	once       sync.Once
+}
+
+func (c *registrationSignalContext) Done() <-chan struct{} {
+	c.once.Do(func() { c.registered <- struct{}{} })
+	return c.Context.Done()
+}
+
 func TestIdempotency_Concurrent_200CallersOneExecution(t *testing.T) {
 	t.Parallel()
 
 	executions := ktest.NewCounter()
 	const callers = 200
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var enteredOnce sync.Once
 
 	act := action.New("idempotent.concurrent", func(_ context.Context, _ int) (int, error) {
 		executions.Inc()
-		time.Sleep(20 * time.Millisecond) // force overlap
+		enteredOnce.Do(func() { close(entered) })
+		<-release
 		return 42, nil
 	}).Idempotent().Build()
 
-	// All callers share the same Idempotency-Key via request context.
+	// All callers share the same explicit Idempotency-Key.
 	// ktest.Simulate uses context.Background() internally so we can't use it here.
-	ctx := ktest.RequestContext(t, "concurrent-key-200")
+	ctx := ktest.IdempotencyContext(t, "concurrent-key-200")
 
 	errs := make([]error, callers)
 	var wg sync.WaitGroup
 	start := make(chan struct{})
+	registered := make(chan struct{}, callers)
 	for i := range callers {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()
 			<-start
-			_, errs[idx] = act.Do(ctx, 1)
+			callerCtx := &registrationSignalContext{Context: ctx, registered: registered}
+			_, errs[idx] = act.Do(callerCtx, 1) //nolint:contextcheck // The wrapper signals actual flight registration.
 		}(i)
 	}
 	close(start)
+	<-entered
+	for range callers - 1 {
+		<-registered
+	}
+	close(release)
 	wg.Wait()
 
 	// Every caller must succeed — if idempotency returned an error to ANY

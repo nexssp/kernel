@@ -22,6 +22,7 @@ type Builder[Req, Res any] struct {
 	anyHooks            []AnyHook
 	bindings            []Binding
 	history             *History[Req, Res]
+	historyErr          error
 	trackExecutionStart bool
 	resilienceApplied   bool
 	validationErr       error
@@ -46,6 +47,7 @@ func (b *BuiltAction[Req, Res]) ToBuilder() *Builder[Req, Res] {
 		hooks:               append([]Hook[Req, Res](nil), b.hooks...),
 		anyHooks:            append([]AnyHook(nil), b.anyHooksSnapshot()...),
 		history:             b.history,
+		historyErr:          b.historyErr,
 		trackExecutionStart: b.trackExecutionStart,
 		resilienceApplied:   b.resilienceApplied,
 		validationErr:       b.validationErr,
@@ -136,14 +138,11 @@ func (b *Builder[Req, Res]) Idempotent() *Builder[Req, Res] {
 
 func (b *Builder[Req, Res]) IdempotentWithConfig(cfg IdempotencyConfig) *Builder[Req, Res] {
 	cfg.Enabled = true
-	b.meta.Idempotency = cfg
-
-	store := cfg.Store
-	if store == nil {
-		store = NewMemoryIdempotencyStore(cfg.TTL)
+	if cfg.Store == nil {
+		cfg.Store = NewMemoryIdempotencyStore(cfg.TTL)
 	}
-
-	return b.Use(IdempotencyMiddleware[Req, Res](store, cfg))
+	b.meta.Idempotency = cfg
+	return b
 }
 
 func (b *Builder[Req, Res]) SuccessStatus(code int) *Builder[Req, Res] {
@@ -189,13 +188,6 @@ func (b *Builder[Req, Res]) ConcurrencyLimit(limit int32) *Builder[Req, Res] {
 	return b.Use(ConcurrencyLimitMiddleware[Req, Res](limit))
 }
 
-func (b *Builder[Req, Res]) WithHistory(capacity int) (*Builder[Req, Res], *History[Req, Res]) {
-	hist := NewHistory[Req, Res](capacity)
-	b.history = hist
-	b.Use(HistoryMiddleware(hist))
-	return b, hist
-}
-
 // ── Build ─────────────────────────────────────────────────────────────────────
 
 func (b *Builder[Req, Res]) Build() *BuiltAction[Req, Res] {
@@ -204,6 +196,14 @@ func (b *Builder[Req, Res]) Build() *BuiltAction[Req, Res] {
 	metaCopy.RequiredRoles = slices.Clone(b.meta.RequiredRoles)
 	metaCopy.RequiredPermissions = slices.Clone(b.meta.RequiredPermissions)
 	metaCopy.RequiredFeatures = slices.Clone(b.meta.RequiredFeatures)
+	if metaCopy.Idempotency.Enabled {
+		if metaCopy.Idempotency.Namespace == "" {
+			metaCopy.Idempotency.Namespace = metaCopy.Name
+		}
+		if metaCopy.Idempotency.Store == nil {
+			metaCopy.Idempotency.Store = NewMemoryIdempotencyStore(metaCopy.Idempotency.TTL)
+		}
+	}
 
 	act := &BuiltAction[Req, Res]{
 		meta:                &metaCopy,
@@ -211,6 +211,7 @@ func (b *Builder[Req, Res]) Build() *BuiltAction[Req, Res] {
 		middlewares:         slices.Clone(b.middlewares),
 		bindings:            append([]Binding(nil), b.bindings...),
 		history:             b.history,
+		historyErr:          b.historyErr,
 		trackExecutionStart: b.trackExecutionStart,
 		resilienceApplied:   b.resilienceApplied,
 		validationErr:       b.validationErr,
@@ -241,6 +242,10 @@ func (b *Builder[Req, Res]) Build() *BuiltAction[Req, Res] {
 	if exec != nil {
 		for _, middleware := range slices.Backward(b.middlewares) {
 			exec = middleware(exec, act)
+		}
+		if metaCopy.Idempotency.Enabled {
+			cfg := metaCopy.Idempotency
+			exec = IdempotencyMiddleware[Req, Res](cfg.Store, cfg)(exec)
 		}
 	}
 	act.exec = exec

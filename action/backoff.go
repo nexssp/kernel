@@ -26,20 +26,36 @@ func secureJitterFloat() float64 {
 //
 // Usage: .Retry(3, action.ExponentialBackoff(100*time.Millisecond, 5*time.Second))
 func ExponentialBackoff(base, maxDuration time.Duration) func(attempt int) time.Duration {
+	base, maxDuration = normalizedBackoffBounds(base, maxDuration)
 	return func(attempt int) time.Duration {
-		if attempt <= 1 {
+		if attempt <= 1 || base == 0 {
 			return base
 		}
-		// 2^30 nanoseconds exceeds any realistic maxDuration and prevents float64 -> int64 overflow.
-		if attempt > 30 {
-			return maxDuration
+		delay := base
+		for i := 1; i < attempt; i++ {
+			if delay > maxDuration/2 {
+				return maxDuration
+			}
+			delay *= 2
+			if delay >= maxDuration {
+				return maxDuration
+			}
 		}
-		d := time.Duration(float64(base) * math.Pow(2, float64(attempt-1)))
-		if d > maxDuration {
-			return maxDuration
-		}
-		return d
+		return delay
 	}
+}
+
+func normalizedBackoffBounds(base, maxDuration time.Duration) (normalizedBase, normalizedMaximum time.Duration) {
+	if base < 0 {
+		base = 0
+	}
+	if maxDuration < 0 {
+		maxDuration = 0
+	}
+	if base > maxDuration {
+		base = maxDuration
+	}
+	return base, maxDuration
 }
 
 // ExponentialJitter adds ±30% random jitter to ExponentialBackoff.
@@ -50,19 +66,30 @@ func ExponentialBackoff(base, maxDuration time.Duration) func(attempt int) time.
 //
 // Usage: .Retry(3, action.ExponentialJitter(100*time.Millisecond, 5*time.Second))
 func ExponentialJitter(base, maxDuration time.Duration) func(attempt int) time.Duration {
+	return exponentialJitterWithSource(base, maxDuration, secureJitterFloat)
+}
+
+func exponentialJitterWithSource(base, maxDuration time.Duration, sample func() float64) func(attempt int) time.Duration {
+	base, maxDuration = normalizedBackoffBounds(base, maxDuration)
 	exp := ExponentialBackoff(base, maxDuration)
 	return func(attempt int) time.Duration {
-		d := float64(exp(attempt))
-		jitter := d * 0.3 * (secureJitterFloat()*2 - 1)
-		result := time.Duration(d + jitter)
-		switch {
-		case result < base:
-			return base
-		case result > maxDuration:
-			return maxDuration
-		default:
-			return result
-		}
+		return jitterDuration(exp(attempt), base, maxDuration, sample())
+	}
+}
+
+// jitterDuration applies ±30% jitter using a normalized sample in [0,1] and
+// clamps the result to [base, maxDuration]. Production callers use
+// secureJitterFloat to provide the sample.
+func jitterDuration(duration, base, maxDuration time.Duration, sample float64) time.Duration {
+	d := float64(duration)
+	result := d + d*0.3*(sample*2-1)
+	switch {
+	case result <= float64(base):
+		return base
+	case result >= float64(maxDuration):
+		return maxDuration
+	default:
+		return time.Duration(result)
 	}
 }
 

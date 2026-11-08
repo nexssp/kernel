@@ -2,6 +2,8 @@ package xctx
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
 	"slices"
 )
 
@@ -22,6 +24,15 @@ func WithRequestID(ctx context.Context, id string) context.Context {
 		return ctx
 	}
 	return withLockedScope(ctx, func(scope *RequestScope) { scope.RequestID = id })
+}
+
+// WithIdempotencyKey stores an explicit request de-duplication key.
+// Request IDs remain correlation identifiers and are not used for idempotency.
+func WithIdempotencyKey(ctx context.Context, key string) context.Context {
+	if key == "" {
+		return ctx
+	}
+	return withLockedScope(ctx, func(scope *RequestScope) { scope.IdempotencyKey = key })
 }
 
 // WithExecutionID stores the id in context keys, not in a RequestScope.
@@ -126,6 +137,15 @@ func RequestIDFrom(ctx context.Context) string {
 	return ""
 }
 
+// IdempotencyKeyFrom returns the explicit de-duplication key or an empty string.
+func IdempotencyKeyFrom(ctx context.Context) string {
+	if s := lockScopeForRead(ctx); s != nil {
+		defer s.mu.RUnlock()
+		return s.IdempotencyKey
+	}
+	return ""
+}
+
 // ExecutionIDFrom returns the active execution ID from context keys.
 func ExecutionIDFrom(ctx context.Context) string {
 	id, _ := executionIDKey.From(ctx)
@@ -154,6 +174,42 @@ func UserTenantFrom(ctx context.Context) (userID, tenantID string) {
 		return s.UserID, s.TenantID
 	}
 	return "", ""
+}
+
+// IdempotencyScopeHashFrom returns a stable fingerprint of the tenant, user,
+// and authorization fields in the request scope without exposing those values.
+func IdempotencyScopeHashFrom(ctx context.Context) [32]byte {
+	var storage [2048]byte
+	data := storage[:0]
+	var length [8]byte
+	appendPart := func(value string) {
+		binary.BigEndian.PutUint64(length[:], uint64(len(value)))
+		data = append(data, length[:]...)
+		data = append(data, value...)
+	}
+	appendList := func(name string, values []string) {
+		appendPart(name)
+		binary.BigEndian.PutUint64(length[:], uint64(len(values)))
+		data = append(data, length[:]...)
+		for _, value := range values {
+			appendPart(value)
+		}
+	}
+
+	s := lockScopeForRead(ctx)
+	if s == nil {
+		appendPart("kernel-idempotency-scope-v1:absent")
+	} else {
+		defer s.mu.RUnlock()
+		appendPart("kernel-idempotency-scope-v1:present")
+		appendPart(s.TenantID)
+		appendPart(s.UserID)
+		appendPart(s.Role)
+		appendList("roles", s.Roles)
+		appendList("permissions", s.Permissions)
+		appendList("features", s.Features)
+	}
+	return sha256.Sum256(data)
 }
 
 func UserIDFrom(ctx context.Context) string {

@@ -2,6 +2,7 @@ package action_test
 
 import (
 	"context"
+	"errors"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -332,6 +333,49 @@ func TestCircuitBreaker_InternalErrorsTrip(t *testing.T) {
 		t.Fatalf("call after Internal failure = %v, want CircuitBreaker", err)
 	}
 	if got := calls.Load(); got != 1 {
-		t.Fatalf("handler called %d times, want 1 after breaker opened", got)
+		t.Fatalf("handler calls = %d, want 1 after breaker opened", got)
+	}
+}
+
+func TestCircuitBreaker_CallerDeadlineExpiryCountsAsFailure(t *testing.T) {
+	t.Parallel()
+	state := newTestBreaker(t, "caller-deadline", time.Hour)
+	act := action.New("caller-deadline", func(ctx context.Context, _ struct{}) (string, error) {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		return "ok", nil
+	}).Use(action.CircuitBreaker[struct{}, string](state)).Build()
+
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+	if _, err := act.Do(ctx, struct{}{}); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expired caller context error = %v, want DeadlineExceeded", err)
+	}
+	if _, err := act.Do(context.Background(), struct{}{}); xerr.KindFrom(err) != xerr.KindCircuitBreaker {
+		t.Fatalf("call after deadline failure = %v, want CircuitBreaker", err)
+	}
+}
+
+func TestAdaptive_CallerDeadlineExpiryCountsAsFailure(t *testing.T) {
+	t.Parallel()
+	act := action.New("adaptive-caller-deadline", func(ctx context.Context, _ struct{}) (string, error) {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		return "ok", nil
+	}).Use(action.Adaptive[struct{}, string]("adaptive-caller-deadline", action.AdaptiveConfig{
+		FailureThreshold: 1,
+		ResetTimeout:     time.Hour,
+		InitialTimeout:   time.Hour,
+	})).Build()
+
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+	if _, err := act.Do(ctx, struct{}{}); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expired caller context error = %v, want DeadlineExceeded", err)
+	}
+	if _, err := act.Do(context.Background(), struct{}{}); xerr.KindFrom(err) != xerr.KindCircuitBreaker {
+		t.Fatalf("call after deadline failure = %v, want CircuitBreaker", err)
 	}
 }

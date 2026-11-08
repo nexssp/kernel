@@ -14,7 +14,10 @@ import (
 
 // Journal persists step results so a resumed execution can replay them
 // without re-running the underlying handler. Implementations must be
-// safe for concurrent use.
+// safe for concurrent use. RecordStep errors may be ambiguous: an
+// implementation can commit a payload and then return an error, so callers
+// must not treat a failed write as proof that no external side effect or
+// journal record took effect.
 type Journal interface {
 	GetStep(ctx context.Context, executionID, stepName string) (data []byte, ok bool, err error)
 	RecordStep(ctx context.Context, executionID, stepName string, payload []byte) error
@@ -32,6 +35,12 @@ type durableResult[Res any] struct {
 // there is nothing to key the memoization on. The caller is responsible
 // for using unique step names within a single execution; two different
 // steps sharing a name under the same execution ID will collide.
+//
+// Results are persisted as JSON. For empty-interface Res values such as any,
+// both the first successful call and later replays use encoding/json's default
+// interface representation (for example, numbers become float64 and typed nil
+// pointers become nil). Arbitrary Go dynamic types are not restored from
+// untrusted type names.
 func Durable[Req, Res any](journal Journal, stepName string) Middleware[Req, Res] {
 	return func(next Fn[Req, Res]) Fn[Req, Res] {
 		run := newDurableRunner(journal, stepName, next)
@@ -116,6 +125,11 @@ func runDurableStep[Req, Res any](
 		return zero, xerr.Internal(
 			fmt.Sprintf("journal marshal failed for step %q", stepName), marshalErr)
 	}
+	result, marshalErr = normalizeJSONReplayResult(result, serialized)
+	if marshalErr != nil {
+		return zero, xerr.Internal(
+			fmt.Sprintf("journal result normalization failed for step %q", stepName), marshalErr)
+	}
 
 	if recordErr := journal.RecordStep(ctx, executionID, stepName, serialized); recordErr != nil {
 		return zero, xerr.Unavailable(
@@ -144,6 +158,27 @@ func normalizeJSONNullResult[Res any](result Res) Res {
 		return result
 	}
 	return result
+}
+
+func normalizeJSONReplayResult[Res any](result Res, payload []byte) (Res, error) {
+	resultType := reflect.TypeFor[Res]()
+	if resultType.Kind() != reflect.Interface || resultType.NumMethod() != 0 {
+		return result, nil
+	}
+	var normalized any
+	if err := json.Unmarshal(payload, &normalized); err != nil {
+		var zero Res
+		return zero, err
+	}
+	if normalized == nil {
+		var zero Res
+		return zero, nil
+	}
+	if result, ok := normalized.(Res); ok {
+		return result, nil
+	}
+	var zero Res
+	return zero, fmt.Errorf("JSON result with dynamic type %T is not assignable to Res", normalized)
 }
 
 // Durable wires the memoization middleware into a builder.

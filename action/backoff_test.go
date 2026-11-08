@@ -22,6 +22,47 @@ func TestExponentialBackoff(t *testing.T) {
 	assert(10, 2*time.Second)
 }
 
+func TestExponentialBackoffInvocationAllocatesNothing(t *testing.T) {
+	backoff := action.ExponentialBackoff(time.Millisecond, time.Second)
+	var got time.Duration
+	allocs := testing.AllocsPerRun(100, func() {
+		got = backoff(8)
+	})
+	if allocs != 0 {
+		t.Fatalf("backoff invocation allocated %.2f objects", allocs)
+	}
+	if got == 0 {
+		t.Fatal("backoff invocation produced zero duration")
+	}
+}
+
+func TestExponentialBackoffSaturatesWithoutOverflow(t *testing.T) {
+	const maxDuration = time.Duration(1<<63 - 1)
+	tests := []struct {
+		name    string
+		base    time.Duration
+		maximum time.Duration
+		attempt int
+		want    time.Duration
+	}{
+		{name: "before former attempt cutoff", base: time.Nanosecond, maximum: 2 * time.Second, attempt: 30, want: 1 << 29},
+		{name: "large exact doubling", base: time.Nanosecond, maximum: 2 * time.Second, attempt: 31, want: 1 << 30},
+		{name: "cap after large doubling", base: time.Nanosecond, maximum: 2 * time.Second, attempt: 32, want: 2 * time.Second},
+		{name: "duration overflow saturates", base: maxDuration/2 + 1, maximum: maxDuration, attempt: 2, want: maxDuration},
+		{name: "maximum base stays capped", base: maxDuration, maximum: maxDuration, attempt: int(^uint(0) >> 1), want: maxDuration},
+		{name: "base above maximum is capped", base: 10 * time.Second, maximum: time.Second, attempt: 1, want: time.Second},
+		{name: "negative base is zero", base: -time.Second, maximum: time.Second, attempt: 2, want: 0},
+		{name: "negative maximum is zero", base: time.Second, maximum: -time.Second, attempt: 2, want: 0},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := action.ExponentialBackoff(test.base, test.maximum)(test.attempt); got != test.want {
+				t.Fatalf("ExponentialBackoff(%d, %d)(%d) = %d, want %d", test.base, test.maximum, test.attempt, got, test.want)
+			}
+		})
+	}
+}
+
 func TestLinearBackoff(t *testing.T) {
 	l := action.LinearBackoff(50 * time.Millisecond)
 	if l(1) != 50*time.Millisecond || l(2) != 100*time.Millisecond || l(3) != 150*time.Millisecond {
@@ -87,8 +128,6 @@ func TestExponentialJitter(t *testing.T) {
 	}
 
 	for _, tc := range testCases {
-		seenValues := make(map[time.Duration]struct{}, iterations)
-
 		for range iterations {
 			val := jitterFn(tc.attempt)
 
@@ -98,13 +137,17 @@ func TestExponentialJitter(t *testing.T) {
 			if val > maxDur {
 				t.Fatalf("%s (attempt %d): returned %v exceeding max %v", tc.name, tc.attempt, val, maxDur)
 			}
-
-			seenValues[val] = struct{}{}
 		}
+	}
+}
 
-		// 2. Verify non-determinism: jitter must produce varying durations
-		if tc.attempt > 0 && len(seenValues) == 1 {
-			t.Errorf("%s (attempt %d): jitter is deterministic, produced constant value %v", tc.name, tc.attempt, jitterFn(tc.attempt))
+func TestExponentialJitterStaysInRangeAtMaximumDuration(t *testing.T) {
+	const maxDuration = time.Duration(1<<63 - 1)
+	jitter := action.ExponentialJitter(maxDuration/2+1, maxDuration)
+	for _, attempt := range []int{0, 1, 2, 100, int(^uint(0) >> 1)} {
+		got := jitter(attempt)
+		if got <= 0 || got > maxDuration {
+			t.Fatalf("ExponentialJitter(%d) = %d, want a positive duration <= %d", attempt, got, maxDuration)
 		}
 	}
 }

@@ -1,6 +1,6 @@
 package dag
 
-import "github.com/arnonrgo/immutable"
+import "github.com/nexssp/kernel/internal/pmap"
 
 // State is the mutable graph state. Only the DAG engine writes to it;
 // nodes receive a read-only view via NodeContext.Input.
@@ -16,19 +16,19 @@ import "github.com/arnonrgo/immutable"
 // compiler cannot catch. Persistent roots preserve those snapshots while
 // dynamic execution publishes later outputs.
 type State struct {
-	data *immutable.Map[string, any]
+	data *pmap.Map[any]
 }
 
 // ReadState is the read-only view of an immutable State snapshot. Copying
 // it shares the root and keeps that snapshot alive.
 type ReadState struct {
-	data *immutable.Map[string, any]
+	data *pmap.Map[any]
 }
 
 // AcquireState returns a fresh, empty State. The caller owns it and
 // should call Release when finished.
 func AcquireState() *State {
-	return &State{data: immutable.NewMap[string, any](nil)}
+	return &State{data: pmap.New[any]()}
 }
 
 // Release drops this State's reference to its immutable root. Outstanding
@@ -75,10 +75,10 @@ func (r ReadState) Data() map[string]any {
 		return nil
 	}
 	out := make(map[string]any, r.data.Len())
-	iterator := r.data.Iterator()
-	for key, value, ok := iterator.Next(); ok; key, value, ok = iterator.Next() {
+	r.data.Range(func(key string, value any) bool {
 		out[key] = value
-	}
+		return true
+	})
 	return out
 }
 
@@ -106,7 +106,7 @@ func (s *State) Set(key string, val any) {
 		return
 	}
 	if s.data == nil {
-		s.data = immutable.NewMap[string, any](nil)
+		s.data = pmap.New[any]()
 	}
 	s.data = s.data.Set(key, val)
 }
@@ -128,7 +128,7 @@ func (s *State) CopyFrom(src *State) {
 		return
 	}
 	if src.data == nil {
-		s.data = immutable.NewMap[string, any](nil)
+		s.data = pmap.New[any]()
 		return
 	}
 	s.data = src.data

@@ -95,6 +95,29 @@ func TestDurable_ReplaysNilInterfaceResult(t *testing.T) {
 	}
 }
 
+func TestDurable_NormalizesAnyIntegerOnFirstCallAndReplay(t *testing.T) {
+	t.Parallel()
+
+	journal := newMemJournal()
+	var calls atomic.Int32
+	step := action.New("integer-result", func(context.Context, string) (any, error) {
+		calls.Add(1)
+		return int(7), nil
+	}).Durable(journal, "step").Build()
+	ctx := xctx.WithExecutionID(context.Background(), "integer-result-run")
+
+	for range 2 {
+		result, err := step.Do(ctx, "request")
+		value, isJSONNumber := result.(float64)
+		if err != nil || !isJSONNumber || value != 7 {
+			t.Fatalf("result = (%#v, %v), want JSON-normalized float64(7)", result, err)
+		}
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("handler calls = %d, want 1", got)
+	}
+}
+
 func TestDurable_ReplaysTypedNilPointerAsNilInterface(t *testing.T) {
 	t.Parallel()
 

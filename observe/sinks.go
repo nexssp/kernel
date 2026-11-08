@@ -45,13 +45,38 @@ type MemorySink struct {
 	events *ringbuf.Buffer[Event]
 }
 
+// NewMemorySink creates a bounded in-memory event sink. It returns nil if the
+// allocation exceeds the default memory budget; use NewMemorySinkChecked to
+// inspect allocation errors or NewMemorySinkWithOptions to select an explicit
+// budget.
 func NewMemorySink(capacity int) *MemorySink {
+	sink, err := NewMemorySinkChecked(capacity)
+	if err != nil {
+		return nil
+	}
+	return sink
+}
+
+// NewMemorySinkChecked creates a bounded in-memory event sink using the default
+// memory budget. Nonpositive capacities retain the default capacity of 100.
+func NewMemorySinkChecked(capacity int) (*MemorySink, error) {
 	if capacity <= 0 {
 		capacity = 100 // Safe default
 	}
-	return &MemorySink{
-		events: ringbuf.NewBuffer[Event](capacity),
+	return NewMemorySinkWithOptions(ringbuf.BufferOptions{
+		Capacity:          capacity,
+		MemoryBudgetBytes: ringbuf.DefaultMemoryBudgetBytes,
+	})
+}
+
+// NewMemorySinkWithOptions creates a bounded in-memory event sink using the
+// supplied buffer options. Capacities below 1 are normalized to 1.
+func NewMemorySinkWithOptions(options ringbuf.BufferOptions) (*MemorySink, error) {
+	events, err := ringbuf.NewBufferWithOptions[Event](options)
+	if err != nil {
+		return nil, err
 	}
+	return &MemorySink{events: events}, nil
 }
 
 func (s *MemorySink) Emit(_ context.Context, event Event) {

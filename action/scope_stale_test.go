@@ -10,6 +10,7 @@ package action_test
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -20,6 +21,16 @@ import (
 	"github.com/nexssp/kernel/xctx"
 	"github.com/nexssp/kernel/xerr"
 )
+
+type corruptIdempotencyReadStore struct {
+	action.IdempotencyStore
+	entry action.IdempotencyEntry
+}
+
+func (s *corruptIdempotencyReadStore) Get(ctx context.Context, key string) (action.IdempotencyEntry, bool) {
+	s.Set(ctx, key, s.entry, time.Minute)
+	return s.IdempotencyStore.Get(ctx, key)
+}
 
 // ─── CircuitBreaker: panic paths ─────────────────────────────────────────────
 
@@ -135,6 +146,7 @@ func TestIdempotency_ConcurrentDifferentPayload_ReturnsConflict(t *testing.T) {
 
 	cfg := action.IdempotencyConfig{
 		Enabled:   true,
+		Namespace: "scope.concurrent",
 		KeyFunc:   func(_ []byte) string { return "shared-key" },
 		KeyHeader: "X-Key",
 	}
@@ -196,17 +208,19 @@ func TestIdempotency_ConcurrentDifferentPayload_ReturnsConflict(t *testing.T) {
 func TestIdempotency_CorruptedEntry_FailsClosed(t *testing.T) {
 	t.Parallel()
 
-	store := action.NewMemoryIdempotencyStore(time.Minute)
-	// Pre-seed an entry whose body is not valid JSON for the response type.
-	store.Set(context.Background(), "k-corrupt", action.IdempotencyEntry{
-		Status:      200,
-		Body:        []byte("{not-json"),
-		StoredAt:    time.Now().UTC(),
-		RequestHash: "", // empty hash disables mismatch checks
-	}, time.Minute)
+	store := &corruptIdempotencyReadStore{
+		IdempotencyStore: action.NewMemoryIdempotencyStore(time.Minute),
+		entry: action.IdempotencyEntry{
+			Status:           200,
+			Body:             []byte("{not-json"),
+			StoredAt:         time.Now().UTC(),
+			RequestHashBytes: sha256.Sum256([]byte("req")),
+		},
+	}
 
 	cfg := action.IdempotencyConfig{
 		Enabled:   true,
+		Namespace: "scope.corrupt",
 		KeyHeader: "X-Key",
 	}
 	mw := action.IdempotencyMiddleware[string, string](store, cfg)
@@ -218,9 +232,7 @@ func TestIdempotency_CorruptedEntry_FailsClosed(t *testing.T) {
 	}
 	wrapped := mw(core)
 
-	// Key via request scope RequestID so we hit the seeded entry.
-	ctx := context.Background()
-	ctx = xctx.WithRequestID(ctx, "k-corrupt")
+	ctx := xctx.WithIdempotencyKey(context.Background(), "k-corrupt")
 
 	_, err := wrapped(ctx, "req")
 	if err == nil {
@@ -245,6 +257,7 @@ func TestIdempotency_LeaseRenewal_KeepsClaimAlive(t *testing.T) {
 	store := action.NewMemoryIdempotencyStore(time.Minute)
 	cfg := action.IdempotencyConfig{
 		Enabled:   true,
+		Namespace: "scope.lease",
 		KeyHeader: "X-Key",
 		LeaseTTL:  leaseTTL,
 		Store:     store,
@@ -258,7 +271,7 @@ func TestIdempotency_LeaseRenewal_KeepsClaimAlive(t *testing.T) {
 	}
 	wrapped := mw(core)
 
-	ctx := xctx.WithRequestID(context.Background(), "k-renew")
+	ctx := xctx.WithIdempotencyKey(context.Background(), "k-renew")
 	res, err := wrapped(ctx, "req")
 	if err != nil {
 		t.Fatalf("expected Complete to succeed with renewal, got: %v", err)

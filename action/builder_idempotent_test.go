@@ -2,6 +2,8 @@ package action_test
 
 import (
 	"context"
+	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -38,5 +40,29 @@ func TestBuilder_IdempotentWithConfig(t *testing.T) {
 	}
 	if meta.Idempotency.Header() != "X-Key" {
 		t.Fatalf("expected header X-Key, got %s", meta.Idempotency.Header())
+	}
+	if meta.Idempotency.Namespace != "idem.custom" {
+		t.Fatalf("expected final action namespace idem.custom, got %q", meta.Idempotency.Namespace)
+	}
+	//nolint:musttag // This test verifies encoding/json's current metadata shape.
+	encoded, err := json.Marshal(meta)
+	if err != nil {
+		t.Fatalf("marshal action metadata: %v", err)
+	}
+	if strings.Contains(string(encoded), "Store") || strings.Contains(string(encoded), "KeyFunc") {
+		t.Fatalf("runtime idempotency configuration leaked into metadata: %s", encoded)
+	}
+}
+
+func TestBuilder_IdempotencyNamespaceUsesFinalName(t *testing.T) {
+	store := action.NewMemoryIdempotencyStore(time.Hour)
+	builder := action.New("before.rename", func(_ context.Context, req string) (string, error) {
+		return req, nil
+	}).IdempotentWithConfig(action.IdempotencyConfig{Store: store})
+	builder.Name("after.rename")
+	act := builder.Build()
+
+	if got := act.GetMeta().Idempotency.Namespace; got != "after.rename" {
+		t.Fatalf("idempotency namespace = %q, want after.rename", got)
 	}
 }

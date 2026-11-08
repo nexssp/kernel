@@ -24,10 +24,35 @@ type History[Req, Res any] struct {
 	buf *ringbuf.Buffer[Record[Req, Res]]
 }
 
+// NewHistory creates a bounded execution history. It returns nil if the
+// allocation exceeds the default memory budget; use NewHistoryChecked to
+// inspect errors or NewHistoryWithOptions to select an explicit budget.
 func NewHistory[Req, Res any](capacity int) *History[Req, Res] {
-	return &History[Req, Res]{
-		buf: ringbuf.NewBuffer[Record[Req, Res]](capacity),
+	history, err := NewHistoryChecked[Req, Res](capacity)
+	if err != nil {
+		return nil
 	}
+	return history
+}
+
+// NewHistoryChecked creates a bounded execution history using the default
+// memory budget and returns an error before allocating when the budget is
+// exceeded or the backing array size is not representable.
+func NewHistoryChecked[Req, Res any](capacity int) (*History[Req, Res], error) {
+	return NewHistoryWithOptions[Req, Res](ringbuf.BufferOptions{
+		Capacity:          capacity,
+		MemoryBudgetBytes: ringbuf.DefaultMemoryBudgetBytes,
+	})
+}
+
+// NewHistoryWithOptions creates a bounded execution history using explicit
+// buffer options and returns an error if allocation validation fails.
+func NewHistoryWithOptions[Req, Res any](options ringbuf.BufferOptions) (*History[Req, Res], error) {
+	buffer, err := ringbuf.NewBufferWithOptions[Record[Req, Res]](options)
+	if err != nil {
+		return nil, err
+	}
+	return &History[Req, Res]{buf: buffer}, nil
 }
 
 func (h *History[Req, Res]) Push(rec Record[Req, Res]) {

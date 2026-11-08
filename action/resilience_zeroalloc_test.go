@@ -404,7 +404,7 @@ func TestIdempotency_HotPath_BoundedAllocs_Summary(t *testing.T) {
 		return n * 2, nil
 	}).Idempotent().Build()
 
-	ctx := ktest.RequestContext(t, "idem-hot-key")
+	ctx := ktest.IdempotencyContext(t, "idem-hot-key")
 	_, _ = act.Do(ctx, 42) // populate + warm up — must use SAME payload as the loop
 
 	// 5 in production, 6 under -race. Allow 6 to cover both.
@@ -432,7 +432,7 @@ func TestIdempotency_PrimitiveHotPath_LowerAllocs(t *testing.T) {
 		return n * 2, nil
 	}).Idempotent().Build()
 
-	ctx := ktest.RequestContext(t, "idem-primitive-key")
+	ctx := ktest.IdempotencyContext(t, "idem-primitive-key")
 	_, _ = act.Do(ctx, 42) // populate + warm up
 
 	// 3 in production, 4 under -race. Allow 4 to cover both.

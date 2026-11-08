@@ -30,15 +30,16 @@ func CloneForAsync(ctx context.Context) context.Context {
 	gen := globalGeneration.Add(1)
 
 	clone := &RequestScope{
-		RequestID:   s.RequestID,
-		TraceID:     s.TraceID,
-		SpanID:      s.SpanID,
-		Endpoint:    s.Endpoint,
-		UserID:      s.UserID,
-		TenantID:    s.TenantID,
-		Role:        s.Role,
-		ClientIP:    s.ClientIP,
-		TraceEvents: traceEvents,
+		RequestID:      s.RequestID,
+		IdempotencyKey: s.IdempotencyKey,
+		TraceID:        s.TraceID,
+		SpanID:         s.SpanID,
+		Endpoint:       s.Endpoint,
+		UserID:         s.UserID,
+		TenantID:       s.TenantID,
+		Role:           s.Role,
+		ClientIP:       s.ClientIP,
+		TraceEvents:    traceEvents,
 	}
 	clone.generation.Store(gen)
 

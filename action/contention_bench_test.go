@@ -112,8 +112,8 @@ func BenchmarkContention_SmartResilience_Parallel(b *testing.B) {
 // ─── Idempotency ───────────────────────────────────────────────────────────
 
 // Idempotency HIT through the full middleware under parallel load: every
-// worker resolves the same RequestID, so all workers contend on one store key
-// and on the SHA-256 payload hash computed per call.
+// worker supplies the same explicit key, so they contend on one scoped store
+// key and on the SHA-256 payload hash computed per call.
 func BenchmarkContention_Idempotency_Hit_Parallel(b *testing.B) {
 	store := action.NewMemoryIdempotencyStore(time.Hour)
 	act := action.New("bench.idem.p", contentionHandler).
@@ -123,8 +123,8 @@ func BenchmarkContention_Idempotency_Hit_Parallel(b *testing.B) {
 			Store:   store,
 		}).Build()
 
-	// Prime: store the response under the shared request ID.
-	if _, err := act.Do(ktest.RequestContext(b, "bench-idem-key-p"), 42); err != nil {
+	// Prime the response under an explicit idempotency key.
+	if _, err := act.Do(ktest.IdempotencyContext(b, "bench-idem-key-p"), 42); err != nil {
 		b.Fatal(err)
 	}
 

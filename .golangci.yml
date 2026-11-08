@@ -157,7 +157,9 @@ linters:
             - pkg: "github.com/golang/protobuf"
               desc: "Use the new 'google.golang.org/protobuf' API"
             - pkg: "github.com/benbjohnson/immutable"
-              desc: "Superseded upstream; use github.com/arnonrgo/immutable v0.7.0 (see docs/decisions/2026-11-07-dag-state-snapshots.md)"
+              desc: "Superseded upstream; do not reintroduce it"
+            - pkg: "github.com/arnonrgo/immutable"
+              desc: "Use Kernel's internal persistent map in internal/pmap instead"
 
     loggercheck: {slog: true, kitlog: false, klog: false, logr: false, zap: false}
 

@@ -43,7 +43,7 @@ func (s *idempotencyGetBarrier) Get(ctx context.Context, key string) (action.Ide
 	return entry, ok
 }
 
-func TestIdempotency_UnhashableRequestFailsClosed(t *testing.T) {
+func TestIdempotency_UnhashableRequestFailsClosedWhenKeyIsPresent(t *testing.T) {
 	type unhashableRequest struct {
 		Callback func()
 	}
@@ -54,18 +54,26 @@ func TestIdempotency_UnhashableRequestFailsClosed(t *testing.T) {
 		return "unexpected", nil
 	}).Idempotent().Build()
 
-	contexts := []context.Context{
-		context.Background(),
-		ktest.RequestContext(t, "unhashable-request-key"),
-	}
-	for _, ctx := range contexts {
-		_, err := act.Do(ctx, unhashableRequest{Callback: func() {}})
-		if err == nil || xerr.KindFrom(err) != xerr.KindBadRequest {
-			t.Fatalf("unhashable request error = %v, want BadRequest", err)
-		}
+	_, err := act.Do(ktest.IdempotencyContext(t, "unhashable-request-key"), unhashableRequest{Callback: func() {}})
+	if err == nil || xerr.KindFrom(err) != xerr.KindBadRequest {
+		t.Fatalf("unhashable request error = %v, want BadRequest", err)
 	}
 	if got := calls.Load(); got != 0 {
 		t.Fatalf("handler calls = %d, want 0", got)
+	}
+}
+
+func TestIdempotency_RequestIDAloneDoesNotDeduplicate(t *testing.T) {
+	var calls atomic.Int32
+	act := action.New("idempotency.request-id-only", func(context.Context, int) (int, error) {
+		return int(calls.Add(1)), nil
+	}).Idempotent().Build()
+	ctx := ktest.RequestContext(t, "correlation-only")
+	for want := 1; want <= 2; want++ {
+		got, err := act.Do(ctx, 42)
+		if err != nil || got != want {
+			t.Fatalf("call %d = (%d, %v), want (%d, nil)", want, got, err, want)
+		}
 	}
 }
 
@@ -89,7 +97,7 @@ func TestIdempotency_HappyPath_CachedReplay(t *testing.T) {
 		}).
 		Build()
 
-	ctx := ktest.RequestContext(t, "req_unique_001")
+	ctx := ktest.IdempotencyContext(t, "req_unique_001")
 	req := PaymentOrderReq{AccountID: "acc_10", Amount: 250.0}
 
 	// 1st run
@@ -112,7 +120,7 @@ func TestIdempotency_PayloadConflict_Rejected(t *testing.T) {
 		PaymentOrderRes{TxID: "tx_1", Status: "OK"},
 	).Idempotent().Build()
 
-	ctx := ktest.RequestContext(t, "idem_conflict_key")
+	ctx := ktest.IdempotencyContext(t, "idem_conflict_key")
 
 	ktest.Run(t, act, ctx, PaymentOrderReq{AccountID: "user_1", Amount: 10.0}).NoError()
 
@@ -135,7 +143,7 @@ func TestIdempotency_HandlerFailure_AllowsRetry(t *testing.T) {
 		return PaymentOrderRes{TxID: "tx_ok", Status: "SUCCESS"}, nil
 	}).Idempotent().Build()
 
-	ctx := ktest.RequestContext(t, "retryable_charge")
+	ctx := ktest.IdempotencyContext(t, "retryable_charge")
 	req := PaymentOrderReq{AccountID: "acc_1", Amount: 50.0}
 
 	// 1st attempt fails
@@ -168,7 +176,7 @@ func TestIdempotency_HandlerPanic_ReleasesCoordinatorClaim(t *testing.T) {
 		Store:   store,
 	}).Build()
 
-	ctx := ktest.RequestContext(t, "panic-key-1")
+	ctx := ktest.IdempotencyContext(t, "panic-key-1")
 
 	// 1st run panics
 	_, err := act.Do(ctx, "payload")
@@ -211,7 +219,7 @@ func TestIdempotency_HighConcurrency_SingleExecution(t *testing.T) {
 	}
 	results := make(chan result, callers)
 	start := make(chan struct{})
-	ctx := ktest.RequestContext(t, "thundering-herd")
+	ctx := ktest.IdempotencyContext(t, "thundering-herd")
 	request := PaymentOrderReq{AccountID: "acc_pool", Amount: 100.0}
 	for range callers {
 		go func() {
@@ -264,11 +272,11 @@ func TestIdempotency_CacheHitAllocationBudget(t *testing.T) {
 		return req * 2, nil
 	}).Idempotent().Build()
 
-	ctx := ktest.RequestContext(t, "bench_key")
+	ctx := ktest.IdempotencyContext(t, "bench_key")
 	_, _ = act.Do(ctx, 42) // populate cache
 
-	// The cache-hit benchmark measures one allocation per call.
-	xtest.RequireMaxAlloc(t, 1000, 1, func() {
+	// Scope isolation requires one derived storage-key string on each call.
+	xtest.RequireMaxAlloc(t, 1000, 2, func() {
 		res, err := act.Do(ctx, 42)
 		if err != nil || res != 84 {
 			t.Fail()
@@ -293,7 +301,7 @@ func TestIdempotency_UnserializableResponseFailsClosed(t *testing.T) {
 				return unmarshalableIdempotencyResponse{Value: make(chan int)}, nil
 			}).IdempotentWithConfig(action.IdempotencyConfig{Enabled: true, Store: newStore()}).Build()
 
-			ctx := ktest.RequestContext(t, "unserializable-response-key")
+			ctx := ktest.IdempotencyContext(t, "unserializable-response-key")
 			for attempt := 1; attempt <= 2; attempt++ {
 				_, err := act.Do(ctx, struct{}{})
 				if err == nil || xerr.KindFrom(err) != xerr.KindInternal {
@@ -323,12 +331,47 @@ func TestIdempotency_ReplaysNilInterfaceResult(t *testing.T) {
 				calls.Add(1)
 				return nil, nil
 			}).IdempotentWithConfig(action.IdempotencyConfig{Enabled: true, Store: newStore()}).Build()
-			ctx := ktest.RequestContext(t, "nil-result-key")
+			ctx := ktest.IdempotencyContext(t, "nil-result-key")
 
 			for range 2 {
 				result, err := act.Do(ctx, "request")
 				if err != nil || result != nil {
 					t.Fatalf("nil result call = %#v / %v, want nil / nil", result, err)
+				}
+			}
+			if got := calls.Load(); got != 1 {
+				t.Fatalf("handler calls = %d, want 1", got)
+			}
+		})
+	}
+}
+
+func TestIdempotency_NormalizesAnyIntegerOnFirstCallAndReplay(t *testing.T) {
+	stores := []struct {
+		name     string
+		newStore func() action.IdempotencyStore
+	}{
+		{name: "coordinator", newStore: func() action.IdempotencyStore {
+			return action.NewMemoryIdempotencyStore(time.Hour)
+		}},
+		{name: "store_only", newStore: func() action.IdempotencyStore {
+			return &idempotencyGetBarrier{IdempotencyStore: action.NewMemoryIdempotencyStore(time.Hour)}
+		}},
+	}
+	for _, store := range stores {
+		t.Run(store.name, func(t *testing.T) {
+			var calls atomic.Int32
+			act := action.New("idempotency.integer-result", func(context.Context, string) (any, error) {
+				calls.Add(1)
+				return int(7), nil
+			}).IdempotentWithConfig(action.IdempotencyConfig{Enabled: true, Store: store.newStore()}).Build()
+			ctx := ktest.IdempotencyContext(t, "integer-result-key")
+
+			for range 2 {
+				result, err := act.Do(ctx, "request")
+				value, isJSONNumber := result.(float64)
+				if err != nil || !isJSONNumber || value != 7 {
+					t.Fatalf("result = (%#v, %v), want JSON-normalized float64(7)", result, err)
 				}
 			}
 			if got := calls.Load(); got != 1 {
@@ -356,7 +399,7 @@ func TestIdempotency_ReplaysTypedNilPointerAsNilInterface(t *testing.T) {
 				var result *resultValue
 				return result, nil
 			}).IdempotentWithConfig(action.IdempotencyConfig{Enabled: true, Store: newStore()}).Build()
-			ctx := ktest.RequestContext(t, "typed-nil-result-key")
+			ctx := ktest.IdempotencyContext(t, "typed-nil-result-key")
 
 			for range 2 {
 				result, err := act.Do(ctx, "request")

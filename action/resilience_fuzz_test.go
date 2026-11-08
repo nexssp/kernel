@@ -202,10 +202,10 @@ func FuzzIdempotency_HashStability(f *testing.F) {
 
 		// Two identical calls with the same Idempotency-Key.
 		// First populates, second must succeed (same hash → cached replay).
-		// We use xctx.WithRequestID directly because ktest.RequestContext
+		// We use xctx.WithIdempotencyKey directly because the test helper
 		// calls tb.Helper() which is forbidden inside fuzz targets.
-		ctx1 := xctx.WithRequestID(context.Background(), "hash-stability-key")
-		ctx2 := xctx.WithRequestID(context.Background(), "hash-stability-key")
+		ctx1 := xctx.WithIdempotencyKey(context.Background(), "hash-stability-key")
+		ctx2 := xctx.WithIdempotencyKey(context.Background(), "hash-stability-key")
 
 		_, _ = act.Do(ctx1, r)    // first call — populates
 		_, err := act.Do(ctx2, r) // second call — must succeed (same hash)

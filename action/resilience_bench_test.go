@@ -144,8 +144,8 @@ func BenchmarkResilience_Idempotency_Hit(b *testing.B) {
 		Store:   store,
 	}).Build()
 
-	// Prime: store the response under a fixed request ID.
-	ctx := ktest.RequestContext(b, "bench-idem-key")
+	// Prime the response under a fixed idempotency key.
+	ctx := ktest.IdempotencyContext(b, "bench-idem-key")
 	_, _ = act.Do(ctx, 42)
 
 	b.ReportAllocs()
@@ -175,7 +175,7 @@ func BenchmarkResilience_Idempotency_Hit_StructPayload(b *testing.B) {
 		TTL:     time.Hour,
 		Store:   store,
 	}).Build()
-	ctx := ktest.RequestContext(b, "bench-idem-struct-key")
+	ctx := ktest.IdempotencyContext(b, "bench-idem-struct-key")
 	if _, err := act.Do(ctx, request); err != nil {
 		b.Fatal(err)
 	}

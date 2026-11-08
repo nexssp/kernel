@@ -23,20 +23,21 @@ var globalGeneration atomic.Uint64
 // fields that are inherently mutable-per-request and cheap to reset
 // live on the scope.
 type RequestScope struct {
-	generation  atomic.Uint64
-	mu          sync.RWMutex
-	RequestID   string
-	TraceID     string
-	SpanID      string
-	Endpoint    string
-	UserID      string
-	TenantID    string
-	Role        string
-	ClientIP    string
-	Roles       []string
-	Permissions []string
-	Features    []string
-	TraceEvents []string
+	generation     atomic.Uint64
+	mu             sync.RWMutex
+	RequestID      string
+	IdempotencyKey string
+	TraceID        string
+	SpanID         string
+	Endpoint       string
+	UserID         string
+	TenantID       string
+	Role           string
+	ClientIP       string
+	Roles          []string
+	Permissions    []string
+	Features       []string
+	TraceEvents    []string
 
 	traceMu sync.Mutex
 }
@@ -48,6 +49,7 @@ func (s *RequestScope) Reset() {
 	defer s.mu.Unlock()
 	s.generation.Store(0)
 	s.RequestID = ""
+	s.IdempotencyKey = ""
 	s.TraceID = ""
 	s.SpanID = ""
 	s.Endpoint = ""

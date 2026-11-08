@@ -12,6 +12,8 @@ Nexss Kernel is a lightweight, typed Go execution library for building reusable 
 
 The Kernel provides core execution semantics, typed generics, context-based security guards, and resilient middleware. Applications and sibling modules supply concrete network adapters, storage drivers, and domain logic.
 
+Kernel does not expose a runtime `Version` function or constant. Go binaries built with module metadata can inspect `runtime/debug.ReadBuildInfo` for the linked module version.
+
 > **Design goal:** Predictable execution semantics, focused interfaces, zero-allocation hot paths, and idiomatic Go.
 
 ## Development Commands
@@ -73,6 +75,8 @@ The Kernel owns the lifecycle, concurrency safety, and execution semantics of an
 ### Ring buffer memory budgets
 
 `ringbuf.NewChecked(capacity)` validates the rounded allocation against the default 64 MiB per-ring budget and returns an error before allocating. For an intentional per-ring override, use `ringbuf.NewWithOptions(ringbuf.Options{Capacity: ..., MemoryBudgetBytes: ...})`. The source-compatible `ringbuf.New(capacity)` also uses the safe default and returns `nil` when validation fails; over-limit requests are never silently clamped to a smaller ring.
+
+The generic mutex-backed `ringbuf.NewBuffer[T](capacity)` uses the same default budget and returns `nil` on rejection. Use `NewBufferChecked[T]` to inspect an error or `NewBufferWithOptions[T]` to set an explicit per-buffer budget. The estimate includes the buffer header and backing array, but excludes allocator overhead and objects reachable through pointers in `T`. For zero-size `T`, no per-element bytes are counted, so the byte budget does not cap logical capacity. `action.NewHistory` and `observe.NewMemorySink` use the same budget; use `action.NewHistoryChecked` / `action.NewHistoryWithOptions` or `observe.NewMemorySinkChecked` / `observe.NewMemorySinkWithOptions` to inspect errors or select explicit budgets. Builder methods `WithHistoryChecked` / `RecordHistoryChecked` return allocation errors, while their `WithOptions` variants accept explicit limits. Legacy `RecordHistory` causes `Do` to return a configuration error rather than run without the requested history.
 
 ---
 
@@ -179,6 +183,7 @@ results, err := reviewer.Do(ctx, "package main...")
 - `RetryAll` retries on any non-nil error (intended for idempotent batch jobs).
 - `InferredResilient` / `SmartResilience` configures an adaptive circuit breaker and exponential jitter retry driven automatically by `xerr.Kind`. It fast-fails 4xx errors (`BadRequest`, `Unauthorized`, `Forbidden`, `NotFound`, `Validation`) without consuming retries.
 - `Adaptive` applies a circuit breaker with dynamic timeout scaling and half-open state recovery.
+- Standalone and adaptive breakers count caller deadline expirations as failures; explicit caller cancellation is excluded. A handler that ignores its context can keep a half-open probe occupied until it returns.
 
 ### Backoff Strategies
 - `ExponentialBackoff(base, max)` doubles wait duration per attempt.
@@ -209,10 +214,14 @@ results, err := reviewer.Do(ctx, "package main...")
 - `Once()` memoizes the result or error of the first execution indefinitely for static configurations.
 
 ### Idempotency Contracts
-- `.Idempotent()` and `.IdempotentWithConfig(cfg)` register idempotency metadata.
+- `.Idempotent()` and `.IdempotentWithConfig(cfg)` enable replay only when a caller supplies an explicit key. Transport adapters should read `cfg.Header()` (default `Idempotency-Key`) and bind it with `xctx.WithIdempotencyKey(ctx, key)`. `RequestID` is correlation-only; neither it nor a payload hash is used as a fallback key. For typed requests, configure `RequestKeyFunc`; the older `KeyFunc` remains available for `[]byte` requests.
+- Builder-created actions default `Namespace` to their final action name; direct `IdempotencyMiddleware` use requires an explicit namespace. Versioned storage keys include the namespace and a fingerprint of tenant, user, and authorization scope, and do not store the raw client key. Because the persisted key format changed, old idempotency entries will not be replayed by this version; expire or migrate them as part of deployment.
 - `MemoryIdempotencyStore` provides in-memory reference coordination.
 - `IdempotencyCoordinator` defines atomic claim semantics (`Claim`, `Complete`, `Release`) with leased in-progress locks and request hash validation to detect duplicate payload conflicts.
-- Successful responses are replayed only until the configured TTL expires. Handler errors are not cached and may be retried; expired claims may be taken over while the original handler is still running. Use downstream idempotency or fencing when repeating side effects is unsafe.
+- Reusing a key for a different payload returns `Conflict`; corrupt responses or missing/corrupt saved request hashes fail closed instead of executing the handler again. Successful responses are replayed only until the configured TTL expires. Handler errors are not cached and may be retried; expired distributed claims may be taken over while the original handler is still running. Use downstream idempotency or fencing when repeating side effects is unsafe.
+- Same-process callers share one active execution. The first caller executes synchronously and owns the handler context; its cancellation is observed by the handler and the remaining waiters receive that execution's result. A follower can stop waiting on its own cancellation without canceling the leader. `MaxConcurrentFlights` bounds unique active keys (default 256); a non-cooperative leader handler retains its slot until it returns. This deliberately avoids background or detached handler goroutines.
+- Durable and idempotent results are persisted as JSON. For empty-interface result types, including named empty interfaces, the first successful call is normalized to the same standard values returned by JSON replay (numbers are `float64`, objects are `map[string]any`, arrays are `[]any`, and typed nil pointers/maps/slices become nil). Concrete result types use normal `encoding/json` decoding into their declared `Res` type on replay. A non-empty interface generally cannot be reconstructed from JSON as its original concrete dynamic type, so use a concrete result type when replay must succeed; arbitrary dynamic Go types are not restored from persisted type names.
+- A `Journal.RecordStep` error or idempotency completion error can be ambiguous: the write may have committed before the error was returned. Durable journals do not guarantee exactly-once external side effects after an ambiguous write failure; use downstream idempotency/fencing or a storage protocol with definitive commit outcomes when repeats are unsafe.
 
 ### Durable Execution Identity and Resume
 - `DigestBytes` and `DigestString` create fixed-size SHA-256 bindings without heap allocation on the comparison path.
@@ -342,7 +351,7 @@ finalState, err := graph.Execute(ctx, resumeState)
 
 - When a node returns `dag.ErrSuspended`, `Execute` returns `(partialState, dag.ErrSuspended)` without purging the state from memory.
 - A resumed dynamic DAG starts traversal again at its configured entry. Node actions whose output key (`tasks.<nodeID>.output`) is already present in `State` are skipped, but conditional-edge routers run again on each traversal.
-- Make routers deterministic from persisted state and stable graph configuration when a resumed workflow must follow the same branch. Do not rely on time, randomness, or mutable external state unless a changed route on resume is intentional.
+- A router must choose the same target for the same persisted state and stable graph configuration. Do not rely on time, randomness, or mutable external state when a resumed workflow must follow the same branch; a route may change intentionally when the persisted state or graph configuration changes.
 
 ---
 

@@ -14,6 +14,7 @@ func TestSettersAndGetters(t *testing.T) {
 	defer release()
 
 	ctx = xctx.WithRequestID(ctx, "req-999")
+	ctx = xctx.WithIdempotencyKey(ctx, "idem-999")
 	ctx = xctx.WithEndpoint(ctx, "/api/v1/test")
 	ctx = xctx.WithTenantID(ctx, "tenant-999")
 	ctx = xctx.WithTraceID(ctx, "trace-999")
@@ -21,6 +22,9 @@ func TestSettersAndGetters(t *testing.T) {
 
 	if xctx.RequestIDFrom(ctx) != "req-999" {
 		t.Fatalf("expected RequestID 'req-999', got %q", xctx.RequestIDFrom(ctx))
+	}
+	if xctx.IdempotencyKeyFrom(ctx) != "idem-999" {
+		t.Fatalf("expected IdempotencyKey 'idem-999', got %q", xctx.IdempotencyKeyFrom(ctx))
 	}
 	if xctx.EndpointFrom(ctx) != "/api/v1/test" {
 		t.Fatalf("expected Endpoint '/api/v1/test', got %q", xctx.EndpointFrom(ctx))
@@ -33,6 +37,21 @@ func TestSettersAndGetters(t *testing.T) {
 	}
 	if xctx.ClientIPFrom(ctx) != "192.168.1.1" {
 		t.Fatalf("expected ClientIP '192.168.1.1', got %q", xctx.ClientIPFrom(ctx))
+	}
+}
+
+func TestCloneForAsyncCopiesIdempotencyKeyBeforeParentScopeRelease(t *testing.T) {
+	ctx, _, release := xctx.NewScope(context.Background())
+	ctx = xctx.WithRequestID(ctx, "request-id")
+	ctx = xctx.WithIdempotencyKey(ctx, "client-key")
+
+	asyncCtx := xctx.CloneForAsync(ctx)
+	release()
+	if got := xctx.IdempotencyKeyFrom(asyncCtx); got != "client-key" {
+		t.Fatalf("async idempotency key = %q, want client-key", got)
+	}
+	if got := xctx.RequestIDFrom(asyncCtx); got != "request-id" {
+		t.Fatalf("async request ID = %q, want request-id", got)
 	}
 }
 
@@ -232,6 +251,58 @@ func TestSnapshotFromMissingOrStaleScope(t *testing.T) {
 	}
 }
 
+func TestIdempotencyScopeHashFromIdentityAndAuthFields(t *testing.T) {
+	ctx, _, cleanup := xctx.NewScope(context.Background())
+	defer cleanup()
+	ctx = xctx.WithTenantID(ctx, "tenant-a")
+	ctx = xctx.WithUserID(ctx, "user-a")
+	ctx = xctx.WithRoles(ctx, []string{"operator", "reader"})
+	ctx = xctx.WithPermissions(ctx, []string{"invoice:read"})
+	ctx = xctx.WithFeatures(ctx, []string{"billing"})
+	first := xctx.IdempotencyScopeHashFrom(ctx)
+
+	ctx = xctx.WithRequestID(ctx, "new-correlation-id")
+	ctx = xctx.WithIdempotencyKey(ctx, "new-client-key")
+	if got := xctx.IdempotencyScopeHashFrom(ctx); got != first {
+		t.Fatal("correlation and client idempotency keys changed the caller-scope fingerprint")
+	}
+	if got := xctx.IdempotencyScopeHashFrom(context.Background()); got == first {
+		t.Fatal("missing scope shared a fingerprint with a populated principal")
+	}
+
+	ctx = xctx.WithUserID(ctx, "user-b")
+	if got := xctx.IdempotencyScopeHashFrom(ctx); got == first {
+		t.Fatal("different users shared a fingerprint")
+	}
+	ctx = xctx.WithUserID(ctx, "user-a")
+	ctx = xctx.WithTenantID(ctx, "tenant-b")
+	if got := xctx.IdempotencyScopeHashFrom(ctx); got == first {
+		t.Fatal("different tenants shared a fingerprint")
+	}
+	ctx = xctx.WithTenantID(ctx, "tenant-a")
+	ctx = xctx.WithPermissions(ctx, []string{"invoice:write"})
+	if got := xctx.IdempotencyScopeHashFrom(ctx); got == first {
+		t.Fatal("different permissions shared a fingerprint")
+	}
+}
+
+func TestIdempotencyScopeHashFromZeroAlloc(t *testing.T) {
+	ctx, _, cleanup := xctx.NewScope(context.Background())
+	defer cleanup()
+	ctx = xctx.WithTenantID(ctx, "tenant-a")
+	ctx = xctx.WithUserID(ctx, "user-a")
+	ctx = xctx.WithRoles(ctx, []string{"operator", "reader"})
+	ctx = xctx.WithPermissions(ctx, []string{"invoice:read", "invoice:write"})
+	ctx = xctx.WithFeatures(ctx, []string{"billing"})
+
+	allocs := testing.AllocsPerRun(1000, func() {
+		benchmarkScopeFingerprint = xctx.IdempotencyScopeHashFrom(ctx)
+	})
+	if allocs != 0 {
+		t.Fatalf("scope fingerprint allocations = %.2f, want 0", allocs)
+	}
+}
+
 func TestScopeReadDuringResetIsRaceFree(t *testing.T) {
 	t.Parallel()
 	ctx, scope, cleanup := xctx.NewScope(context.Background())
@@ -270,13 +341,14 @@ func TestScopeReadDuringResetIsRaceFree(t *testing.T) {
 }
 
 var (
-	benchmarkUserID        string
-	benchmarkPermissionOK  bool
-	benchmarkTenantID      string
-	benchmarkTraceID       string
-	benchmarkSpanID        string
-	benchmarkRoleOK        bool
-	benchmarkScopeSnapshot xctx.ScopeSnapshot
+	benchmarkUserID           string
+	benchmarkPermissionOK     bool
+	benchmarkTenantID         string
+	benchmarkTraceID          string
+	benchmarkSpanID           string
+	benchmarkRoleOK           bool
+	benchmarkScopeSnapshot    xctx.ScopeSnapshot
+	benchmarkScopeFingerprint [32]byte
 )
 
 func BenchmarkUserIDFrom(b *testing.B) {

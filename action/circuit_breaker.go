@@ -218,6 +218,10 @@ func trimSpace(s string) string {
 	return strings.TrimSpace(s)
 }
 
+func callerContextCanceled(ctx context.Context) bool {
+	return ctx.Err() == context.Canceled
+}
+
 // CircuitBreaker wraps next with a standalone circuit breaker. The supplied
 // state may be shared by actions via a CircuitBreakerRegistry. A nil or
 // zero-value state fails closed with a validation error instead of panicking.
@@ -236,14 +240,23 @@ func CircuitBreaker[Req, Res any](state *CircuitBreakerState) Middleware[Req, Re
 			if !allowed {
 				return res, xerr.CircuitBreaker(fmt.Sprintf("circuit breaker %q is open", state.key))
 			}
+			completed := false
 			defer func() {
-				if recovered := recover(); recovered != nil {
-					state.complete(permit, xerr.PanicRecovery(recovered), ctx.Err() != nil)
+				recovered := recover()
+				if !completed {
+					failure := error(xerr.Internal("circuit breaker: handler exited without returning"))
+					if recovered != nil {
+						failure = xerr.PanicRecovery(recovered)
+					}
+					state.complete(permit, failure, callerContextCanceled(ctx))
+				}
+				if recovered != nil {
 					panic(recovered)
 				}
 			}()
 			res, err = next(ctx, req)
-			state.complete(permit, err, err != nil && ctx.Err() != nil)
+			state.complete(permit, err, err != nil && callerContextCanceled(ctx))
+			completed = true
 			return res, err
 		}
 	}
@@ -308,9 +321,31 @@ func (s *adaptiveState) complete(permit breakerPermit, err error, canceled bool)
 	case err == nil || result.closed:
 		s.timeout = s.cfg.InitialTimeout
 	case result.opened:
-		multiplier := 1 + float64(result.failures)/10
-		s.timeout = time.Duration(float64(s.cfg.InitialTimeout) * multiplier)
+		s.timeout = adaptiveTimeoutAfterFailures(s.cfg.InitialTimeout, result.failures)
 	}
+}
+
+func adaptiveTimeoutAfterFailures(initial time.Duration, failures int) time.Duration {
+	if initial <= 0 {
+		return 0
+	}
+	if failures <= 0 {
+		return initial
+	}
+
+	const maxDuration = time.Duration(1<<63 - 1)
+	failureCount := int64(failures)
+	wholeScale := 1 + failureCount/10
+	fractionalScale := failureCount % 10
+	if wholeScale > int64(maxDuration/initial) {
+		return maxDuration
+	}
+	whole := initial * time.Duration(wholeScale)
+	fraction := time.Duration(int64(initial/10)*fractionalScale + int64(initial%10)*fractionalScale/10)
+	if whole > maxDuration-fraction {
+		return maxDuration
+	}
+	return whole + fraction
 }
 
 func timeoutCtx(ctx context.Context, d time.Duration) (context.Context, context.CancelFunc) {
@@ -354,14 +389,23 @@ func Adaptive[Req, Res any](name string, cfg AdaptiveConfig) Middleware[Req, Res
 			}
 			timedCtx, cancel := timeoutCtx(ctx, state.currentTimeout())
 			defer cancel()
+			completed := false
 			defer func() {
-				if recovered := recover(); recovered != nil {
-					state.complete(permit, xerr.PanicRecovery(recovered), ctx.Err() != nil)
+				recovered := recover()
+				if !completed {
+					failure := error(xerr.Internal("adaptive: handler exited without returning"))
+					if recovered != nil {
+						failure = xerr.PanicRecovery(recovered)
+					}
+					state.complete(permit, failure, callerContextCanceled(ctx))
+				}
+				if recovered != nil {
 					panic(recovered)
 				}
 			}()
 			res, err = next(timedCtx, req)
-			state.complete(permit, err, err != nil && ctx.Err() != nil)
+			state.complete(permit, err, err != nil && callerContextCanceled(ctx))
+			completed = true
 			return res, err
 		}
 	}

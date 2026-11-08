@@ -6,7 +6,7 @@ import (
 	"runtime"
 	"testing"
 
-	"github.com/arnonrgo/immutable"
+	"github.com/nexssp/kernel/internal/pmap"
 )
 
 var (
@@ -15,12 +15,12 @@ var (
 )
 
 func BenchmarkStatePublication(b *testing.B) {
-	for _, implementation := range []string{"map", "cow", "hamt"} {
+	for _, implementation := range []string{"map", "cow", "avl"} {
 		for _, initialSize := range []int{0, 128, 1024} {
 			for _, outputCount := range []int{16, 64, 256} {
 				b.Run(fmt.Sprintf("%s/initial=%d/outputs=%d", implementation, initialSize, outputCount), func(b *testing.B) {
 					initialMap := make(map[string]any, 16)
-					initialTree := immutable.NewMap[string, any](nil)
+					initialTree := pmap.New[any]()
 					for index := range initialSize {
 						key := fmt.Sprintf("seed-%04d", index)
 						initialMap[key] = index
@@ -31,8 +31,7 @@ func BenchmarkStatePublication(b *testing.B) {
 						outputKeys[index] = fmt.Sprintf("tasks.node-%03d.output", index)
 					}
 					mapViews := make([]map[string]any, outputCount)
-					treeViews := make([]*immutable.Map[string, any], outputCount)
-
+					treeViews := make([]*pmap.Map[any], outputCount)
 					b.ReportAllocs()
 					b.ResetTimer()
 					for range b.N {
@@ -56,7 +55,7 @@ func BenchmarkStatePublication(b *testing.B) {
 							stateLengthSink = len(state)
 							snapshotLengthSink = len(mapViews[0])
 							runtime.KeepAlive(mapViews)
-						case "hamt":
+						case "avl":
 							state := initialTree
 							for index, key := range outputKeys {
 								treeViews[index] = state
@@ -97,13 +96,13 @@ func TestPublicationSnapshotBehavior(t *testing.T) {
 		t.Fatal("COW view observed a later output")
 	}
 
-	hamtState := immutable.NewMap[string, any](nil).Set("seed", "input")
-	hamtView := hamtState
-	hamtState = hamtState.Set("output", "done")
-	if value, ok := hamtState.Get("output"); !ok || value != "done" {
-		t.Fatal("updated HAMT root did not retain the new output")
+	avlState := pmap.New[any]().Set("seed", "input")
+	avlView := avlState
+	avlState = avlState.Set("output", "done")
+	if value, ok := avlState.Get("output"); !ok || value != "done" {
+		t.Fatal("updated AVL map did not retain the new output")
 	}
-	if _, ok := hamtView.Get("output"); ok {
-		t.Fatal("HAMT view observed a later output")
+	if _, ok := avlView.Get("output"); ok {
+		t.Fatal("AVL snapshot observed a later output")
 	}
 }

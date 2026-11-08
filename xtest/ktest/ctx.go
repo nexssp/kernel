@@ -7,12 +7,17 @@ import (
 	"github.com/nexssp/kernel/xctx"
 )
 
-// RequestContext returns the test context carrying requestID. The request ID
-// is the idempotency key used by action middleware; cancellation and timeout
-// remain explicit with context.WithCancel/WithTimeout at the call site.
+// RequestContext returns a test context carrying only a request ID for tracing
+// and correlation. Request IDs are not idempotency keys.
 func RequestContext(tb testing.TB, requestID string) context.Context {
 	tb.Helper()
 	return xctx.WithRequestID(tb.Context(), requestID)
+}
+
+// IdempotencyContext returns a test context carrying an explicit idempotency key.
+func IdempotencyContext(tb testing.TB, key string) context.Context {
+	tb.Helper()
+	return xctx.WithIdempotencyKey(tb.Context(), key)
 }
 
 // Ctx returns a fresh request scope bound to context.Background() and

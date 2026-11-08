@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/nexssp/kernel/action"
@@ -90,8 +91,12 @@ func TestTestable_ExpectErrTypedNilAppError(t *testing.T) {
 				}
 				return 0, appErr
 			}).Build()
-			if err := action.TestFromAction(act).ExpectErr(context.Background(), 1, string(xerr.KindValidation)); err == nil {
+			err := action.TestFromAction(act).ExpectErr(context.Background(), 1, string(xerr.KindValidation))
+			if err == nil {
 				t.Fatal("ExpectErr() returned nil for a typed-nil AppError")
+			}
+			if !strings.Contains(err.Error(), "typed-nil xerr.AppError") {
+				t.Fatalf("ExpectErr() error = %v, want typed-nil diagnostic", err)
 			}
 		})
 	}

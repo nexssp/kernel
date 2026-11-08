@@ -8,8 +8,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-
-	"github.com/nexssp/kernel/xerr"
 )
 
 // Testable wraps a BuiltAction and provides helpers for unit testing.
@@ -75,7 +73,10 @@ func (t *Testable[Req, Res]) ExpectErr(ctx context.Context, req Req, expected st
 	if err == nil {
 		return fmt.Errorf("expected error %q, got nil", expected)
 	}
-	if appErr, ok := errors.AsType[*xerr.AppError](err); ok && appErr != nil {
+	if appErr, ok := appErrorFrom(err); ok {
+		if appErr == nil {
+			return fmt.Errorf("expected xerr.AppError kind %q, got typed-nil xerr.AppError", expected)
+		}
 		if string(appErr.Kind) != expected {
 			return fmt.Errorf("expected error kind %q, got %q", expected, appErr.Kind)
 		}

@@ -143,7 +143,10 @@ func TestEventPropagation(t *testing.T) {
 }
 
 func BenchmarkObserveHook(b *testing.B) {
-	memSink := observe.NewMemorySink(b.N)
+	memSink := observe.NewMemorySink(1024)
+	if memSink == nil {
+		b.Fatal("NewMemorySink() rejected the benchmark buffer")
+	}
 	hook := observe.Hook(memSink)
 
 	act := action.New("bench.action", func(_ context.Context, req int) (int, error) {

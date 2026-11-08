@@ -2,6 +2,7 @@ package dag_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/nexssp/kernel/action"
@@ -73,6 +74,67 @@ func TestDynamicResumeReevaluatesRouter(t *testing.T) {
 	}
 	if routerCalls != 2 {
 		t.Fatalf("router calls = %d, want one call per Execute", routerCalls)
+	}
+}
+
+func TestDynamicResumeReroutesFromPersistedState(t *testing.T) {
+	var gateCalls, pendingCalls, approvedCalls, routerCalls int
+	gate := action.New("gate", func(context.Context, dag.ReadState) (string, error) {
+		gateCalls++
+		return "gate-complete", nil
+	}).Build()
+	pending := action.New("pending", func(context.Context, dag.ReadState) (string, error) {
+		pendingCalls++
+		return "", dag.ErrSuspended
+	}).Build()
+	approved := action.New("approved", func(context.Context, dag.ReadState) (string, error) {
+		approvedCalls++
+		return "approved", nil
+	}).Build()
+	graph, err := dag.New(t.Name()).
+		AddNode("gate", "gate", gate).
+		AddNode("pending", "pending", pending).
+		AddNode("approved", "approved", approved).
+		AddConditionalEdge("gate", func(_ context.Context, state dag.ReadState) (string, error) {
+			routerCalls++
+			approvedValue, _ := state.Get("approval")
+			if isApproved, _ := approvedValue.(bool); isApproved {
+				return "approved", nil
+			}
+			return "pending", nil
+		}).
+		Compile()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	initial := dag.AcquireState()
+	initial.Set("approval", false)
+	first, err := graph.Execute(context.Background(), initial.AsRead())
+	initial.Release()
+	if !errors.Is(err, dag.ErrSuspended) {
+		t.Fatalf("initial Execute() error = %v, want ErrSuspended", err)
+	}
+	defer first.Release()
+	if got, ok := first.Get(dag.OutputKey("gate")); !ok || got != "gate-complete" {
+		t.Fatalf("saved gate output = (%v, %t), want (gate-complete, true)", got, ok)
+	}
+
+	// Persisted approval changes intentionally select a new route. The gate
+	// action stays complete, while the router is deterministically re-evaluated.
+	first.Set("approval", true)
+	resumed, err := graph.Execute(context.Background(), first.AsRead())
+	if err != nil {
+		t.Fatalf("resumed Execute() error = %v", err)
+	}
+	defer resumed.Release()
+
+	if gateCalls != 1 || pendingCalls != 1 || approvedCalls != 1 || routerCalls != 2 {
+		t.Fatalf("calls after resume: gate=%d pending=%d approved=%d router=%d; want 1, 1, 1, 2",
+			gateCalls, pendingCalls, approvedCalls, routerCalls)
+	}
+	if got, ok := resumed.Get(dag.OutputKey("approved")); !ok || got != "approved" {
+		t.Fatalf("approved output = (%v, %t), want (approved, true)", got, ok)
 	}
 }
 
