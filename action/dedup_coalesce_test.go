@@ -90,31 +90,31 @@ func TestCoalesce(t *testing.T) {
 	}
 }
 
-func TestDeduplicate_ContextBleeding(t *testing.T) {
+func TestDeduplicate_LeaderCancellationReachesHandlerAndWaiter(t *testing.T) {
 	t.Parallel()
 
 	handlerEntered := make(chan struct{})
 	handlerRelease := make(chan struct{})
+	defer close(handlerRelease)
+	handlerCanceled := make(chan struct{})
 	var handlerCalls atomic.Int32
-	var keyCalls atomic.Int32
 
-	act := action.New("dedup.bleeding", func(ctx context.Context, _ string) (string, error) {
+	act := action.New("dedup.leadercancel", func(ctx context.Context, _ string) (string, error) {
 		handlerCalls.Add(1)
 		close(handlerEntered)
-		<-handlerRelease
-
-		if ctx.Err() != nil {
+		select {
+		case <-ctx.Done():
+			close(handlerCanceled)
 			return "", ctx.Err()
+		case <-handlerRelease:
+			return "success", nil
 		}
-		return "success", nil
 	}).Dedup(func(r string) string {
-		keyCalls.Add(1)
 		return r
 	}).Build()
 
 	ctx1, cancel1 := context.WithCancel(context.Background())
-	ctx2, cancel2 := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel2()
+	waiterCtx := newSharedFlightContext()
 
 	var err1, err2 error
 	var res1, res2 string
@@ -129,15 +129,18 @@ func TestDeduplicate_ContextBleeding(t *testing.T) {
 	<-handlerEntered
 
 	go func() {
-		res2, err2 = act.Do(ctx2, "shared-key")
+		res2, err2 = act.Do(waiterCtx, "shared-key")
 		close(done2)
 	}()
 
-	xtest.Eventually(t, 2*time.Second, func() bool { return keyCalls.Load() == 2 })
-	time.Sleep(20 * time.Millisecond) // ensure caller 2 reaches c.Do
+	<-waiterCtx.doneCalled
 
 	cancel1()
-	close(handlerRelease)
+	select {
+	case <-handlerCanceled:
+	case <-time.After(2 * time.Second):
+		t.Fatal("leader handler did not observe caller cancellation")
+	}
 
 	<-done1
 	<-done2
@@ -149,10 +152,13 @@ func TestDeduplicate_ContextBleeding(t *testing.T) {
 		t.Errorf("client 1 should receive empty result, got: %q", res1)
 	}
 
-	if err2 != nil {
-		t.Fatalf("client 2 should not receive error: %v", err2)
+	if err2 == nil || !errors.Is(err2, context.Canceled) {
+		t.Fatalf("client 2 should receive the leader's canceled flight error, got: %v", err2)
 	}
-	if res2 != "success" {
-		t.Errorf("client 2 expected 'success', got: %q", res2)
+	if res2 != "" {
+		t.Errorf("client 2 should receive an empty result, got: %q", res2)
+	}
+	if count := handlerCalls.Load(); count != 1 {
+		t.Errorf("expected exactly one leader handler call, got %d", count)
 	}
 }

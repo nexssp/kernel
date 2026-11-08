@@ -240,6 +240,12 @@ func BatchByTime[T any](ctx context.Context, size int, timeout time.Duration) St
 
 			batch := make([]T, 0, size)
 			var timer *time.Timer
+			var timerC <-chan time.Time
+			defer func() {
+				if timer != nil {
+					timer.Stop()
+				}
+			}()
 
 			flush := func() bool {
 				if len(batch) > 0 {
@@ -252,12 +258,6 @@ func BatchByTime[T any](ctx context.Context, size int, timeout time.Duration) St
 			}
 
 			for {
-				if timer == nil {
-					timer = time.NewTimer(timeout)
-				} else {
-					timer.Reset(timeout)
-				}
-
 				select {
 				case <-opCtx.Done():
 					// Preserve accumulated items before the error.
@@ -267,17 +267,12 @@ func BatchByTime[T any](ctx context.Context, size int, timeout time.Duration) St
 					var zero []T
 					yield(zero, opCtx.Err())
 					return
-				case <-timer.C:
+				case <-timerC:
+					timerC = nil
 					if !flush() {
 						return
 					}
 				case p, ok := <-ch:
-					if !timer.Stop() {
-						select {
-						case <-timer.C:
-						default:
-						}
-					}
 					if !ok {
 						if err := opCtx.Err(); err != nil {
 							var zero []T
@@ -296,8 +291,23 @@ func BatchByTime[T any](ctx context.Context, size int, timeout time.Duration) St
 						yield(zero, p.err)
 						return
 					}
+					if len(batch) == 0 {
+						if timer == nil {
+							timer = time.NewTimer(timeout)
+						} else {
+							timer.Reset(timeout)
+						}
+						timerC = timer.C
+					}
 					batch = append(batch, p.item)
 					if len(batch) == size {
+						if !timer.Stop() {
+							select {
+							case <-timer.C:
+							default:
+							}
+						}
+						timerC = nil
 						if !flush() {
 							return
 						}

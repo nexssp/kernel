@@ -50,6 +50,7 @@ type BuiltAction[Req, Res any] struct {
 	exec        Fn[Req, Res]
 	baseExec    Fn[Req, Res]
 	middlewares []DispatcherMiddleware[Req, Res]
+	drain       *DrainSupervisor
 
 	hooks    []Hook[Req, Res]
 	anyHooks atomic.Pointer[anyHookSet]
@@ -151,6 +152,13 @@ func hasOnSuccessHook[Req, Res any](hooks []Hook[Req, Res], anyHooks []AnyHook) 
 }
 
 func (a *BuiltAction[Req, Res]) Do(ctx context.Context, req Req) (res Res, err error) {
+	if a.drain != nil {
+		if !a.drain.enter() {
+			return res, xerr.Shutdown("system is shutting down; request rejected")
+		}
+		defer a.drain.exit()
+	}
+
 	if a.validationErr != nil {
 		return res, fmt.Errorf("action %s configuration: %w", a.meta.Name, a.validationErr)
 	}

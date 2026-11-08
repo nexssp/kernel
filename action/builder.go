@@ -18,6 +18,7 @@ type Builder[Req, Res any] struct {
 	meta                Meta
 	exec                Fn[Req, Res]
 	middlewares         []DispatcherMiddleware[Req, Res]
+	drain               *DrainSupervisor
 	hooks               []Hook[Req, Res]
 	anyHooks            []AnyHook
 	bindings            []Binding
@@ -43,6 +44,7 @@ func (b *BuiltAction[Req, Res]) ToBuilder() *Builder[Req, Res] {
 		meta:                metaCopy,
 		exec:                b.baseExec,
 		middlewares:         slices.Clone(b.middlewares),
+		drain:               b.drain,
 		bindings:            append([]Binding(nil), b.bindings...),
 		hooks:               append([]Hook[Req, Res](nil), b.hooks...),
 		anyHooks:            append([]AnyHook(nil), b.anyHooksSnapshot()...),
@@ -209,6 +211,7 @@ func (b *Builder[Req, Res]) Build() *BuiltAction[Req, Res] {
 		meta:                &metaCopy,
 		baseExec:            b.exec,
 		middlewares:         slices.Clone(b.middlewares),
+		drain:               b.drain,
 		bindings:            append([]Binding(nil), b.bindings...),
 		history:             b.history,
 		historyErr:          b.historyErr,

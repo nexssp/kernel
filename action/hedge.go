@@ -8,6 +8,29 @@ import (
 	"github.com/nexssp/kernel/xerr"
 )
 
+// hedgeLaunchGate serializes primary completion with a deadline-triggered launch.
+type hedgeLaunchGate struct {
+	mu          sync.Mutex
+	primaryDone bool
+}
+
+func (gate *hedgeLaunchGate) markPrimaryDone() {
+	gate.mu.Lock()
+	gate.primaryDone = true
+	gate.mu.Unlock()
+}
+
+// launchHedgeIfPrimaryRunning holds the gate through launch to prevent completion interleaving.
+func launchHedgeIfPrimaryRunning(gate *hedgeLaunchGate, launch func()) bool {
+	gate.mu.Lock()
+	defer gate.mu.Unlock()
+	if gate.primaryDone {
+		return false
+	}
+	launch()
+	return true
+}
+
 // Hedge runs act and launches one more attempt if the first has not finished
 // within delay, or has failed with a non-permanent error. First success wins;
 // the other attempt is canceled and awaited before returning, so act must
@@ -34,10 +57,15 @@ func Hedge[Req, Res any](name string, act *BuiltAction[Req, Res], delay time.Dur
 		}
 		outcomes := make(chan outcome, 2)
 		launched := 0
+		launchGate := &hedgeLaunchGate{}
 		launch := func() {
+			attempt := launched
 			launched++
 			wg.Go(func() {
 				val, err := act.Do(runCtx, req)
+				if attempt == 0 {
+					launchGate.markPrimaryDone()
+				}
 				outcomes <- outcome{val, err}
 			})
 		}
@@ -53,8 +81,7 @@ func Hedge[Req, Res any](name string, act *BuiltAction[Req, Res], delay time.Dur
 			case <-ctx.Done():
 				return zero, ctx.Err()
 			case <-timer.C:
-				if launched < 2 {
-					launch()
+				if launched < 2 && launchHedgeIfPrimaryRunning(launchGate, launch) {
 					pending++
 				}
 			case out := <-outcomes:

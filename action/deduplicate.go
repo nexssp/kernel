@@ -70,8 +70,19 @@ func (f *inflightMap[Res]) Do(ctx context.Context, key string, fn func() (Res, e
 }
 
 // Deduplicate returns a middleware that collapses concurrent identical requests
-// into a single execution, sharing the result with all waiting callers.
+// into a single execution, sharing the result with all waiting callers. The
+// leader uses its caller context and the default shared-flight timeout.
 func Deduplicate[Req, Res any](keyFn func(Req) string) DispatcherMiddleware[Req, Res] {
+	return DeduplicateWithOptions[Req, Res](keyFn, SharedFlightOptions{})
+}
+
+// DeduplicateWithOptions configures the synchronous leader's context deadline.
+// A waiting caller's cancellation only ends that caller's wait; it does not cancel the leader.
+func DeduplicateWithOptions[Req, Res any](
+	keyFn func(Req) string,
+	options SharedFlightOptions,
+) DispatcherMiddleware[Req, Res] {
+	timeout := options.withDefaults().Timeout
 	c := newInflightMap[Res]()
 	return func(next Fn[Req, Res], hooks HookDispatcher[Req, Res]) Fn[Req, Res] {
 		return func(ctx context.Context, req Req) (Res, error) {
@@ -80,9 +91,20 @@ func Deduplicate[Req, Res any](keyFn func(Req) string) DispatcherMiddleware[Req,
 				return next(ctx, req)
 			}
 
-			detachedCtx := context.WithoutCancel(ctx)
 			res, shared, err := c.Do(ctx, key, func() (Res, error) {
-				return next(detachedCtx, req)
+				flightCtx, cancel := withSharedFlightTimeout(ctx, timeout)
+				if cancel != nil {
+					defer cancel()
+				}
+				res, err := next(flightCtx, req)
+				if err != nil {
+					return res, err
+				}
+				if flightErr := flightCtx.Err(); flightErr != nil {
+					var zero Res
+					return zero, flightErr
+				}
+				return res, nil
 			})
 
 			if shared {

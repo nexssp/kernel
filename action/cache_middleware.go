@@ -266,7 +266,7 @@ func (c *defaultMemoryKV[V]) Set(ctx context.Context, k string, v V, ttl time.Du
 	defer c.mu.Unlock()
 
 	// Bound memory: evict on overflow
-	if len(c.data) >= c.maxCapacity {
+	if c.needsEvictionLocked(k) {
 		c.evictExpiredLocked(now)
 		if len(c.data) >= c.maxCapacity {
 			// Random replacement pass if map is still full
@@ -281,6 +281,13 @@ func (c *defaultMemoryKV[V]) Set(ctx context.Context, k string, v V, ttl time.Du
 
 	c.data[k] = cacheItem[V]{val: v, exp: exp}
 	return nil
+}
+
+func (c *defaultMemoryKV[V]) needsEvictionLocked(k string) bool {
+	if _, exists := c.data[k]; exists {
+		return false
+	}
+	return len(c.data) >= c.maxCapacity
 }
 
 func (c *defaultMemoryKV[V]) Delete(ctx context.Context, k string) error {

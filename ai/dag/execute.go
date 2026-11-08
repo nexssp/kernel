@@ -22,8 +22,9 @@ import (
 //     The engine walks from entryID, one node per step, following
 //     RouterFunc decisions until a router returns "" or "end", or
 //     until maxSteps is exceeded. Layers are ignored. Each Execute starts
-//     at entryID: node actions with existing output keys are skipped, but
-//     conditional routers are evaluated again. Routers should be
+//     at entryID: actions whose outputs are in initialState are skipped.
+//     A node revisited during this execution runs again and replaces its
+//     output; routers are reevaluated after each visit. Routers should be
 //     deterministic from persisted state and stable graph configuration
 //     when a resumed run must follow the same path.
 //

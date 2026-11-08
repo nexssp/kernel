@@ -81,9 +81,9 @@ func (d *DAG) AsAction() *action.Builder[ReadState, *State] {
 // edges until a router returns "" or "end", or until maxSteps is
 // exceeded.
 //
-// The starting node is d.entryID. Every visited node's output is merged
-// into the running state, so routers see the cumulative result of the
-// path so far.
+// The starting node is d.entryID. Actions whose outputs were in
+// initialState are skipped; other visits run the action and replace its
+// output, so routers see the cumulative result of the path so far.
 //
 // The step limit is a hard bound: a router that keeps returning the
 // same target terminates with xerr.Timeout rather than looping forever.
@@ -123,7 +123,7 @@ func (d *DAG) executeDynamic(ctx context.Context, initialState ReadState) (*Stat
 
 		var output Value
 		var runErr error
-		if _, completed := currentState.Get(node.OutputKey); !completed {
+		if _, completed := initialState.Get(node.OutputKey); !completed {
 			runErr = executeNode(ctx, node, currentState, &output)
 		}
 

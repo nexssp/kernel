@@ -18,6 +18,8 @@ var (
 type ResumeOptions struct {
 	Force       bool
 	ForceReason string
+	// Limits configures the durable step runner; zero values use its defaults.
+	Limits DurableOptions
 }
 
 // ResumeJournal stores the identity binding alongside durable step records.
@@ -61,7 +63,7 @@ func ValidateResume(existing, requested ExecutionIdentity, opts ResumeOptions) e
 // DurableWithResume persists results only after validating their execution binding.
 func DurableWithResume[Req, Res any](journal ResumeJournal, stepName string, identityFn ResumeIdentityFunc[Req], opts ResumeOptions) Middleware[Req, Res] {
 	return func(next Fn[Req, Res]) Fn[Req, Res] {
-		run := newDurableRunner(journal, stepName, next)
+		run := newDurableRunner(journal, stepName, next, opts.Limits)
 
 		return func(ctx context.Context, req Req) (Res, error) {
 			var zero Res

@@ -32,38 +32,62 @@ func PipeAny(name string, left, right AnyAction) *Builder[any, any] {
 }
 
 func ParallelAny(name string, branches ...AnyAction) *Builder[any, map[string]any] {
-	return New(name, func(ctx context.Context, request any) (map[string]any, error) {
-		type resultSlot struct {
-			key   string
-			value any
-			err   error
-		}
-		total := len(branches)
-		ch := make(chan resultSlot, total)
+	return ParallelAnyWithOptions(name, AsyncOptions{}, branches...)
+}
 
+// ParallelAnyWithOptions executes dynamic branches with configurable limits
+// and joins all started callbacks before returning.
+func ParallelAnyWithOptions(name string, options AsyncOptions, branches ...AnyAction) *Builder[any, map[string]any] {
+	return New(name, func(ctx context.Context, request any) (map[string]any, error) {
+		total := len(branches)
+		keys := make([]string, total)
+		describeErrors := make([]error, total)
 		for i, branch := range branches {
-			branchKey := fmt.Sprintf("branch_%d", i)
-			if meta := branch.Describe(); meta != nil && meta.Name != "" {
-				branchKey = meta.Name
-			}
-			go func(k string, a AnyAction) {
-				defer func() {
-					if r := recover(); r != nil {
-						ch <- resultSlot{key: k, err: xerr.PanicRecovery(r)}
+			keys[i] = fmt.Sprintf("branch_%d", i)
+			if branch != nil {
+				func() {
+					defer func() {
+						if recovered := recover(); recovered != nil {
+							describeErrors[i] = xerr.PanicRecovery(recovered)
+						}
+					}()
+					if meta := branch.Describe(); meta != nil && meta.Name != "" {
+						keys[i] = meta.Name
 					}
 				}()
-				val, err := InvokeAny(ctx, a, request)
-				ch <- resultSlot{key: k, value: val, err: err}
-			}(branchKey, branch)
+			}
 		}
-
+		var completionCounter atomic.Uint64
+		completedAt := make([]uint64, total)
+		outcomes := runAsyncTasks(ctx, total, options, func(ctx context.Context, index int) (any, error) {
+			var value any
+			var err error
+			defer func() { completedAt[index] = completionCounter.Add(1) }()
+			if describeErrors[index] != nil {
+				return nil, describeErrors[index]
+			}
+			func() {
+				defer func() {
+					if recovered := recover(); recovered != nil {
+						err = xerr.PanicRecovery(recovered)
+					}
+				}()
+				value, err = InvokeAny(ctx, branches[index], request)
+			}()
+			return value, err
+		})
 		results := make(map[string]any, total)
+		resultCompletion := make(map[string]uint64, total)
 		var firstErr error
-		for range total {
-			slot := <-ch
-			results[slot.key] = slot.value
-			if slot.err != nil && firstErr == nil {
-				firstErr = slot.err
+		firstErrorCompletion := ^uint64(0)
+		for i, outcome := range outcomes {
+			if previous, seen := resultCompletion[keys[i]]; !seen || completedAt[i] >= previous {
+				results[keys[i]] = outcome.Value
+				resultCompletion[keys[i]] = completedAt[i]
+			}
+			if outcome.Err != nil && completedAt[i] < firstErrorCompletion {
+				firstErr = outcome.Err
+				firstErrorCompletion = completedAt[i]
 			}
 		}
 		return results, firstErr
@@ -182,59 +206,91 @@ func CatchAny(name string, protected AnyAction, recoverFn func(context.Context, 
 	}).Tag("catch", "dynamic")
 }
 
-// RaceAny runs candidates concurrently. The first success wins and cancels
-// the rest immediately, but RaceAny always waits for every goroutine to
-// finish before returning — so none is left reading the caller's ctx
-// (e.g. a pooled xctx.RequestScope) after the call has returned.
+// RaceAny runs up to DefaultAsyncMaxConcurrency candidates at a time, with
+// DefaultAsyncTimeout. The first success wins and cancels the rest, but RaceAny
+// joins all started candidates before returning so none is left reading a
+// caller-owned request scope.
 func RaceAny(name string, candidates ...AnyAction) *Builder[any, any] {
+	return RaceAnyWithOptions(name, AsyncOptions{}, candidates...)
+}
+
+type raceAnyOutcome struct {
+	value any
+	err   error
+}
+
+func launchRaceAnyCandidate(ctx context.Context, request any, candidate AnyAction, results chan<- raceAnyOutcome) {
+	go func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				results <- raceAnyOutcome{err: xerr.PanicRecovery(recovered)}
+			}
+		}()
+		value, err := InvokeAny(ctx, candidate, request)
+		results <- raceAnyOutcome{value: value, err: err}
+	}()
+}
+
+// RaceAnyWithOptions runs dynamic candidates with configurable concurrency and
+// an overall timeout. It joins all started candidates before returning; a
+// callback that ignores context can make the call exceed its deadline.
+func RaceAnyWithOptions(name string, options AsyncOptions, candidates ...AnyAction) *Builder[any, any] {
+	options = options.withDefaults()
 	total := len(candidates)
 	return New(name, func(ctx context.Context, request any) (any, error) {
 		if total == 0 {
 			return nil, errors.New("race: no candidates provided")
 		}
 
-		raceCtx, cancel := context.WithCancel(ctx)
+		raceCtx, cancel := context.WithTimeout(ctx, options.Timeout)
 		defer cancel()
 
-		type outcome struct {
-			value any
-			err   error
-		}
-		// Buffer size == total guarantees every candidate goroutine can send
-		// and terminate on its own, with no background drainer goroutine.
-		results := make(chan outcome, total)
-
-		for _, candidate := range candidates {
-			go func(currentCandidate AnyAction) {
-				defer func() {
-					if recoveredPanic := recover(); recoveredPanic != nil {
-						results <- outcome{err: xerr.PanicRecovery(recoveredPanic)}
-					}
-				}()
-				val, err := InvokeAny(raceCtx, currentCandidate, request)
-				results <- outcome{value: val, err: err}
-			}(candidate)
-		}
+		limit := min(options.MaxConcurrency, total)
+		results := make(chan raceAnyOutcome, limit)
 
 		var won bool
 		var winnerValue any
 		var lastErr error
-
-		for range total {
-			out := <-results
-			if out.err == nil && !won {
-				won = true
-				winnerValue = out.value
-				cancel() // ask remaining candidates to stop as early as possible
-				continue
+		next, active := 0, 0
+		var terminalErr error
+		done := raceCtx.Done()
+		for next < total || active > 0 {
+			for !won && terminalErr == nil && next < total && active < limit && raceCtx.Err() == nil {
+				launchRaceAnyCandidate(raceCtx, request, candidates[next], results)
+				next++
+				active++
 			}
-			if out.err != nil {
-				lastErr = out.err
+			if active == 0 {
+				break
+			}
+			select {
+			case out := <-results:
+				active--
+				if terminalErr == nil && raceCtx.Err() == nil && out.err == nil && !won {
+					won = true
+					winnerValue = out.value
+					cancel()
+					done = nil
+					continue
+				}
+				if out.err != nil {
+					lastErr = out.err
+				}
+			case <-done:
+				terminalErr = raceCtx.Err()
+				cancel()
+				done = nil
 			}
 		}
 
 		if won {
 			return winnerValue, nil
+		}
+		if terminalErr == nil {
+			terminalErr = raceCtx.Err()
+		}
+		if terminalErr != nil {
+			return nil, terminalErr
 		}
 		return nil, fmt.Errorf("race [%s] all candidates failed; last error: %w", name, lastErr)
 	}).Tag("race", "dynamic")
@@ -249,6 +305,13 @@ type DynamicSagaStep struct {
 
 // SagaAny guarantees LIFO execution of compensations if a downstream step fails.
 func SagaAny(name string, steps []DynamicSagaStep) *Builder[any, any] {
+	return SagaAnyWithOptions(name, steps, SagaOptions{})
+}
+
+// SagaAnyWithOptions executes a dynamic Saga with the configured compensation
+// timeout applied independently to each undo step.
+func SagaAnyWithOptions(name string, steps []DynamicSagaStep, options SagaOptions) *Builder[any, any] {
+	options = options.withDefaults()
 	return New(name, func(ctx context.Context, initialPayload any) (any, error) {
 		completed := make([]int, 0, len(steps))
 		currentPayload := initialPayload
@@ -267,7 +330,10 @@ func SagaAny(name string, steps []DynamicSagaStep) *Builder[any, any] {
 				for _, c := range slices.Backward(completed) {
 					undoAct := steps[c].Undo
 					if undoAct != nil {
-						if _, undoErr := InvokeAny(rollbackCtx, undoAct, initialPayload); undoErr != nil {
+						undoCtx, cancelUndo := context.WithTimeout(rollbackCtx, options.CompensationTimeout)
+						_, undoErr := InvokeAny(undoCtx, undoAct, initialPayload)
+						cancelUndo()
+						if undoErr != nil {
 							compensationErrors = append(compensationErrors, fmt.Errorf("step %q: %w", steps[c].Name, undoErr))
 							slog.Error("saga_undo_failed", "saga", name, "step", steps[c].Name, "error", undoErr)
 						}
@@ -293,6 +359,7 @@ type (
 
 // StateMachineAny enforces state machine transition matrices dynamically.
 func StateMachineAny(name string, get StateExtractor, set StateSetter, transitions map[string][]string, inner AnyAction) *Builder[any, any] {
+	transitions = cloneStateTransitions(transitions)
 	return New(name, func(ctx context.Context, request any) (any, error) {
 		origState := get(request)
 		allowed, exists := transitions[origState]
@@ -301,6 +368,7 @@ func StateMachineAny(name string, get StateExtractor, set StateSetter, transitio
 		}
 		res, err := InvokeAny(ctx, inner, request)
 		if err != nil {
+			set(request, origState)
 			return nil, err
 		}
 		newState := get(res)

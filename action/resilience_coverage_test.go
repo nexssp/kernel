@@ -11,7 +11,7 @@
 //   - Race: empty reqs, all-fail returns last error.
 //   - Adaptive (CB): concurrent probes in half-open are rejected.
 //   - ExclusiveFenced: concurrent contention — one wins, others get ErrLocked.
-//   - FanOut: empty reqs, maxConcurrency=0 (unbounded), maxConcurrency > len(reqs).
+//   - FanOut: empty reqs, bounded default concurrency, maxConcurrency > len(reqs).
 //
 // All tests use ktest/xtest idioms (Run, Simulate, Counter, Eventually,
 // RequireGoroutinesAtMost, RequireZeroAlloc) so the test code itself is
@@ -459,10 +459,16 @@ func TestSaga_RollbackRunsUnderUncanceledContext(t *testing.T) {
 	t.Parallel()
 
 	var undoRan atomic.Bool
+	var secondStepRan atomic.Bool
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	saga := action.NewSaga[string, string]("saga.uncancel").
 		AddStep("step1",
-			func(_ context.Context, _ string) (string, error) { return "ok", nil },
+			func(_ context.Context, _ string) (string, error) {
+				cancel()
+				return "ok", nil
+			},
 			func(ctx context.Context, _ string) error {
 				// If the rollback context were canceled, this would
 				// return immediately with ctx.Err().
@@ -474,20 +480,33 @@ func TestSaga_RollbackRunsUnderUncanceledContext(t *testing.T) {
 			}).
 		AddStep("step2",
 			func(_ context.Context, _ string) (string, error) {
-				return "", errors.New("terminal failure")
+				secondStepRan.Store(true)
+				return "ok", nil
 			},
 			nil).
 		Build()
 
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel() // pre-cancel caller context
-
-	res, _ := saga.Do(ctx, "req")
+	res, err := saga.Do(ctx, "req")
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Saga error = %v, want context.Canceled", err)
+	}
+	if res.Success {
+		t.Fatal("Saga succeeded after cancellation between steps")
+	}
 	if !res.RolledBack {
 		t.Fatal("expected rollback")
 	}
 	if !undoRan.Load() {
-		t.Fatal("undo must have run despite caller context cancellation")
+		t.Fatal("undo must have run under the uncancelled rollback context")
+	}
+	if secondStepRan.Load() {
+		t.Fatal("second forward step ran after caller cancellation")
+	}
+	if res.StepsCount != 2 || !res.Step(0).Success || res.Step(0).Skipped || res.Step(1).Success || res.Step(1).Skipped {
+		t.Fatalf("step results = %+v, %+v; want first success and second cancellation failure", res.Step(0), res.Step(1))
+	}
+	if res.Step(1).Error != context.Canceled.Error() {
+		t.Fatalf("second step error = %q, want %q", res.Step(1).Error, context.Canceled.Error())
 	}
 }
 
@@ -863,35 +882,54 @@ func TestFanOut_EmptyReqs_ReturnsNil(t *testing.T) {
 	}
 }
 
-// UNBOUNDED: maxConcurrency=0 means unbounded — all reqs run concurrently.
-func TestFanOut_UnboundedConcurrency(t *testing.T) {
+// DEFAULT LIMIT: maxConcurrency=0 uses the conservative package default.
+func TestFanOut_DefaultConcurrencyBounded(t *testing.T) {
 	t.Parallel()
 
-	calls := ktest.NewCounter()
-	act := action.New("fanout.unbounded", func(_ context.Context, _ int) (int, error) {
-		calls.Inc()
-		time.Sleep(20 * time.Millisecond)
-		return 1, nil
+	const requestCount = action.DefaultAsyncMaxConcurrency + 4
+	started := make(chan int, requestCount)
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseAll := func() { releaseOnce.Do(func() { close(release) }) }
+	defer releaseAll()
+	var active, peak atomic.Int32
+	act := action.New("fanout.default-limit", func(_ context.Context, req int) (int, error) {
+		current := active.Add(1)
+		updatePeak(&peak, current)
+		defer active.Add(-1)
+		started <- req
+		<-release
+		return req, nil
 	}).Build()
 
-	reqs := make([]int, 20)
+	reqs := make([]int, requestCount)
 	for i := range reqs {
 		reqs[i] = i
 	}
-
-	start := time.Now()
-	results := action.FanOut(context.Background(), act, reqs, 0)
-	elapsed := time.Since(start)
-
-	if len(results) != 20 {
-		t.Fatalf("expected 20 results, got %d", len(results))
+	done := make(chan []action.AsyncResult[int], 1)
+	go func() { done <- action.FanOut(context.Background(), act, reqs, 0) }()
+	for range action.DefaultAsyncMaxConcurrency {
+		select {
+		case <-started:
+		case <-time.After(5 * time.Second):
+			t.Fatal("timed out waiting for default FanOut workers to start")
+		}
 	}
-	calls.Require(t, 20)
-
-	// With unbounded concurrency, 20 × 20ms should complete in well under 100ms.
-	// (Sequential would take 400ms.)
-	if elapsed > 200*time.Millisecond {
-		t.Fatalf("unbounded FanOut took too long: %v — likely serialized", elapsed)
+	if got := len(started); got != 0 {
+		t.Fatalf("started %d extra requests before a worker was released; want concurrency %d", got, action.DefaultAsyncMaxConcurrency)
+	}
+	releaseAll()
+	results := <-done
+	if len(results) != requestCount {
+		t.Fatalf("expected %d results, got %d", requestCount, len(results))
+	}
+	for i, result := range results {
+		if result.Err != nil || result.Value != reqs[i] {
+			t.Fatalf("result[%d] = (%d, %v), want (%d, nil)", i, result.Value, result.Err, reqs[i])
+		}
+	}
+	if got := peak.Load(); got != action.DefaultAsyncMaxConcurrency {
+		t.Fatalf("peak concurrency = %d, want %d", got, action.DefaultAsyncMaxConcurrency)
 	}
 }
 

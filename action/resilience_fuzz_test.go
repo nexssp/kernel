@@ -449,8 +449,10 @@ func FuzzSaga_StepFailures(f *testing.F) {
 		if err == nil {
 			t.Fatal("expected saga error")
 		}
-		if !res.RolledBack {
-			t.Fatal("expected RolledBack=true")
+		wantRolledBack := firstFailIdx > 0
+		if res.RolledBack != wantRolledBack {
+			t.Fatalf("RolledBack = %t, want %t for first failure index %d",
+				res.RolledBack, wantRolledBack, firstFailIdx)
 		}
 
 		// Verify LIFO order of undo calls.

@@ -41,10 +41,19 @@ func (sm *StateMachineBuilder[Req, Res]) Allow(from string, to ...string) *State
 	return sm
 }
 
+func cloneStateTransitions(transitions map[string][]string) map[string][]string {
+	cloned := make(map[string][]string, len(transitions))
+	for from, to := range transitions {
+		cloned[from] = slices.Clone(to)
+	}
+	return cloned
+}
+
 // Build compiles the State Machine into a standard Nexss Builder,
 // injecting the validation middleware automatically.
 func (sm *StateMachineBuilder[Req, Res]) Build() *BuiltAction[Req, Res] {
 	b := New(sm.name, sm.exec)
+	transitions := cloneStateTransitions(sm.transitions)
 
 	// Inject the state-guard middleware
 	b.Use(func(next Fn[Req, Res]) Fn[Req, Res] {
@@ -56,7 +65,7 @@ func (sm *StateMachineBuilder[Req, Res]) Build() *BuiltAction[Req, Res] {
 			// prevents the handler's side effects for requests the machine
 			// can never accept — previously the handler executed first
 			// and only the in-memory state field was rolled back.
-			allowed, exists := sm.transitions[originalState]
+			allowed, exists := transitions[originalState]
 			if !exists {
 				var zero Res
 				return zero, xerr.Conflict(fmt.Sprintf("invalid transition from '%s'", originalState))
@@ -65,6 +74,7 @@ func (sm *StateMachineBuilder[Req, Res]) Build() *BuiltAction[Req, Res] {
 			// We run the handler first to see the mutated state
 			res, err := next(ctx, req)
 			if err != nil {
+				req.SetState(originalState)
 				return res, err
 			}
 

@@ -20,18 +20,17 @@ func NewDrainSupervisor() *DrainSupervisor {
 	return &DrainSupervisor{done: make(chan struct{})}
 }
 
-// DrainGuard is the typed middleware; use it for any Req/Res.
+// DrainGuard is typed middleware for guarding the wrapped execution. To reject
+// before hooks and outer middleware, attach the supervisor with
+// Builder.WithDrainSupervisor.
 func DrainGuard[Req, Res any](d *DrainSupervisor) Middleware[Req, Res] {
 	return func(next Fn[Req, Res]) Fn[Req, Res] {
 		return func(ctx context.Context, req Req) (Res, error) {
-			// Increment before checking: Drain either sees us in flight or we see draining.
-			d.inFlight.Add(1)
-			defer d.exit()
-
-			if d.draining.Load() {
+			if !d.enter() {
 				var zero Res
 				return zero, xerr.Shutdown("system is shutting down; request rejected")
 			}
+			defer d.exit()
 			return next(ctx, req)
 		}
 	}
@@ -40,6 +39,23 @@ func DrainGuard[Req, Res any](d *DrainSupervisor) Middleware[Req, Res] {
 // Middleware is DrainGuard for Builder[any, any].
 func (d *DrainSupervisor) Middleware() Middleware[any, any] {
 	return DrainGuard[any, any](d)
+}
+
+// WithDrainSupervisor rejects new Do calls before hooks and middleware once
+// draining begins, and includes the whole action lifecycle in the drain wait.
+func (b *Builder[Req, Res]) WithDrainSupervisor(d *DrainSupervisor) *Builder[Req, Res] {
+	b.drain = d
+	return b
+}
+
+func (d *DrainSupervisor) enter() bool {
+	// Increment before checking: Drain either sees us in flight or we see draining.
+	d.inFlight.Add(1)
+	if d.draining.Load() {
+		d.exit()
+		return false
+	}
+	return true
 }
 
 func (d *DrainSupervisor) exit() {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"time"
 
 	"golang.org/x/sync/singleflight"
 
@@ -27,6 +28,33 @@ type durableResult[Res any] struct {
 	value Res
 }
 
+const (
+	// DefaultDurableMaxConcurrentExecutions caps active unique step executions
+	// per Durable middleware when no positive limit is provided.
+	DefaultDurableMaxConcurrentExecutions = 16
+	// DefaultDurableTimeout sets the default context deadline for one durable flight.
+	DefaultDurableTimeout = 2 * time.Minute
+)
+
+// DurableOptions bounds unique in-flight durable executions created by one
+// middleware. Same-key callers still share one flight. A non-positive field
+// selects its default; Timeout covers the semaphore wait, journal I/O, and
+// handler call. The timeout is cooperative for implementations that ignore ctx.
+type DurableOptions struct {
+	MaxConcurrentExecutions int
+	Timeout                 time.Duration
+}
+
+func (o DurableOptions) withDefaults() DurableOptions {
+	if o.MaxConcurrentExecutions <= 0 {
+		o.MaxConcurrentExecutions = DefaultDurableMaxConcurrentExecutions
+	}
+	if o.Timeout <= 0 {
+		o.Timeout = DefaultDurableTimeout
+	}
+	return o
+}
+
 // Durable memoizes one step per (executionID, stepName). Concurrent
 // callers with the same key share a single underlying invocation; the
 // first result is persisted and returned to every waiter.
@@ -42,16 +70,25 @@ type durableResult[Res any] struct {
 // pointers become nil). Arbitrary Go dynamic types are not restored from
 // untrusted type names.
 func Durable[Req, Res any](journal Journal, stepName string) Middleware[Req, Res] {
+	return DurableWithOptions[Req, Res](journal, stepName, DurableOptions{})
+}
+
+// DurableWithOptions creates a durable middleware with explicit concurrency
+// and timeout limits. Zero-value options use conservative defaults.
+func DurableWithOptions[Req, Res any](journal Journal, stepName string, options DurableOptions) Middleware[Req, Res] {
+	options = options.withDefaults()
 	return func(next Fn[Req, Res]) Fn[Req, Res] {
-		run := newDurableRunner(journal, stepName, next)
+		run := newDurableRunner(journal, stepName, next, options)
 		return func(ctx context.Context, req Req) (Res, error) {
 			return run(ctx, req, xctx.ExecutionIDFrom(ctx))
 		}
 	}
 }
 
-func newDurableRunner[Req, Res any](journal Journal, stepName string, next Fn[Req, Res]) func(context.Context, Req, string) (Res, error) {
+func newDurableRunner[Req, Res any](journal Journal, stepName string, next Fn[Req, Res], options DurableOptions) func(context.Context, Req, string) (Res, error) {
+	options = options.withDefaults()
 	var inflight singleflight.Group
+	semaphore := make(chan struct{}, options.MaxConcurrentExecutions)
 
 	return func(ctx context.Context, req Req, executionID string) (Res, error) {
 		var zero Res
@@ -62,7 +99,15 @@ func newDurableRunner[Req, Res any](journal Journal, stepName string, next Fn[Re
 		sharedCtx := context.WithoutCancel(ctx)
 		key := executionID + "\x00" + stepName
 		ch := inflight.DoChan(key, func() (any, error) {
-			value, err := runDurableStep(sharedCtx, journal, executionID, stepName, next, req)
+			runCtx, cancel := context.WithTimeout(sharedCtx, options.Timeout)
+			defer cancel()
+			select {
+			case semaphore <- struct{}{}:
+				defer func() { <-semaphore }()
+			case <-runCtx.Done():
+				return nil, runCtx.Err()
+			}
+			value, err := runDurableStep(runCtx, journal, executionID, stepName, next, req)
 			if err != nil {
 				return nil, err
 			}
@@ -104,14 +149,20 @@ func runDurableStep[Req, Res any](
 			fmt.Sprintf("journal read failed for step %q", stepName), err)
 	}
 
-	if found && len(recorded) > 0 {
-		var memoized Res
-		if unmarshalErr := json.Unmarshal(recorded, &memoized); unmarshalErr == nil {
-			return memoized, nil
+	if found {
+		if !json.Valid(recorded) {
+			var memoized Res
+			unmarshalErr := json.Unmarshal(recorded, &memoized)
+			return zero, xerr.Internal(
+				fmt.Sprintf("journal payload for step %q is invalid JSON", stepName), unmarshalErr)
 		}
-		// Fall through: a recorded payload that no longer decodes into
-		// the current Res shape is stale (Res changed since the record
-		// was written) and must be replaced.
+
+		var memoized Res
+		if unmarshalErr := json.Unmarshal(recorded, &memoized); unmarshalErr != nil {
+			return zero, xerr.Internal(
+				fmt.Sprintf("journal payload for step %q is incompatible with current result type", stepName), unmarshalErr)
+		}
+		return memoized, nil
 	}
 
 	result, err := next(ctx, req)
@@ -184,4 +235,9 @@ func normalizeJSONReplayResult[Res any](result Res, payload []byte) (Res, error)
 // Durable wires the memoization middleware into a builder.
 func (b *Builder[Req, Res]) Durable(journal Journal, stepName string) *Builder[Req, Res] {
 	return b.Use(Durable[Req, Res](journal, stepName))
+}
+
+// DurableWithOptions wires a durable middleware with explicit execution limits.
+func (b *Builder[Req, Res]) DurableWithOptions(journal Journal, stepName string, options DurableOptions) *Builder[Req, Res] {
+	return b.Use(DurableWithOptions[Req, Res](journal, stepName, options))
 }

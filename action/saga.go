@@ -19,6 +19,22 @@ import (
 // SagaResult struct a fixed-size, zero-alloc return value.
 const MaxSagaSteps = 32
 
+// DefaultSagaCompensationTimeout sets each undo callback's default context deadline.
+const DefaultSagaCompensationTimeout = 2 * time.Minute
+
+// SagaOptions controls compensation execution. A non-positive timeout uses
+// DefaultSagaCompensationTimeout and applies independently to each undo step.
+type SagaOptions struct {
+	CompensationTimeout time.Duration
+}
+
+func (o SagaOptions) withDefaults() SagaOptions {
+	if o.CompensationTimeout <= 0 {
+		o.CompensationTimeout = DefaultSagaCompensationTimeout
+	}
+	return o
+}
+
 // StepResult captures execution metadata for a single Saga step.
 type StepResult struct {
 	Step       string `json:"step"`
@@ -45,9 +61,12 @@ type SagaResult[Res any] struct {
 	StepsCount    int                      `json:"steps_count"`
 	StepsOverflow []StepResult             `json:"steps_overflow,omitempty"`
 	Error         string                   `json:"error,omitempty"`
-	RolledBack    bool                     `json:"rolled_back,omitempty"`
-	// CompensationErrors lists failed undos; non-empty means the
-	// rollback was partial and RolledBack=false.
+	// RolledBack is true only if at least one prior successful step was
+	// compensated, every prior successful step had an Undo, and all those
+	// undos succeeded.
+	RolledBack bool `json:"rolled_back,omitempty"`
+	// CompensationErrors lists failed undos. It may be empty when RolledBack
+	// is false because no undo ran or a successful step lacked an Undo.
 	CompensationErrors []string `json:"compensation_errors,omitempty"`
 	DurationMs         int64    `json:"duration_ms"`
 }
@@ -82,8 +101,9 @@ type SagaStep[Req, Res any] struct {
 
 // SagaBuilder constructs a distributed transaction pipeline.
 type SagaBuilder[Req, Res any] struct {
-	name  string
-	steps []SagaStep[Req, Res]
+	name                string
+	steps               []SagaStep[Req, Res]
+	compensationTimeout time.Duration
 }
 
 // NewSaga initializes an in-memory Saga pipeline.
@@ -91,7 +111,9 @@ func NewSaga[Req, Res any](name string) *SagaBuilder[Req, Res] {
 	return &SagaBuilder[Req, Res]{name: name}
 }
 
-// AddStep appends a mandatory (Do, Undo) pair.
+// AddStep appends a mandatory forward step with an optional compensation. If
+// undo is nil and the step succeeds before a later failure, RolledBack is
+// false because that completed step could not be compensated.
 func (s *SagaBuilder[Req, Res]) AddStep(
 	name string,
 	do func(context.Context, Req) (Res, error),
@@ -111,18 +133,31 @@ func (s *SagaBuilder[Req, Res]) AddOptionalStep(
 	return s
 }
 
+// CompensationTimeout sets the maximum context lifetime for each undo step.
+// A non-positive value selects DefaultSagaCompensationTimeout. Undo callbacks
+// must observe their context to stop promptly when the timeout expires.
+func (s *SagaBuilder[Req, Res]) CompensationTimeout(timeout time.Duration) *SagaBuilder[Req, Res] {
+	s.compensationTimeout = timeout
+	return s
+}
+
 // BuiltSaga is the immutable, executable Saga.
 type BuiltSaga[Req, Res any] struct {
-	name  string
-	steps []SagaStep[Req, Res]
+	name                string
+	steps               []SagaStep[Req, Res]
+	compensationTimeout time.Duration
 }
 
 // Build compiles the Saga.
 func (s *SagaBuilder[Req, Res]) Build() *BuiltSaga[Req, Res] {
-	return &BuiltSaga[Req, Res]{name: s.name, steps: s.steps}
+	options := (SagaOptions{CompensationTimeout: s.compensationTimeout}).withDefaults()
+	return &BuiltSaga[Req, Res]{name: s.name, steps: s.steps, compensationTimeout: options.CompensationTimeout}
 }
 
 // Do executes the Saga. If a mandatory step fails, it automatically runs Undo functions in reverse order.
+// Before each forward step, Do checks ctx. Cancellation observed before a
+// step starts fails that step (even if optional), stops later steps, and
+// triggers rollback of prior successes. The returned error wraps ctx.Err().
 //
 // Hot-path: zero heap allocations for sagas with ≤ MaxSagaSteps steps.
 // Step results are written into the inline [MaxSagaSteps]StepResult array
@@ -159,11 +194,15 @@ func (s *BuiltSaga[Req, Res]) Do(ctx context.Context, req Req) (SagaResult[Res],
 
 	for i, step := range s.steps {
 		stepStart := time.Now()
-		res, err := executeSagaDo(ctx, step, req)
+		var res Res
+		err := ctx.Err()
+		if err == nil {
+			res, err = executeSagaDo(ctx, step, req)
+		}
 		dur := time.Since(stepStart).Milliseconds()
 
 		if err != nil {
-			if step.Optional {
+			if step.Optional && ctx.Err() == nil {
 				appendStep(StepResult{
 					Step:       step.Name,
 					Success:    false,
@@ -182,13 +221,24 @@ func (s *BuiltSaga[Req, Res]) Do(ctx context.Context, req Req) (SagaResult[Res],
 
 			rollbackCtx := context.WithoutCancel(ctx)
 			var compensationErrors []string
+			var compensationRan, uncompensatedStep bool
 			for j := i - 1; j >= 0; j-- {
-				if s.steps[j].Undo != nil && !stepAt(j).Skipped {
-					if undoErr := executeSagaUndo(rollbackCtx, s.steps[j], req); undoErr != nil {
-						compensationErrors = append(compensationErrors,
-							fmt.Sprintf("%s: %v", s.steps[j].Name, undoErr))
-						slog.Error("saga_undo_failed", "saga", s.name, "step", s.steps[j].Name, "error", undoErr)
-					}
+				prior := stepAt(j)
+				if !prior.Success || prior.Skipped {
+					continue
+				}
+				if s.steps[j].Undo == nil {
+					uncompensatedStep = true
+					continue
+				}
+				compensationRan = true
+				undoCtx, cancelUndo := context.WithTimeout(rollbackCtx, s.compensationTimeout)
+				undoErr := executeSagaUndo(undoCtx, s.steps[j], req)
+				cancelUndo()
+				if undoErr != nil {
+					compensationErrors = append(compensationErrors,
+						fmt.Sprintf("%s: %v", s.steps[j].Name, undoErr))
+					slog.Error("saga_undo_failed", "saga", s.name, "step", s.steps[j].Name, "error", undoErr)
 				}
 			}
 
@@ -196,8 +246,7 @@ func (s *BuiltSaga[Req, Res]) Do(ctx context.Context, req Req) (SagaResult[Res],
 			result.Success = false
 			result.StepsCount = stepCount
 			result.Error = fmt.Sprintf("saga [%s] failed at step [%s]: %v", s.name, step.Name, err)
-			// RolledBack only when every undo succeeded.
-			result.RolledBack = len(compensationErrors) == 0
+			result.RolledBack = compensationRan && !uncompensatedStep && len(compensationErrors) == 0
 			result.CompensationErrors = compensationErrors
 			result.DurationMs = time.Since(start).Milliseconds()
 			result.Output = zero

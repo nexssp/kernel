@@ -17,8 +17,10 @@
 //
 //   EXACT BOUND (RequireMaxAlloc with measured count):
 //     - Retry_ErrorThenRecover:    4 allocs/op  (timer + dispatch)
-//     - Dedup_SharedResult:        3 allocs/op  (inflightCall + chan + ctx)
-//     - Coalesce_SharedResult:     6 allocs/op  (entry + chan + ctx + sprintf + assert)
+//     - Dedup_SharedResult:        6 allocs/op  (background context requires a flight timer)
+//     - Dedup_SharedResultDeadline: <=3 allocs/op (reuses an adequate caller deadline)
+//     - Coalesce_SharedResult:     6 allocs/op  (background context requires a flight timer)
+//     - Coalesce_SharedDeadline:   <=4 allocs/op (reuses an adequate caller deadline)
 //     - Adaptive_ClosedState:      4 allocs/op  (context.WithTimeout)
 //     - SmartResilience_Success:   4 allocs/op  (CB's ctx.WithTimeout)
 //     - StateMachine_Valid:        1 alloc/op   (slices.Contains)
@@ -166,10 +168,9 @@ func TestCache_HitPath_ZeroAlloc(t *testing.T) {
 	})
 }
 
-// ─── Dedup: shared-result path allocates exactly 3 allocs/op ────────────────
+// ─── Dedup: shared-result path is bounded at 6 allocs/op ────────────────────
 //
-// 1 for the inflightCall struct, 1 for its done channel, 1 for the
-// context.WithoutCancel derived context.
+// Includes the in-flight record/channel and the per-flight timeout context.
 func TestDedup_SharedResultPath_BoundedAllocs(t *testing.T) {
 	act := action.New("dedup.zeroalloc", func(_ context.Context, n int) (int, error) {
 		return n, nil
@@ -178,7 +179,25 @@ func TestDedup_SharedResultPath_BoundedAllocs(t *testing.T) {
 	ctx := context.Background()
 	_, _ = act.Do(ctx, 1) // prime
 
-	// Exact 3 allocs/op — inflightCall + done chan + detached ctx.
+	// Bounded at 6 allocs/op on the pinned toolchain, including timeout setup.
+	xtest.RequireMaxAlloc(t, 1000, 6, func() {
+		res, err := act.Do(ctx, 42)
+		if err != nil || res != 42 {
+			t.Fatalf("res=%d err=%v", res, err)
+		}
+	})
+}
+
+func TestDedup_SharedResultPath_DeadlineContextNoExtraAllocs(t *testing.T) {
+	act := action.New("dedup.zeroalloc.deadline", func(_ context.Context, n int) (int, error) {
+		return n, nil
+	}).Dedup(func(_ int) string { return "k" }).Build()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	_, _ = act.Do(ctx, 1) // prime
+
+	// The caller deadline precedes the flight limit, so no timeout context is added.
 	xtest.RequireMaxAlloc(t, 1000, 3, func() {
 		res, err := act.Do(ctx, 42)
 		if err != nil || res != 42 {
@@ -187,11 +206,9 @@ func TestDedup_SharedResultPath_BoundedAllocs(t *testing.T) {
 	})
 }
 
-// ─── Coalesce: shared-result path allocates exactly 4 allocs/op ───────────
+// ─── Coalesce: shared-result path is bounded at 6 allocs/op ────────────────
 //
-// 1 coalesceEntry struct, 1 ready channel, 1 waiters atomic,
-// 1 context.WithoutCancel. (Previously 6 — fmt.Sprintf for fullKey was 2
-// allocs; replaced with string concat → 0 allocs.)
+// Includes the coalescing entry/channel and the per-flight timeout context.
 func TestCoalesce_SharedResultPath_BoundedAllocs(t *testing.T) {
 	c := action.NewCoalescer()
 	act := action.New("coal.zeroalloc", func(_ context.Context, n int) (int, error) {
@@ -201,7 +218,26 @@ func TestCoalesce_SharedResultPath_BoundedAllocs(t *testing.T) {
 	ctx := context.Background()
 	_, _ = act.Do(ctx, 1) // prime
 
-	// Exact 4 allocs/op (was 6 — Sprintf→concat saved 2).
+	// Bounded at 6 allocs/op on the pinned toolchain, including timeout setup.
+	xtest.RequireMaxAlloc(t, 1000, 6, func() {
+		res, err := act.Do(ctx, 42)
+		if err != nil || res != 42 {
+			t.Fatalf("res=%d err=%v", res, err)
+		}
+	})
+}
+
+func TestCoalesce_SharedResultPath_DeadlineContextNoExtraAllocs(t *testing.T) {
+	c := action.NewCoalescer()
+	act := action.New("coal.zeroalloc.deadline", func(_ context.Context, n int) (int, error) {
+		return n, nil
+	}).Coalesce(c, func(_ int) string { return "k" }).Build()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	_, _ = act.Do(ctx, 1) // prime
+
+	// The caller deadline precedes the flight limit, so no timeout context is added.
 	xtest.RequireMaxAlloc(t, 1000, 4, func() {
 		res, err := act.Do(ctx, 42)
 		if err != nil || res != 42 {

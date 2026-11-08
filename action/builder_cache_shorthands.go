@@ -85,7 +85,8 @@ func (b *Builder[Req, Res]) Once() *Builder[Req, Res] {
 // Dedup prevents concurrent identical requests from executing multiple times.
 // All callers with the same key block until the first one completes,
 // then share its result — exactly one handler invocation per unique key
-// at any point in time.
+// at any point in time. The leader runs synchronously with its caller context
+// and the default shared-flight timeout; waiters can cancel their own waits.
 //
 // keyFn returns the dedup key. An empty string disables dedup for that request.
 //
@@ -96,14 +97,22 @@ func (b *Builder[Req, Res]) Once() *Builder[Req, Res] {
 //	    Dedup(func(r PriceReq) string { return r.ProductID }).
 //	    Build()
 func (b *Builder[Req, Res]) Dedup(keyFn func(Req) string) *Builder[Req, Res] {
+	return b.DedupWithOptions(keyFn, SharedFlightOptions{})
+}
+
+// DedupWithOptions configures the synchronous deduplication leader's context deadline.
+func (b *Builder[Req, Res]) DedupWithOptions(
+	keyFn func(Req) string,
+	options SharedFlightOptions,
+) *Builder[Req, Res] {
 	b.meta.Deduplicated = true
-	return b.UseWithDispatcher(Deduplicate[Req, Res](keyFn))
+	return b.UseWithDispatcher(DeduplicateWithOptions[Req, Res](keyFn, options))
 }
 
 // Coalesce deduplicates concurrent requests using request coalescing.
-// Unlike Dedup, Coalesce allows a caller whose context is canceled
-// to bail out early without killing the underlying in-flight request —
-// the in-flight request continues for other waiters.
+// A waiting caller whose context is canceled can bail out without canceling
+// the leader. The leader runs synchronously with its caller context and the
+// default shared-flight timeout.
 //
 // A single *Coalescer can be shared across multiple actions:
 //
@@ -117,7 +126,16 @@ func (b *Builder[Req, Res]) Dedup(keyFn func(Req) string) *Builder[Req, Res] {
 //	    Coalesce(c, func(r InventoryReq) string { return r.SKU }).
 //	    Build()
 func (b *Builder[Req, Res]) Coalesce(c *Coalescer, keyFn func(Req) string) *Builder[Req, Res] {
+	return b.CoalesceWithOptions(c, keyFn, SharedFlightOptions{})
+}
+
+// CoalesceWithOptions configures the synchronous coalescing leader's context deadline.
+func (b *Builder[Req, Res]) CoalesceWithOptions(
+	c *Coalescer,
+	keyFn func(Req) string,
+	options SharedFlightOptions,
+) *Builder[Req, Res] {
 	b.meta.Coalesced = true
 	name := b.meta.Name
-	return b.UseWithDispatcher(CoalesceMiddleware[Req, Res](c, name, keyFn))
+	return b.UseWithDispatcher(CoalesceMiddlewareWithOptions[Req, Res](c, name, keyFn, options))
 }

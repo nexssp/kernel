@@ -17,6 +17,9 @@ const maxSimpleAdvanceTicks = 64
 // ErrNegativeAdvance is returned when AdvanceChecked receives a negative delta.
 var ErrNegativeAdvance = errors.New("timing wheel advance duration must not be negative")
 
+// ErrTimerIDExhausted is returned rather than reusing a generation and aliasing a stale TimerID.
+var ErrTimerIDExhausted = errors.New("timing wheel timer ID space exhausted")
+
 // TimerID uniquely identifies a scheduled timer for O(1) cancellation.
 // Upper 32 bits = epoch (generation), Lower 32 bits = slot index.
 type TimerID uint64
@@ -90,7 +93,7 @@ func NewChecked(resolution time.Duration, slots, nodeCapacity int) (*Wheel, erro
 	return w, nil
 }
 
-// Schedule adds a timeout. Returns an error if the node pool is exhausted.
+// Schedule adds a timeout. Returns an error if the node pool or TimerID space is exhausted.
 func (w *Wheel) Schedule(delay time.Duration, payload any) (TimerID, error) {
 	if w.freeHead == -1 {
 		return 0, errors.New("timing wheel node pool exhausted")
@@ -123,13 +126,13 @@ func (w *Wheel) Schedule(delay time.Duration, payload any) (TimerID, error) {
 	// evaluate to 0 rotations instead of 1, firing on the first full rotation.
 	rotations := int64((ticks - 1) / slotCountDuration)
 
+	if w.epoch == math.MaxUint32 {
+		return 0, ErrTimerIDExhausted
+	}
 	nodeIdx := w.freeHead
 	w.freeHead = w.nodes[nodeIdx].next
 
 	w.epoch++
-	if w.epoch == 0 {
-		w.epoch = 1
-	}
 	//nolint:gosec // nodeIdx is positive index in nodes array
 	id := (TimerID(w.epoch) << 32) | TimerID(nodeIdx)
 
@@ -317,6 +320,10 @@ func (w *Wheel) unlinkAndFree(slot, current int) {
 	if node.next != -1 {
 		w.nodes[node.next].prev = node.prev
 	}
+	node.id = 0
+	node.payload = nil
+	node.rotations = 0
+	node.canceled = false
 	node.prev = -1
 	node.next = w.freeHead
 	w.freeHead = current

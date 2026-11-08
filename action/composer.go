@@ -8,7 +8,6 @@ import (
 	"context"
 	"fmt"
 	"slices"
-	"sync"
 )
 
 // ── Pipe: A → B → C ────────────────────────────────────────────────────────────
@@ -94,6 +93,17 @@ func Parallel[Req, Res any](
 	name string,
 	builders ...*Builder[Req, Res],
 ) *Builder[Req, []Res] {
+	return ParallelWithOptions(name, AsyncOptions{}, builders...)
+}
+
+// ParallelWithOptions executes branches with configurable concurrency and an
+// overall timeout. Branch results remain in builder order; execution is joined
+// before returning, so callbacks must observe the context to stop on timeout.
+func ParallelWithOptions[Req, Res any](
+	name string,
+	options AsyncOptions,
+	builders ...*Builder[Req, Res],
+) *Builder[Req, []Res] {
 	if len(builders) == 0 {
 		return New(name, func(_ context.Context, _ Req) ([]Res, error) {
 			return nil, nil
@@ -106,24 +116,15 @@ func Parallel[Req, Res any](
 	}
 
 	return New(name, func(ctx context.Context, req Req) ([]Res, error) {
+		outcomes := runAsyncTasks(ctx, len(acts), options, func(ctx context.Context, index int) (Res, error) {
+			return acts[index].Do(ctx, req)
+		})
 		results := make([]Res, len(acts))
-		errs := make([]error, len(acts))
-		var wg sync.WaitGroup
 
-		for i, a := range acts {
-			wg.Add(1)
-			go func(idx int, act *BuiltAction[Req, Res]) {
-				defer wg.Done()
-				res, err := act.Do(ctx, req)
-				results[idx] = res
-				errs[idx] = err
-			}(i, a)
-		}
-		wg.Wait()
-
-		for i, err := range errs {
-			if err != nil {
-				return results, fmt.Errorf("parallel action [%s] failed: %w", acts[i].Describe().Name, err)
+		for i, outcome := range outcomes {
+			results[i] = outcome.Value
+			if outcome.Err != nil {
+				return results, fmt.Errorf("parallel action [%s] failed: %w", acts[i].Describe().Name, outcome.Err)
 			}
 		}
 		return results, nil
@@ -230,6 +231,16 @@ func ParallelNamed[Req any](
 	name string,
 	routes map[string]AnyAction,
 ) *Builder[Req, map[string]any] {
+	return ParallelNamedWithOptions[Req](name, routes, AsyncOptions{})
+}
+
+// ParallelNamedWithOptions is ParallelNamed with configurable concurrency and
+// an overall timeout. It joins all started branches before returning.
+func ParallelNamedWithOptions[Req any](
+	name string,
+	routes map[string]AnyAction,
+	options AsyncOptions,
+) *Builder[Req, map[string]any] {
 	if len(routes) == 0 {
 		return New(name, func(_ context.Context, _ Req) (map[string]any, error) {
 			return make(map[string]any), nil
@@ -243,43 +254,40 @@ func ParallelNamed[Req any](
 		}
 	}
 
-	b := New(name, func(ctx context.Context, req Req) (map[string]any, error) {
-		results := make(map[string]any, len(routes))
-		errs := make(map[string]error, len(routes))
-		var mu sync.Mutex
-		var wg sync.WaitGroup
+	branches := make([]struct {
+		key string
+		act AnyAction
+	}, 0, len(routes))
+	for key, act := range routes {
+		if act != nil {
+			branches = append(branches, struct {
+				key string
+				act AnyAction
+			}{key: key, act: act})
+		}
+	}
 
-		for key, a := range routes {
-			if a == nil {
-				continue
-			}
-			wg.Add(1)
-			go func(branchKey string, act AnyAction) {
-				defer wg.Done()
+	b := New(name, func(ctx context.Context, req Req) (map[string]any, error) {
+		outcomes := runAsyncTasks(ctx, len(branches), options, func(ctx context.Context, index int) (any, error) {
+			branch := branches[index]
+			var result any
+			var err error
+			func() {
 				defer func() {
-					if r := recover(); r != nil {
-						mu.Lock()
-						errs[branchKey] = fmt.Errorf("panic in parallel branch [%s]: %v", branchKey, r)
-						mu.Unlock()
+					if recovered := recover(); recovered != nil {
+						err = fmt.Errorf("panic in parallel branch [%s]: %v", branch.key, recovered)
 					}
 				}()
-
-				res, err := InvokeAny(ctx, act, req)
-				mu.Lock()
-				defer mu.Unlock()
-				if err != nil {
-					errs[branchKey] = err
-					return
-				}
-				results[branchKey] = res
-			}(key, a)
-		}
-		wg.Wait()
-
-		for branch, err := range errs {
-			if err != nil {
-				return results, fmt.Errorf("parallel branch [%s] failed: %w", branch, err)
+				result, err = InvokeAny(ctx, branch.act, req)
+			}()
+			return result, err
+		})
+		results := make(map[string]any, len(routes))
+		for i, outcome := range outcomes {
+			if outcome.Err != nil {
+				return results, fmt.Errorf("parallel branch [%s] failed: %w", branches[i].key, outcome.Err)
 			}
+			results[branches[i].key] = outcome.Value
 		}
 		return results, nil
 	}).
@@ -299,13 +307,22 @@ func ParallelMap[Req any](
 	name string,
 	actions ...AnyAction,
 ) *Builder[Req, map[string]any] {
+	return ParallelMapWithOptions[Req](name, AsyncOptions{}, actions...)
+}
+
+// ParallelMapWithOptions executes actions by declared name with explicit limits.
+func ParallelMapWithOptions[Req any](
+	name string,
+	options AsyncOptions,
+	actions ...AnyAction,
+) *Builder[Req, map[string]any] {
 	routes := make(map[string]AnyAction, len(actions))
 	for _, a := range actions {
 		if a != nil {
 			routes[a.Describe().Name] = a
 		}
 	}
-	return ParallelNamed[Req](name, routes)
+	return ParallelNamedWithOptions[Req](name, routes, options)
 }
 
 // BranchAny routes dynamic execution to one of several named actions based on a router function.

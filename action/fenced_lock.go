@@ -30,6 +30,7 @@ type LockLease struct {
 // can be released only by that owner.
 type FencedMutex interface {
 	Acquire(ctx context.Context, key string, ttl time.Duration) (lease LockLease, acquired bool, err error)
+	// Renew returns false with nil error only when the lease is no longer held; cancellation should return ctx.Err().
 	Renew(ctx context.Context, lease LockLease, ttl time.Duration) (renewed bool, err error)
 	Release(ctx context.Context, lease LockLease) (released bool, err error)
 }
@@ -160,9 +161,6 @@ func runLeaseRenewer(
 			return
 		}
 		if !renewed {
-			if execCtx.Err() != nil {
-				return
-			}
 			reportLoss(errors.New("fenced lock lease lost"))
 			return
 		}

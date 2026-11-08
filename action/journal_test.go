@@ -2,7 +2,6 @@ package action_test
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"sync"
 	"sync/atomic"
@@ -246,24 +245,27 @@ func TestDurable_JournalReadErrorPropagates(t *testing.T) {
 	}
 }
 
-func TestDurable_StaleRecordIsOverwritten(t *testing.T) {
+func TestDurable_IncompatibleRecordFailsClosed(t *testing.T) {
 	t.Parallel()
 
 	journal := newMemJournal()
-	journal.records["run\x00s"] = []byte(`{"shape":"old"}`)
+	const payload = `{"shape":"old"}`
+	journal.records["run\x00s"] = []byte(payload)
+	var calls atomic.Int32
 
 	step := action.New("step", func(_ context.Context, _ int) (int, error) {
+		calls.Add(1)
 		return 42, nil
 	}).Durable(journal, "s").Build()
 
-	got, err := step.Do(xctx.WithExecutionID(context.Background(), "run"), 1)
-	if err != nil || got != 42 {
-		t.Fatalf("expected handler run after stale record, got %v / %v", got, err)
+	if _, err := step.Do(xctx.WithExecutionID(context.Background(), "run"), 1); err == nil {
+		t.Fatal("expected an error for a journal record incompatible with the result type")
 	}
-
-	var recorded int
-	if err := json.Unmarshal(journal.records["run\x00s"], &recorded); err != nil || recorded != 42 {
-		t.Fatalf("stale record not overwritten: %s", journal.records["run\x00s"])
+	if got := calls.Load(); got != 0 {
+		t.Fatalf("handler ran %d times for an incompatible journal record, want 0", got)
+	}
+	if got := string(journal.records["run\x00s"]); got != payload {
+		t.Fatalf("journal record changed to %q, want original payload %q", got, payload)
 	}
 }
 

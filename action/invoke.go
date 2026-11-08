@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"unsafe"
 )
 
 // InvokeAny executes an action with an in-memory input payload.
@@ -200,7 +201,89 @@ func assignBytes(target reflect.Value, source any) bool {
 }
 
 func assignReflect(target, source reflect.Value) (bool, error) {
+	if err := ensureAcyclicInput(source, make(map[coercionVisit]struct{})); err != nil {
+		return false, err
+	}
 	return assignValue(target.Elem(), source)
+}
+
+type coercionVisit struct {
+	typ reflect.Type
+	ptr unsafe.Pointer
+}
+
+func ensureAcyclicInput(value reflect.Value, active map[coercionVisit]struct{}) error {
+	if !value.IsValid() {
+		return nil
+	}
+
+	//nolint:exhaustive // Scalar kinds do not contain traversable references.
+	switch value.Kind() {
+	case reflect.Interface:
+		if value.IsNil() {
+			return nil
+		}
+		return ensureAcyclicInput(value.Elem(), active)
+	case reflect.Pointer, reflect.Map, reflect.Slice:
+		return ensureAcyclicReference(value, active)
+	case reflect.Array:
+		return ensureAcyclicSequence(value, active)
+	case reflect.Struct:
+		return ensureAcyclicStruct(value, active)
+	}
+	return nil
+}
+
+func ensureAcyclicReference(value reflect.Value, active map[coercionVisit]struct{}) error {
+	if value.IsNil() || value.Kind() == reflect.Slice && value.Len() == 0 {
+		return nil
+	}
+	visit := coercionVisit{typ: value.Type(), ptr: value.UnsafePointer()}
+	if _, exists := active[visit]; exists {
+		return fmt.Errorf("action: cyclic input value of type %s cannot be coerced", value.Type())
+	}
+	active[visit] = struct{}{}
+	defer delete(active, visit)
+
+	//nolint:exhaustive // Only pointer, map, and slice values reach this helper.
+	switch value.Kind() {
+	case reflect.Pointer:
+		return ensureAcyclicInput(value.Elem(), active)
+	case reflect.Map:
+		iter := value.MapRange()
+		for iter.Next() {
+			if err := ensureAcyclicInput(iter.Key(), active); err != nil {
+				return err
+			}
+			if err := ensureAcyclicInput(iter.Value(), active); err != nil {
+				return err
+			}
+		}
+	case reflect.Slice:
+		return ensureAcyclicSequence(value, active)
+	}
+	return nil
+}
+
+func ensureAcyclicSequence(value reflect.Value, active map[coercionVisit]struct{}) error {
+	for i := range value.Len() {
+		if err := ensureAcyclicInput(value.Index(i), active); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func ensureAcyclicStruct(value reflect.Value, active map[coercionVisit]struct{}) error {
+	for field := range value.Fields() {
+		fieldValue := value.FieldByIndex(field.Index)
+		if fieldValue.CanInterface() {
+			if err := ensureAcyclicInput(fieldValue, active); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func assignValue(dst, src reflect.Value) (bool, error) {
@@ -210,8 +293,11 @@ func assignValue(dst, src reflect.Value) (bool, error) {
 	}
 
 	if dst.Kind() == reflect.Interface {
-		dst.Set(src)
-		return true, nil
+		if src.Type().AssignableTo(dst.Type()) {
+			dst.Set(src)
+			return true, nil
+		}
+		return false, nil
 	}
 	if dst.Kind() == reflect.Pointer {
 		if dst.IsNil() {
