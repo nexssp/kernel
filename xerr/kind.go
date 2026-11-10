@@ -18,12 +18,13 @@ const (
 	KindInternal        Kind = "Internal"
 
 	// Extended kinds
-	KindMethodNotAllowed Kind = "MethodNotAllowed"
-	KindRateLimit        Kind = "RateLimit"
-	KindCanceled         Kind = "Canceled"
-	KindDatabase         Kind = "Database"
-	KindShutdown         Kind = "Shutdown"
-	KindCircuitBreaker   Kind = "CircuitBreaker"
+	KindMethodNotAllowed     Kind = "MethodNotAllowed"
+	KindUnsupportedMediaType Kind = "UnsupportedMediaType"
+	KindRateLimit            Kind = "RateLimit"
+	KindCanceled             Kind = "Canceled"
+	KindDatabase             Kind = "Database"
+	KindShutdown             Kind = "Shutdown"
+	KindCircuitBreaker       Kind = "CircuitBreaker"
 )
 
 // allKinds is the canonical list. AllKinds returns a view into it, so
@@ -31,11 +32,11 @@ const (
 var allKinds = [...]Kind{
 	KindBadRequest, KindUnauthorized, KindForbidden, KindNotFound,
 	KindConflict, KindValidation, KindTooManyRequests, KindTimeout,
-	KindUnavailable, KindInternal, KindMethodNotAllowed, KindRateLimit,
-	KindCanceled, KindDatabase, KindShutdown, KindCircuitBreaker,
+	KindUnavailable, KindInternal, KindMethodNotAllowed, KindUnsupportedMediaType,
+	KindRateLimit, KindCanceled, KindDatabase, KindShutdown, KindCircuitBreaker,
 }
 
-func AllKinds() [16]Kind { return allKinds }
+func AllKinds() [17]Kind { return allKinds }
 
 // KindFrom extracts the Kind from an error. Defaults to KindInternal
 // when the error is not an AppError.
@@ -74,7 +75,7 @@ func kindClassOf(k Kind) kindClass {
 		KindRateLimit, KindTooManyRequests:
 		return classTransient
 
-	case KindBadRequest, KindUnauthorized, KindForbidden,
+	case KindBadRequest, KindUnsupportedMediaType, KindUnauthorized, KindForbidden,
 		KindNotFound, KindValidation:
 		return classPermanent
 

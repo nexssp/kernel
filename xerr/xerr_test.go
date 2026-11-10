@@ -27,6 +27,16 @@ func TestXerr_Taxonomy(t *testing.T) {
 	ktest.RequireTransient(t, err2)
 }
 
+func TestXerr_UnsupportedMediaTypeIsPermanent(t *testing.T) {
+	t.Parallel()
+
+	err := &xerr.AppError{Kind: xerr.KindUnsupportedMediaType, Message: "unsupported media type"}
+	if got, want := string(err.Kind), "UnsupportedMediaType"; got != want {
+		t.Fatalf("kind=%q, want %q", got, want)
+	}
+	ktest.RequirePermanent(t, err)
+}
+
 // TestXerr_ClassificationIsTotalAndDisjoint pins the three-way
 // classification of every Kind: none is both transient and permanent,
 // and the six intentionally-unclassified kinds stay unclassified. This
@@ -76,8 +86,8 @@ func TestAllKinds_ReturnsEveryKind(t *testing.T) {
 		}
 		seen[k] = true
 	}
-	if len(seen) != 16 {
-		t.Fatalf("AllKinds returns %d unique kinds, want 16", len(seen))
+	if len(seen) != 17 {
+		t.Fatalf("AllKinds returns %d unique kinds, want 17", len(seen))
 	}
 }
 
