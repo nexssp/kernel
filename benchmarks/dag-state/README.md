@@ -4,7 +4,7 @@ This nested module compares three ways to publish DAG node outputs while retaini
 
 ## Reproduce
 
-Use Go 1.27.3 on Linux/amd64. From this directory, run:
+Use Go 1.27.4 on Linux/amd64. From this directory, run:
 
 ```sh
 go test ./...

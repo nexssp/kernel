@@ -1,6 +1,6 @@
 module github.com/nexssp/kernel/benchmarks/dag-state
 
-go 1.27.3
+go 1.27.4
 
 require github.com/nexssp/kernel v0.0.0
 
