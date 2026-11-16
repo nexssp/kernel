@@ -72,6 +72,15 @@ func TestStreamActionAccessorsAreNilSafe(t *testing.T) {
 	}
 }
 
+func TestBuiltActionCloneWithHooksNilReceiverReturnsNil(t *testing.T) {
+	t.Parallel()
+
+	var act *action.BuiltAction[int, int]
+	if act.CloneWithHooks() != nil {
+		t.Fatal("CloneWithHooks on a nil BuiltAction must return nil")
+	}
+}
+
 func TestSagaResultAllStepsReturnsIndependentCopy(t *testing.T) {
 	t.Parallel()
 

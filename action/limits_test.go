@@ -121,6 +121,43 @@ func TestRaceWithOptions_ConfiguredLimit(t *testing.T) {
 	}
 }
 
+func TestRaceWithOptions_PreservesCandidateErrorWhenTimeoutDrains(t *testing.T) {
+	t.Parallel()
+
+	started := make(chan int, 2)
+	timedOut := make(chan struct{}, 1)
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseAll := func() { releaseOnce.Do(func() { close(release) }) }
+	defer releaseAll()
+	candidateErr := errors.New("candidate failed")
+	act := action.New("race.timeout-preserves-error", func(ctx context.Context, request int) (int, error) {
+		started <- request
+		if request == 1 {
+			return 0, candidateErr
+		}
+		<-ctx.Done()
+		timedOut <- struct{}{}
+		<-release
+		return 0, ctx.Err()
+	}).Build()
+	done := make(chan error, 1)
+	go func() {
+		_, err := action.RaceWithOptions(context.Background(), act, []int{1, 2}, action.AsyncOptions{
+			MaxConcurrency: 1,
+			Timeout:        time.Second,
+		})
+		done <- err
+	}()
+
+	awaitSignals(t, started, 2)
+	awaitSignals(t, timedOut, 1)
+	releaseAll()
+	if err := <-done; !errors.Is(err, candidateErr) {
+		t.Fatalf("Race error = %v, want candidate error %v", err, candidateErr)
+	}
+}
+
 func TestAsyncOptions_TimeoutSignalsCancellation(t *testing.T) {
 	t.Parallel()
 

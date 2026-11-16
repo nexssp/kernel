@@ -75,12 +75,9 @@ type anyHookSet struct {
 // generic ToBuilder. Preserving generic Req/Res types keeps the hot path
 // zero-allocation.
 func (a *BuiltAction[Req, Res]) CloneWithHooks(hooks ...AnyHook) AnyAction {
-	if a == nil {
-		return nil
-	}
 	builder := a.ToBuilder()
 	if builder == nil {
-		return a
+		return nil
 	}
 	builder.AnyHook(hooks...)
 	return builder.Build()

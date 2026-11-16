@@ -6,8 +6,11 @@ package action
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
+
+	"github.com/nexssp/kernel/xerr"
 )
 
 const (
@@ -46,6 +49,11 @@ type AsyncResult[Res any] struct {
 // Async executes the action in a goroutine and returns a result channel.
 func Async[Req, Res any](ctx context.Context, act *BuiltAction[Req, Res], req Req) <-chan AsyncResult[Res] {
 	ch := make(chan AsyncResult[Res], 1)
+	if act == nil {
+		ch <- AsyncResult[Res]{Err: xerr.Internal("nil action")}
+		close(ch)
+		return ch
+	}
 	go func() {
 		res, err := act.Do(ctx, req)
 		ch <- AsyncResult[Res]{Value: res, Err: err}
@@ -80,6 +88,14 @@ func FanOutWithOptions[Req, Res any](
 	if len(reqs) == 0 {
 		return nil
 	}
+	if act == nil {
+		err := xerr.Internal("nil action")
+		results := make([]AsyncResult[Res], len(reqs))
+		for index := range results {
+			results[index].Err = err
+		}
+		return results
+	}
 	return runAsyncTasks(ctx, len(reqs), options, func(ctx context.Context, index int) (Res, error) {
 		return act.Do(ctx, reqs[index])
 	})
@@ -88,14 +104,60 @@ func FanOutWithOptions[Req, Res any](
 // Race executes up to DefaultAsyncMaxConcurrency candidates at a time, with
 // DefaultAsyncTimeout, and returns the first successful result. It cancels and
 // joins all started candidates before returning. Use RaceWithOptions to choose a
-// different limit or timeout. If all candidates fail, the last error by
-// completion order is returned.
+// different limit or timeout. A substantive candidate error takes precedence
+// over a concurrent context error.
 func Race[Req, Res any](
 	ctx context.Context,
 	act *BuiltAction[Req, Res],
 	reqs []Req,
 ) (Res, error) {
 	return RaceWithOptions(ctx, act, reqs, AsyncOptions{})
+}
+
+type raceOutcome[Res any] struct {
+	res Res
+	err error
+}
+
+type raceState[Res any] struct {
+	lastErr        error
+	substantiveErr error
+	winner         Res
+	won            bool
+	operationErr   error
+}
+
+func (state *raceState[Res]) record(runCtx context.Context, result raceOutcome[Res], cancel context.CancelFunc) bool {
+	if !state.won && state.operationErr == nil && runCtx.Err() == nil && result.err == nil {
+		state.winner = result.res
+		state.won = true
+		cancel()
+		return true
+	}
+	if result.err != nil {
+		state.lastErr = result.err
+		if !errors.Is(result.err, context.Canceled) && !errors.Is(result.err, context.DeadlineExceeded) {
+			state.substantiveErr = result.err
+		}
+	}
+	return false
+}
+
+func (state *raceState[Res]) result(runCtx context.Context) (Res, error) {
+	var zero Res
+	if state.won {
+		return state.winner, nil
+	}
+	if state.substantiveErr != nil {
+		return zero, state.substantiveErr
+	}
+	if state.operationErr == nil {
+		state.operationErr = runCtx.Err()
+	}
+	if state.operationErr != nil {
+		return zero, state.operationErr
+	}
+	return zero, state.lastErr
 }
 
 // RaceWithOptions executes up to the configured number of candidates at a time
@@ -113,32 +175,29 @@ func RaceWithOptions[Req, Res any](
 		var zero Res
 		return zero, nil
 	}
+	if act == nil {
+		var zero Res
+		return zero, xerr.Internal("nil action")
+	}
 
 	options = options.withDefaults()
 	limit := min(options.MaxConcurrency, len(reqs))
 	runCtx, cancel := context.WithTimeout(ctx, options.Timeout)
 	defer cancel()
 
-	type outcome struct {
-		res Res
-		err error
-	}
-	ch := make(chan outcome, limit)
+	ch := make(chan raceOutcome[Res], limit)
 	launch := func(req Req) {
 		go func() {
 			res, err := act.Do(runCtx, req)
-			ch <- outcome{res: res, err: err}
+			ch <- raceOutcome[Res]{res: res, err: err}
 		}()
 	}
 
 	next, active := 0, 0
-	var lastErr error
-	var winner Res
-	var won bool
-	var operationErr error
+	var state raceState[Res]
 	done := runCtx.Done()
 	for next < len(reqs) || active > 0 {
-		for !won && operationErr == nil && next < len(reqs) && active < limit && runCtx.Err() == nil {
+		for !state.won && state.operationErr == nil && next < len(reqs) && active < limit && runCtx.Err() == nil {
 			launch(reqs[next])
 			next++
 			active++
@@ -149,32 +208,16 @@ func RaceWithOptions[Req, Res any](
 		select {
 		case result := <-ch:
 			active--
-			if !won && operationErr == nil && runCtx.Err() == nil && result.err == nil {
-				winner = result.res
-				won = true
-				cancel()
-				done = nil
-			} else if result.err != nil {
-				lastErr = result.err
+			if state.record(runCtx, result, cancel) {
+				done = nil // Avoid reselecting the closed signal while candidates drain.
 			}
 		case <-done:
-			operationErr = runCtx.Err()
+			state.operationErr = runCtx.Err()
 			cancel()
-			done = nil
+			done = nil // Avoid reselecting the closed signal while candidates drain.
 		}
 	}
-	if won {
-		return winner, nil
-	}
-	if operationErr == nil {
-		operationErr = runCtx.Err()
-	}
-	if operationErr != nil {
-		var zero Res
-		return zero, operationErr
-	}
-	var zero Res
-	return zero, lastErr
+	return state.result(runCtx)
 }
 
 func runAsyncTasks[Res any](

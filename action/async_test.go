@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/nexssp/kernel/action"
+	"github.com/nexssp/kernel/xerr"
 )
 
 func TestAsync(t *testing.T) {
@@ -25,6 +26,52 @@ func TestAsync(t *testing.T) {
 	if res.Value != 42 {
 		t.Fatalf("expected 42, got %d", res.Value)
 	}
+}
+
+func TestAsyncAPIsRejectNilAction(t *testing.T) {
+	t.Parallel()
+
+	var act *action.BuiltAction[int, int]
+	assertInternal := func(name string, err error) {
+		t.Helper()
+		if kind := xerr.KindFrom(err); kind != xerr.KindInternal {
+			t.Fatalf("%s error kind = %q, want %q", name, kind, xerr.KindInternal)
+		}
+	}
+
+	results := action.Async(context.Background(), act, 1)
+	result, ok := <-results
+	if !ok {
+		t.Fatal("Async closed without a result")
+	}
+	assertInternal("Async", result.Err)
+	if _, ok := <-results; ok {
+		t.Fatal("Async returned more than one result")
+	}
+
+	requests := []int{1, 2}
+	for _, test := range []struct {
+		name    string
+		results []action.AsyncResult[int]
+	}{
+		{name: "FanOut", results: action.FanOut(context.Background(), act, requests, 1)},
+		{name: "FanOutWithOptions", results: action.FanOutWithOptions(context.Background(), act, requests, action.AsyncOptions{MaxConcurrency: 1})},
+	} {
+		if len(test.results) != len(requests) {
+			t.Fatalf("%s results = %d, want %d", test.name, len(test.results), len(requests))
+		}
+		for index, result := range test.results {
+			assertInternal(test.name, result.Err)
+			if result.Value != 0 {
+				t.Fatalf("%s result[%d] = %d, want zero value", test.name, index, result.Value)
+			}
+		}
+	}
+
+	_, err := action.Race(context.Background(), act, requests)
+	assertInternal("Race", err)
+	_, err = action.RaceWithOptions(context.Background(), act, requests, action.AsyncOptions{MaxConcurrency: 1})
+	assertInternal("RaceWithOptions", err)
 }
 
 func TestFanOut(t *testing.T) {
