@@ -5,6 +5,7 @@
 package action
 
 import (
+	"slices"
 	"strings"
 	"time"
 )
@@ -153,6 +154,18 @@ type Meta struct {
 	CacheTTL         time.Duration `json:"cache_ttl,omitempty"`
 	Deduplicated     bool          `json:"deduplicated,omitempty"`
 	Coalesced        bool          `json:"coalesced,omitempty"`
+}
+
+func cloneMeta(meta *Meta) *Meta {
+	if meta == nil {
+		return nil
+	}
+	cp := *meta
+	cp.Tags = slices.Clone(meta.Tags)
+	cp.RequiredRoles = slices.Clone(meta.RequiredRoles)
+	cp.RequiredPermissions = slices.Clone(meta.RequiredPermissions)
+	cp.RequiredFeatures = slices.Clone(meta.RequiredFeatures)
+	return &cp
 }
 
 // ActionScope describes the contract audience for an action. It is not an

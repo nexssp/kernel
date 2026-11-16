@@ -362,7 +362,7 @@ func TestSaga_OptionalStepFailure_DoesNotRollback(t *testing.T) {
 
 	// The optional step must be recorded as skipped, not as a hard failure.
 	// SagaResult.Steps is now a fixed-size [MaxSagaSteps]StepResult array.
-	// Use AllSteps() to get a slice view of populated entries.
+	// Use AllSteps() to get an independent copy of populated entries.
 	var skippedFound, successCount int
 	for _, step := range res.AllSteps() {
 		if step.Skipped {

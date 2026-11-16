@@ -110,20 +110,16 @@ func (r *SagaResult[Res]) Step(i int) StepResult {
 	return r.StepsOverflow[i-MaxSagaSteps]
 }
 
-// AllSteps returns a slice view over all populated step results.
-// Allocates only if the saga overflowed the inline array.
+// AllSteps returns an independent copy of all populated step results.
 func (r *SagaResult[Res]) AllSteps() []StepResult {
 	inlineCount := min(max(r.StepsCount, 0), MaxSagaSteps)
 	overflowCount := 0
 	if r.StepsCount > MaxSagaSteps {
 		overflowCount = min(r.StepsCount-MaxSagaSteps, len(r.StepsOverflow))
 	}
-	if overflowCount == 0 {
-		return r.Steps[:inlineCount]
-	}
-	all := make([]StepResult, 0, inlineCount+overflowCount)
-	all = append(all, r.Steps[:inlineCount]...)
-	all = append(all, r.StepsOverflow[:overflowCount]...)
+	all := make([]StepResult, inlineCount+overflowCount)
+	copy(all, r.Steps[:inlineCount])
+	copy(all[inlineCount:], r.StepsOverflow[:overflowCount])
 	return all
 }
 

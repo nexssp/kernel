@@ -191,7 +191,7 @@ func (a *BuiltAction[Req, Res]) Do(ctx context.Context, req Req) (res Res, err e
 	}
 
 	if a.exec == nil {
-		return res, nil
+		return res, xerr.Internal("action " + a.meta.Name + ": no executor configured")
 	}
 
 	res, err = a.exec(finalCtx, req)

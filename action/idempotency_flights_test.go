@@ -160,6 +160,38 @@ func TestIdempotencyFlightGoexitDoesNotWedgeKey(t *testing.T) {
 	}
 }
 
+func TestIdempotencyFlightFollowerSharesMutableResultReference(t *testing.T) {
+	type mutableResult struct {
+		headers map[string]string
+	}
+
+	shared := &mutableResult{headers: map[string]string{"content-type": "text/plain"}}
+	flight := &idempotencyFlight{done: make(chan struct{}), value: shared}
+	close(flight.done)
+	group := newIdempotencyFlightGroup(1)
+	group.flights["shared-key"] = flight
+
+	var leaderStarted bool
+	value, err := group.Do(context.Background(), "shared-key", func(context.Context) (any, error) {
+		leaderStarted = true
+		return nil, nil
+	})
+	if err != nil {
+		t.Fatalf("follower error = %v", err)
+	}
+	if leaderStarted {
+		t.Fatal("follower started another execution")
+	}
+	got, ok := value.(*mutableResult)
+	if !ok || got != shared {
+		t.Fatalf("follower result = %T (%p), want shared reference %p", value, got, shared)
+	}
+	got.headers["x-request-id"] = "follower"
+	if shared.headers["x-request-id"] != "follower" {
+		t.Fatal("follower result did not share the leader's mutable response data")
+	}
+}
+
 func waitForFlightCount(t *testing.T, group *idempotencyFlightGroup, want int) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)

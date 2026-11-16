@@ -27,9 +27,19 @@ func NewStream[Req, T any](name string, h StreamHandler[Req, T]) *StreamAction[R
 
 var _ AnyStreamAction = (*StreamAction[struct{}, struct{}])(nil)
 
-func (a *StreamAction[Req, T]) Describe() *Meta { return a.meta }
+func (a *StreamAction[Req, T]) Describe() *Meta { return a.GetMeta() }
+
+func (a *StreamAction[Req, T]) GetMeta() *Meta {
+	if a == nil {
+		return nil
+	}
+	return cloneMeta(a.meta)
+}
 
 func (a *StreamAction[Req, T]) GetBindings() []Binding {
+	if a == nil {
+		return nil
+	}
 	return append([]Binding(nil), a.bindings...)
 }
 
@@ -137,7 +147,7 @@ func (a *StreamAction[Req, T]) CloneWithHooks(hooks ...AnyHook) AnyStreamAction 
 		return nil
 	}
 	clone := &StreamAction[Req, T]{
-		meta:        a.meta,
+		meta:        a.GetMeta(),
 		bindings:    append([]Binding(nil), a.bindings...),
 		handler:     a.handler,
 		hooks:       append([]Hook[Req, iter.Seq2[T, error]](nil), a.hooks...),

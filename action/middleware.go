@@ -38,15 +38,22 @@ func AdmissionMiddleware[Req, Res any](admission Admission) DispatcherMiddleware
 
 var ErrConcurrencyLimit = errors.New("concurrency limit exceeded")
 
+// ConcurrencyLimitMiddleware immediately rejects calls when all slots are occupied.
+// It does not queue waiters or guarantee FIFO fairness; nonpositive limits reject all calls.
 func ConcurrencyLimitMiddleware[Req, Res any](limit int32) Middleware[Req, Res] {
 	var count atomic.Int32
 
 	return func(next Fn[Req, Res]) Fn[Req, Res] {
 		return func(ctx context.Context, req Req) (Res, error) {
-			if count.Add(1) > limit {
-				count.Add(-1)
-				var zero Res
-				return zero, ErrConcurrencyLimit
+			for {
+				current := count.Load()
+				if current >= limit {
+					var zero Res
+					return zero, ErrConcurrencyLimit
+				}
+				if count.CompareAndSwap(current, current+1) {
+					break
+				}
 			}
 			defer count.Add(-1)
 

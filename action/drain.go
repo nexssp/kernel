@@ -8,7 +8,9 @@ import (
 	"github.com/nexssp/kernel/xerr"
 )
 
-// DrainSupervisor coordinates graceful shutdown across actions.
+// DrainSupervisor coordinates graceful shutdown across actions. It is single-use:
+// once Drain is called, new executions are rejected permanently, even if Drain
+// returns because its context expires. Create a new supervisor to resume work.
 type DrainSupervisor struct {
 	inFlight atomic.Int64
 	draining atomic.Bool

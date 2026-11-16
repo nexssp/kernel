@@ -91,7 +91,10 @@ func (b *Builder[Req, Res]) Description(d string) *Builder[Req, Res] {
 }
 
 func (b *Builder[Req, Res]) Describe() *Meta {
-	return &b.meta
+	if b == nil {
+		return nil
+	}
+	return cloneMeta(&b.meta)
 }
 
 func (b *Builder[Req, Res]) Tag(tags ...string) *Builder[Req, Res] {

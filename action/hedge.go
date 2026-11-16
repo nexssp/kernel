@@ -33,8 +33,10 @@ func launchHedgeIfPrimaryRunning(gate *hedgeLaunchGate, launch func()) bool {
 
 // Hedge runs act and launches one more attempt if the first has not finished
 // within delay, or has failed with a non-permanent error. First success wins;
-// the other attempt is canceled and awaited before returning, so act must
-// honor ctx. If every attempt fails, the last error is returned unchanged.
+// Hedge cancels and waits for every other launched attempt before returning.
+// Each attempt, including its middleware and handler, must honor ctx cancellation
+// and return promptly; otherwise Hedge may block indefinitely while waiting.
+// If every attempt fails, the last error is returned unchanged.
 //
 // delay <= 0 disables hedging.
 func Hedge[Req, Res any](name string, act *BuiltAction[Req, Res], delay time.Duration) *Builder[Req, Res] {

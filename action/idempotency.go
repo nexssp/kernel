@@ -209,6 +209,8 @@ func (g *idempotencyFlightGroup) run(ctx context.Context, key string, flight *id
 // detect conflicts; neither is used as a key. Shared work keeps the first caller's
 // context values but not its cancellation; each caller can stop waiting using its
 // own context. FlightTimeout bounds the shared execution.
+// Concurrent callers sharing an in-flight key may receive the same result reference.
+// Treat mutable response data as immutable, or clone it before modifying it.
 //
 // A direct middleware must set cfg.Namespace. Builder-created middleware uses the
 // final action name unless cfg.Namespace explicitly overrides it. Transport
