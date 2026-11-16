@@ -159,11 +159,8 @@ func (a *BuiltAction[Req, Res]) Do(ctx context.Context, req Req) (res Res, err e
 		defer a.drain.exit()
 	}
 
-	if a.validationErr != nil {
-		return res, fmt.Errorf("action %s configuration: %w", a.meta.Name, a.validationErr)
-	}
-	if a.historyErr != nil {
-		return res, fmt.Errorf("action %s history configuration: %w", a.meta.Name, a.historyErr)
+	if configErr := builderConfigError(a.meta.Name, a.validationErr, a.historyErr); configErr != nil {
+		return res, configErr
 	}
 	anyHooks := a.anyHooksSnapshot()
 	needExecState := hasOnSuccessHook(a.hooks, anyHooks) || a.trackExecutionStart

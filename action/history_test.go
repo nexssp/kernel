@@ -29,6 +29,32 @@ func TestHistory(t *testing.T) {
 	}
 }
 
+func TestHistoryMiddlewareCapturesRequestValueAndSharedSliceMutation(t *testing.T) {
+	type request struct {
+		Name string
+		Tags []string
+	}
+
+	history := action.NewHistory[request, int](1)
+	req := request{Name: "original", Tags: []string{"before"}}
+	next := action.HistoryMiddleware[request, int](history)(func(_ context.Context, req request) (int, error) {
+		req.Name = "handler-local"
+		req.Tags[0] = "mutated"
+		return 1, nil
+	})
+	if _, err := next(context.Background(), req); err != nil {
+		t.Fatal(err)
+	}
+
+	records := history.Snapshot()
+	if len(records) != 1 {
+		t.Fatalf("history has %d records, want 1", len(records))
+	}
+	if got := records[0].Req; got.Name != "original" || got.Tags[0] != "mutated" {
+		t.Fatalf("recorded request = %+v, want original value field and mutated shared slice", got)
+	}
+}
+
 func TestRecordHistoryAndWithHistory_ShareInstance(t *testing.T) {
 	t.Parallel()
 

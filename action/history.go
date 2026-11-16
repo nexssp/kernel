@@ -69,6 +69,9 @@ func (h *History[Req, Res]) Snapshot() []Record[Req, Res] {
 	return h.buf.Snapshot()
 }
 
+// HistoryMiddleware records the request after the handler returns or panics; it
+// does not deep-copy Req. Reassigned value fields on the handler's copy are not
+// reflected, but mutations through shared pointers, maps, or slices are visible.
 func HistoryMiddleware[Req, Res any](hist *History[Req, Res]) Middleware[Req, Res] {
 	return func(next Fn[Req, Res]) Fn[Req, Res] {
 		return func(ctx context.Context, req Req) (res Res, err error) {

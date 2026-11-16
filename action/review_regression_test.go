@@ -169,6 +169,31 @@ func TestReview_SagaJSONHasNoPaddingEntries(t *testing.T) {
 	}
 }
 
+func TestReview_SagaJSONOutputIsUnredacted(t *testing.T) {
+	type output struct {
+		Token string `json:"token"`
+	}
+
+	result := action.SagaResult[output]{
+		Saga:    "sensitive-output",
+		Success: true,
+		Output:  output{Token: "fixture-secret"},
+	}
+	raw, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var encoded struct {
+		Output output `json:"output"`
+	}
+	if err := json.Unmarshal(raw, &encoded); err != nil {
+		t.Fatal(err)
+	}
+	if encoded.Output.Token != "fixture-secret" {
+		t.Fatalf("JSON output token = %q, want the supplied value", encoded.Output.Token)
+	}
+}
+
 func TestReview_SagaJSONOverflowPreservesWireShape(t *testing.T) {
 	const stepCount = action.MaxSagaSteps + 5
 	builder := action.NewSaga[int, int]("many")

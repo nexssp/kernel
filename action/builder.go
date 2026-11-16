@@ -5,6 +5,7 @@
 package action
 
 import (
+	"fmt"
 	"reflect"
 	"runtime"
 	"slices"
@@ -194,6 +195,22 @@ func (b *Builder[Req, Res]) ConcurrencyLimit(limit int32) *Builder[Req, Res] {
 }
 
 // ── Build ─────────────────────────────────────────────────────────────────────
+
+// ValidateConfig reports deferred configuration errors without executing the
+// action or any request validators added with Validate.
+func (b *Builder[Req, Res]) ValidateConfig() error {
+	return builderConfigError(b.meta.Name, b.validationErr, b.historyErr)
+}
+
+func builderConfigError(name string, validationErr, historyErr error) error {
+	if validationErr != nil {
+		return fmt.Errorf("action %s configuration: %w", name, validationErr)
+	}
+	if historyErr != nil {
+		return fmt.Errorf("action %s history configuration: %w", name, historyErr)
+	}
+	return nil
+}
 
 func (b *Builder[Req, Res]) Build() *BuiltAction[Req, Res] {
 	metaCopy := b.meta

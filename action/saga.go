@@ -54,6 +54,8 @@ type StepResult struct {
 // For sagas larger than MaxSagaSteps, Steps overflows to a heap-allocated
 // slice stored in StepsOverflow. This is the rare case — most sagas have
 // fewer than 32 steps.
+// Output is serialized using encoding/json as supplied; saga marshaling does not
+// redact sensitive fields. Use a redacted output type before exposing its JSON.
 type SagaResult[Res any] struct {
 	Saga          string                   `json:"saga"`
 	Success       bool                     `json:"success"`

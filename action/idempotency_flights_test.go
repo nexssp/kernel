@@ -192,6 +192,75 @@ func TestIdempotencyFlightFollowerSharesMutableResultReference(t *testing.T) {
 	}
 }
 
+func FuzzIdempotencyFlightGroupSharesOneExecution(f *testing.F) {
+	f.Add("same-key", uint8(0))
+	f.Add("same\x00key", uint8(4))
+	f.Add("", uint8(7))
+
+	f.Fuzz(func(t *testing.T, key string, callerSeed uint8) {
+		if len(key) > 128 {
+			key = key[:128]
+		}
+		callers := int(callerSeed%8) + 1
+		group := newIdempotencyFlightGroup(1)
+		started := make(chan struct{})
+		release := make(chan struct{})
+		var releaseOnce sync.Once
+		unblock := func() { releaseOnce.Do(func() { close(release) }) }
+		defer unblock()
+
+		var executions atomic.Int32
+		var startedOnce sync.Once
+		type result struct {
+			value any
+			err   error
+		}
+		results := make(chan result, callers)
+		run := func(ctx context.Context) {
+			value, err := group.Do(ctx, key, func(context.Context) (any, error) {
+				executions.Add(1)
+				startedOnce.Do(func() { close(started) })
+				<-release
+				return key, nil
+			})
+			results <- result{value: value, err: err}
+		}
+
+		go run(context.Background())
+		select {
+		case <-started:
+		case <-time.After(5 * time.Second):
+			t.Fatal("flight leader did not start")
+		}
+
+		for range callers - 1 {
+			followerCtx := &flightDoneSignalContext{Context: context.Background(), ready: make(chan struct{})}
+			go run(followerCtx)
+			select {
+			case <-followerCtx.ready:
+			case <-time.After(5 * time.Second):
+				t.Fatal("follower did not join the in-flight call")
+			}
+		}
+
+		unblock()
+		for range callers {
+			select {
+			case got := <-results:
+				if got.err != nil || got.value != key {
+					t.Fatalf("flight result = (%v, %v), want (%q, nil)", got.value, got.err, key)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("caller did not receive the shared result")
+			}
+		}
+		if got := executions.Load(); got != 1 {
+			t.Fatalf("shared execution count = %d, want 1", got)
+		}
+		waitForFlightCount(t, group, 0)
+	})
+}
+
 func waitForFlightCount(t *testing.T, group *idempotencyFlightGroup, want int) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
