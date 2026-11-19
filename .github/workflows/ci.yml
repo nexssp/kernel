@@ -8,8 +8,63 @@ permissions:
   contents: read
 
 jobs:
-  verify:
-    name: build · lint · test
+  module-tidy:
+    name: Go module tidy check
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Setup Task
+        uses: arduino/setup-task@v2
+        with:
+          version: 3.x
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify go.mod and go.sum are tidy
+        run: |
+          task tidy
+          if [ -n "$(git status --porcelain -- go.mod go.sum)" ]; then
+            echo "::error::go.mod or go.sum is not tidy. Run 'task tidy' locally and commit the result."
+            git status --porcelain -- go.mod go.sum
+            git diff -- go.mod go.sum
+            exit 1
+          fi
+
+  build:
+    name: Build all Go packages
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Setup Task
+        uses: arduino/setup-task@v2
+        with:
+          version: 3.x
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build
+        run: task build
+
+  lint:
+    name: Go lint
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -36,30 +91,32 @@ jobs:
           version: v2.14.0
           install-only: true
 
-      - name: Verify go.mod and go.sum are tidy
-        run: |
-          task tidy
-          if [ -n "$(git status --porcelain -- go.mod go.sum)" ]; then
-            echo "::error::go.mod or go.sum is not tidy. Run 'task tidy' locally and commit the result."
-            git status --porcelain -- go.mod go.sum
-            git diff -- go.mod go.sum
-            exit 1
-          fi
+      - name: Run Go lint
+        run: task lint
 
-      - name: Tools
-        run: task tools
+  unit-race-tests:
+    name: Go unit and race tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
 
-      - name: Build
-        run: task build
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
 
-      - name: Run CI gate
-        run: task ci
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
 
-      - name: Vulnerability scan
-        run: task vuln
+      - name: Setup Task
+        uses: arduino/setup-task@v2
+        with:
+          version: 3.x
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Benchmark smoke check
-        run: task bench
+      - name: Run uncached race-enabled unit tests
+        run: task test:race:nocache
 
   portability:
     name: portability · ${{ matrix.goos }}/${{ matrix.goarch }}
@@ -97,3 +154,99 @@ jobs:
       - name: Test
         if: ${{ matrix.run_tests }}
         run: go test -short -count=1 ./...
+
+  vulnerability:
+    name: Vulnerability scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Setup Task
+        uses: arduino/setup-task@v2
+        with:
+          version: 3.x
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Tools
+        run: task tools
+
+      - name: Vulnerability scan
+        run: task vuln
+
+  benchmark:
+    name: Benchmark smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Setup Task
+        uses: arduino/setup-task@v2
+        with:
+          version: 3.x
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run benchmark smoke check
+        run: task bench
+
+  # Preserve this job identity as the stable branch-protection gate.
+  verify:
+    name: build · lint · test
+    if: ${{ always() }}
+    needs:
+      - module-tidy
+      - build
+      - lint
+      - unit-race-tests
+      - portability
+      - vulnerability
+      - benchmark
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Report every failed required check
+        env:
+          MODULE_TIDY_RESULT: ${{ needs.module-tidy.result }}
+          BUILD_RESULT: ${{ needs.build.result }}
+          LINT_RESULT: ${{ needs.lint.result }}
+          UNIT_RACE_TESTS_RESULT: ${{ needs.unit-race-tests.result }}
+          PORTABILITY_RESULT: ${{ needs.portability.result }}
+          VULNERABILITY_RESULT: ${{ needs.vulnerability.result }}
+          BENCHMARK_RESULT: ${{ needs.benchmark.result }}
+        run: |
+          set -Eeuo pipefail
+          failed=0
+          check_result() {
+            local check_id="$1"
+            local result="$2"
+            if [[ "$result" != "success" ]]; then
+              printf '::error::Required check %s result: %s\n' "$check_id" "${result:-unknown}"
+              failed=1
+            fi
+          }
+          check_result module-tidy "$MODULE_TIDY_RESULT"
+          check_result build "$BUILD_RESULT"
+          check_result lint "$LINT_RESULT"
+          check_result unit-race-tests "$UNIT_RACE_TESTS_RESULT"
+          check_result portability "$PORTABILITY_RESULT"
+          check_result vulnerability "$VULNERABILITY_RESULT"
+          check_result benchmark "$BENCHMARK_RESULT"
+          exit "$failed"
