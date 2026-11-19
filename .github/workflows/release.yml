@@ -5,38 +5,109 @@ on:
     tags:
       - "v*"
 
-permissions:
-  contents: write
-
 jobs:
-  release:
-    name: verify · publish
+  find-main-ci:
+    name: Require successful main CI for this commit
     runs-on: ubuntu-latest
-    timeout-minutes: 30
-
+    timeout-minutes: 65
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      run_id: ${{ steps.lookup.outputs.run_id }}
     steps:
-      - name: Checkout repository
+      - name: Wait for successful main CI on the exact tagged commit
+        id: lookup
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          TAG_SHA: ${{ github.sha }}
+        run: |
+          set -Eeuo pipefail
+          deadline=$((SECONDS + 3600))
+
+          while (( SECONDS < deadline )); do
+            if ! runs=$(gh api "repos/${REPOSITORY}/actions/workflows/ci.yml/runs?branch=main&head_sha=${TAG_SHA}&per_page=100"); then
+              echo "::error::Could not query main CI runs for ${TAG_SHA}; refusing to publish the release."
+              exit 1
+            fi
+
+            mapfile -t successful_runs < <(jq -r --arg sha "$TAG_SHA" '
+              [.workflow_runs[]
+               | select(.head_sha == $sha and .head_branch == "main" and .event == "push"
+                        and .status == "completed" and .conclusion == "success")]
+              | sort_by(.run_number, .run_attempt)
+              | reverse
+              | .[].id' <<< "$runs")
+
+            if (( ${#successful_runs[@]} > 0 )); then
+              run_id="${successful_runs[0]}"
+              printf 'run_id=%s\n' "$run_id" >> "$GITHUB_OUTPUT"
+              echo "Verified successful main CI run ${run_id} for tagged commit ${TAG_SHA}."
+              {
+                echo '### Release verification'
+                echo
+                echo "- Successful main CI run: [${run_id}](https://github.com/${REPOSITORY}/actions/runs/${run_id})"
+                echo "- Verified commit: \`${TAG_SHA}\`"
+                echo '- The tag reuses the exact commit verification; no duplicate build or test suite was run.'
+              } >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+
+            active_count=$(jq --arg sha "$TAG_SHA" '[.workflow_runs[]
+              | select(.head_sha == $sha and .head_branch == "main" and .event == "push"
+                       and .status != "completed")] | length' <<< "$runs")
+            if (( active_count > 0 )); then
+              echo "Waiting for main CI for ${TAG_SHA} to complete successfully..."
+            else
+              failed_run=$(jq -r --arg sha "$TAG_SHA" '
+                [.workflow_runs[]
+                 | select(.head_sha == $sha and .head_branch == "main" and .event == "push"
+                          and .status == "completed" and .conclusion != "success")]
+                | sort_by(.run_number, .run_attempt)
+                | last
+                | if . == null then empty else "\(.id)\t\(.conclusion)" end' <<< "$runs")
+              if [[ -n "$failed_run" ]]; then
+                IFS=$'\t' read -r failed_id failed_conclusion <<< "$failed_run"
+                echo "::error::Main CI for ${TAG_SHA} failed (run ${failed_id}, conclusion ${failed_conclusion}); refusing to publish the release."
+                exit 1
+              fi
+              echo "No main push CI run is visible yet for ${TAG_SHA}; waiting..."
+            fi
+            sleep 30
+          done
+
+          echo "::error::Timed out after 60 minutes waiting for successful main CI for ${TAG_SHA}."
+          exit 1
+
+  publish-release:
+    name: Publish verified tag
+    needs:
+      - find-main-ci
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout exact release tag
         uses: actions/checkout@v7
         with:
+          ref: refs/tags/${{ github.ref_name }}
           fetch-depth: 0
-
-      - name: Setup Go
-        uses: actions/setup-go@v7
-        with:
-          go-version-file: go.mod
-          cache: true
-
-      - name: Verify (build, vet, race tests)
-        run: |
-          go build ./...
-          go vet ./...
-          go test -race -count=1 ./...
+          persist-credentials: false
 
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CI_RUN_ID: ${{ needs.find-main-ci.outputs.run_id }}
         run: |
+          set -Eeuo pipefail
+          flags=()
           # A hyphen in the tag (v1.0.0-rc1) marks a SemVer pre-release.
-          flags=""
-          case "$GITHUB_REF_NAME" in *-*) flags="--prerelease" ;; esac
-          gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes --title "$GITHUB_REF_NAME" $flags
+          case "$GITHUB_REF_NAME" in *-*) flags+=(--prerelease) ;; esac
+          gh release create "$GITHUB_REF_NAME" \
+            --verify-tag \
+            --generate-notes \
+            --title "$GITHUB_REF_NAME" \
+            "${flags[@]}"
+          echo "Published ${GITHUB_REF_NAME} after successful main CI run ${CI_RUN_ID}." >> "$GITHUB_STEP_SUMMARY"
