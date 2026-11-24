@@ -274,3 +274,82 @@ func TestHashPayloadBytesRejectsTextMarshalerMapKeys(t *testing.T) {
 		t.Fatalf("custom JSON marshaler was rejected: %v", err)
 	}
 }
+
+type (
+	idempotencyNamedStringA string
+	idempotencyNamedStringB string
+)
+
+func TestHashRequestPayloadInterfaceTypeIdentityAndCompatibility(t *testing.T) {
+	stringHash, err := hashRequestPayload[any]("7")
+	if err != nil {
+		t.Fatal(err)
+	}
+	intHash, err := hashRequestPayload[any](7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stringHash == intHash {
+		t.Fatal("string and int interface requests produced the same hash")
+	}
+	repeatedStringHash, err := hashRequestPayload[any]("7")
+	if err != nil || repeatedStringHash != stringHash {
+		t.Fatalf("same interface request hash = (%x, %v), want %x", repeatedStringHash, err, stringHash)
+	}
+
+	namedAHash, err := hashRequestPayload[any](idempotencyNamedStringA("7"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	namedBHash, err := hashRequestPayload[any](idempotencyNamedStringB("7"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if namedAHash == namedBHash {
+		t.Fatal("distinct named interface request types produced the same hash")
+	}
+	sliceHash, err := hashRequestPayload[any]([]int{7})
+	if err != nil {
+		t.Fatal(err)
+	}
+	arrayHash, err := hashRequestPayload[any]([1]int{7})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sliceHash == arrayHash {
+		t.Fatal("distinct unnamed interface request types produced the same hash")
+	}
+
+	legacyHash, err := hashPayloadBytes("7")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stringHash == legacyHash {
+		t.Fatal("interface request hash did not use the type-aware format")
+	}
+	concreteHash, err := hashRequestPayload("7")
+	if err != nil || concreteHash != legacyHash {
+		t.Fatalf("concrete request hash = (%x, %v), want legacy hash %x", concreteHash, err, legacyHash)
+	}
+	legacyEntry := IdempotencyEntry{RequestHash: hashPayloadString(legacyHash)}
+	if !requestHashConflict(legacyEntry, stringHash) {
+		t.Fatal("legacy untyped entry was accepted for an interface request")
+	}
+	if requestHashConflict(legacyEntry, concreteHash) {
+		t.Fatal("legacy entry was rejected for a concrete request with the same payload")
+	}
+
+	var nilInterface any
+	var typedNil *int
+	nilHash, err := hashRequestPayload[any](nilInterface)
+	if err != nil {
+		t.Fatal(err)
+	}
+	typedNilHash, err := hashRequestPayload[any](typedNil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if nilHash == typedNilHash {
+		t.Fatal("nil interface and typed nil pointer produced the same hash")
+	}
+}

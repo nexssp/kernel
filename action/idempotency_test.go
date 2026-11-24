@@ -413,3 +413,50 @@ func TestIdempotency_ReplaysTypedNilPointerAsNilInterface(t *testing.T) {
 		})
 	}
 }
+
+func TestIdempotency_InterfaceRequestMixedTypesConflict(t *testing.T) {
+	var calls atomic.Int32
+	act := action.New("idempotency.interface-type-conflict", func(_ context.Context, req any) (string, error) {
+		calls.Add(1)
+		switch req.(type) {
+		case string:
+			return "string", nil
+		case int:
+			return "int", nil
+		default:
+			return "unexpected", nil
+		}
+	}).Idempotent().Build()
+	ctx := ktest.IdempotencyContext(t, "interface-type-conflict-key")
+
+	got, err := act.Do(ctx, any("7"))
+	if err != nil || got != "string" {
+		t.Fatalf("first request = (%q, %v), want (string, nil)", got, err)
+	}
+	_, err = act.Do(ctx, any(7))
+	if xerr.KindFrom(err) != xerr.KindConflict {
+		t.Fatalf("mixed-type replay error = %v, want Conflict", err)
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("handler calls = %d, want 1", got)
+	}
+}
+
+func TestIdempotency_InterfaceRequestSameTypeReplays(t *testing.T) {
+	var calls atomic.Int32
+	act := action.New("idempotency.interface-same-type-replay", func(context.Context, any) (string, error) {
+		calls.Add(1)
+		return "cached", nil
+	}).Idempotent().Build()
+	ctx := ktest.IdempotencyContext(t, "interface-same-type-replay-key")
+
+	for range 2 {
+		got, err := act.Do(ctx, any("7"))
+		if err != nil || got != "cached" {
+			t.Fatalf("same-type request = (%q, %v), want (cached, nil)", got, err)
+		}
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("handler calls = %d, want 1", got)
+	}
+}

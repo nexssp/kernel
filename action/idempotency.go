@@ -266,7 +266,7 @@ func IdempotencyMiddleware[Req, Res any](store IdempotencyStore, cfg Idempotency
 				return zero, xerr.Validation("idempotency: a stable action namespace is required")
 			}
 
-			reqHash, hashErr := hashPayloadBytes(req)
+			reqHash, hashErr := hashRequestPayload(req)
 			if hashErr != nil {
 				var zero Res
 				return zero, xerr.BadRequest("idempotency: request payload cannot be hashed", hashErr)
@@ -580,6 +580,108 @@ func hashPayloadBytes(v any) ([32]byte, error) {
 		return [32]byte{}, fmt.Errorf("marshal request payload: %w", err)
 	}
 	return sha256.Sum256(b), nil
+}
+
+// hashRequestPayload adds stable dynamic type identity only when Req is an
+// interface, preserving the legacy digest for concrete request types.
+func hashRequestPayload[Req any](request Req) ([32]byte, error) {
+	payloadHash, err := hashPayloadBytes(request)
+	if err != nil {
+		return [32]byte{}, err
+	}
+	if reflect.TypeFor[Req]().Kind() != reflect.Interface {
+		return payloadHash, nil
+	}
+
+	material := []byte("kernel-idempotency-interface-request-v1")
+	value := any(request)
+	if value == nil {
+		material = append(material, 0)
+	} else {
+		material = append(material, 1)
+		material = appendStableTypeIdentity(material, reflect.TypeOf(value))
+	}
+	material = append(material, payloadHash[:]...)
+	return sha256.Sum256(material), nil
+}
+
+func appendStableTypeIdentity(dst []byte, typ reflect.Type) []byte {
+	if typ.Name() != "" {
+		dst = append(dst, 'N')
+		dst = appendTypeIdentityPart(dst, typ.PkgPath())
+		return appendTypeIdentityPart(dst, typ.Name())
+	}
+
+	dst = append(dst, 'K')
+	dst = appendTypeIdentityPart(dst, typ.Kind().String())
+	switch typ.Kind() {
+	case reflect.Pointer, reflect.Slice:
+		return appendStableTypeIdentity(dst, typ.Elem())
+	case reflect.Array:
+		dst = appendTypeIdentityInt(dst, typ.Len())
+		return appendStableTypeIdentity(dst, typ.Elem())
+	case reflect.Map:
+		dst = appendStableTypeIdentity(dst, typ.Key())
+		return appendStableTypeIdentity(dst, typ.Elem())
+	case reflect.Chan:
+		dst = appendTypeIdentityPart(dst, typ.ChanDir().String())
+		return appendStableTypeIdentity(dst, typ.Elem())
+	case reflect.Struct:
+		dst = appendTypeIdentityInt(dst, typ.NumField())
+		for field := range typ.Fields() {
+			dst = appendTypeIdentityPart(dst, field.PkgPath)
+			dst = appendTypeIdentityPart(dst, field.Name)
+			dst = appendTypeIdentityPart(dst, string(field.Tag))
+			if field.Anonymous {
+				dst = append(dst, 1)
+			} else {
+				dst = append(dst, 0)
+			}
+			dst = appendStableTypeIdentity(dst, field.Type)
+		}
+	case reflect.Func:
+		if typ.IsVariadic() {
+			dst = append(dst, 1)
+		} else {
+			dst = append(dst, 0)
+		}
+		dst = appendTypeIdentityInt(dst, typ.NumIn())
+		for input := range typ.Ins() {
+			dst = appendStableTypeIdentity(dst, input)
+		}
+		dst = appendTypeIdentityInt(dst, typ.NumOut())
+		for output := range typ.Outs() {
+			dst = appendStableTypeIdentity(dst, output)
+		}
+	case reflect.Interface:
+		dst = appendTypeIdentityInt(dst, typ.NumMethod())
+		for method := range typ.Methods() {
+			dst = appendTypeIdentityPart(dst, method.PkgPath)
+			dst = appendTypeIdentityPart(dst, method.Name)
+			dst = appendStableTypeIdentity(dst, method.Type)
+		}
+	case reflect.Invalid, reflect.Bool, reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32,
+		reflect.Int64, reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64,
+		reflect.Uintptr, reflect.Float32, reflect.Float64, reflect.Complex64, reflect.Complex128,
+		reflect.String, reflect.UnsafePointer:
+		return dst
+	}
+	return dst
+}
+
+func appendTypeIdentityPart(dst []byte, value string) []byte {
+	dst = appendTypeIdentityUint64(dst, uint64(len(value)))
+	return append(dst, value...)
+}
+
+func appendTypeIdentityInt(dst []byte, value int) []byte {
+	return appendTypeIdentityPart(dst, strconv.Itoa(value))
+}
+
+func appendTypeIdentityUint64(dst []byte, value uint64) []byte {
+	var encoded [8]byte
+	binary.BigEndian.PutUint64(encoded[:], value)
+	return append(dst, encoded[:]...)
 }
 
 type idempotencyMapVisit struct {
