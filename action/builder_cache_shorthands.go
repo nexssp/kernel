@@ -70,7 +70,7 @@ func (b *Builder[Req, Res]) Once() *Builder[Req, Res] {
 
 	b.meta.CacheTTL = -1
 
-	return b.UseWithDispatcherOnExecution(func(next Fn[Req, Res], _ HookDispatcher[Req, Res]) Fn[Req, Res] {
+	return b.UseOnExecution(func(next Fn[Req, Res]) Fn[Req, Res] {
 		return func(ctx context.Context, req Req) (Res, error) {
 			once.Do(func() {
 				defer func() {

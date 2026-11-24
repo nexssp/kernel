@@ -173,6 +173,44 @@ func TestIdempotentReplayRunsCustomAuthorizationMiddleware(t *testing.T) {
 	}
 }
 
+func TestIdempotentReplayRunsAuthorizationRegisteredAfterIdempotency(t *testing.T) {
+	allowed := true
+	var middlewareCalls, handlerCalls int
+	act := action.New("idem.custom-auth.after-idempotency", func(_ context.Context, _ struct{}) (string, error) {
+		handlerCalls++
+		return "ok", nil
+	}).IdempotentWithConfig(action.IdempotencyConfig{
+		Store: action.NewMemoryIdempotencyStore(time.Hour),
+	}).Use(func(next action.Fn[struct{}, string]) action.Fn[struct{}, string] {
+		return func(ctx context.Context, req struct{}) (string, error) {
+			middlewareCalls++
+			if !allowed {
+				return "", xerr.Forbidden("authorization revoked")
+			}
+			return next(ctx, req)
+		}
+	}).Build()
+	ctx := xctx.WithIdempotencyKey(context.Background(), "custom-auth-after-idempotency-key")
+
+	for range 2 {
+		if got, err := act.Do(ctx, struct{}{}); err != nil || got != "ok" {
+			t.Fatalf("allowed call = %q / %v, want ok / nil", got, err)
+		}
+	}
+	if middlewareCalls != 2 || handlerCalls != 1 {
+		t.Fatalf("middleware/handler calls after replay = %d/%d, want 2/1", middlewareCalls, handlerCalls)
+	}
+
+	allowed = false
+	_, err := act.Do(ctx, struct{}{})
+	if xerr.KindFrom(err) != xerr.KindForbidden {
+		t.Fatalf("revoked replay error = %v, want Forbidden", err)
+	}
+	if middlewareCalls != 3 || handlerCalls != 1 {
+		t.Fatalf("middleware/handler calls after denied replay = %d/%d, want 3/1", middlewareCalls, handlerCalls)
+	}
+}
+
 func TestUseOnExecutionSkipsSuccessfulIdempotencyReplay(t *testing.T) {
 	var middlewareCalls, handlerCalls int
 	act := action.New("idem.execution-only.replay", func(_ context.Context, _ struct{}) (string, error) {
