@@ -25,6 +25,7 @@ type Mutex interface {
 
 // Exclusive wraps an action with a standard distributed lock.
 // If the lock cannot be acquired, ErrLocked is returned immediately.
+// An empty key is rejected rather than bypassing the lock.
 func (b *Builder[Req, Res]) Exclusive(m Mutex, ttl time.Duration, keyFn func(Req) string) *Builder[Req, Res] {
 	return b.Use(func(next Fn[Req, Res]) Fn[Req, Res] {
 		return func(ctx context.Context, req Req) (Res, error) {
@@ -35,7 +36,7 @@ func (b *Builder[Req, Res]) Exclusive(m Mutex, ttl time.Duration, keyFn func(Req
 
 			key := keyFn(req)
 			if key == "" {
-				return next(ctx, req)
+				return zero, xerr.BadRequest("distributed lock key cannot be empty")
 			}
 
 			lockKey := b.meta.Name + ":lock:" + key

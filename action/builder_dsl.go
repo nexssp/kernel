@@ -62,7 +62,7 @@ func (b *Builder[Req, Res]) applyResilience(m DSLModifiers) *Builder[Req, Res] {
 	if m.Concurrency > 0 {
 		b = b.ConcurrencyLimit(m.Concurrency)
 	}
-	if m.Timeout > 0 {
+	if m.Timeout != 0 {
 		b = b.Timeout(m.Timeout)
 	}
 	if m.RetryMax > 0 {

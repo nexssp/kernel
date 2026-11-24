@@ -27,8 +27,7 @@ const (
 	KindCircuitBreaker       Kind = "CircuitBreaker"
 )
 
-// allKinds is the canonical list. AllKinds returns a view into it, so
-// callers must not mutate the returned slice.
+// allKinds is the canonical list. AllKinds returns a copy of it by value.
 var allKinds = [...]Kind{
 	KindBadRequest, KindUnauthorized, KindForbidden, KindNotFound,
 	KindConflict, KindValidation, KindTooManyRequests, KindTimeout,
@@ -36,6 +35,7 @@ var allKinds = [...]Kind{
 	KindRateLimit, KindCanceled, KindDatabase, KindShutdown, KindCircuitBreaker,
 }
 
+// AllKinds returns a copy of the canonical error kinds.
 func AllKinds() [17]Kind { return allKinds }
 
 // KindFrom extracts the Kind from an error. Defaults to KindInternal

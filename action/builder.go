@@ -10,6 +10,8 @@ import (
 	"runtime"
 	"slices"
 	"time"
+
+	"github.com/nexssp/kernel/xerr"
 )
 
 // Builder[Req, Res] is the fluent construction API for an action.
@@ -184,8 +186,20 @@ func (b *Builder[Req, Res]) UseWithDispatcher(m DispatcherMiddleware[Req, Res]) 
 
 // ── Built-in middleware shorthands ────────────────────────────────────────────
 
+// Timeout adds middleware for positive durations. Zero adds no middleware and
+// does not remove a timeout added earlier, though it resets timeout metadata;
+// negative durations invalidate the builder configuration.
 func (b *Builder[Req, Res]) Timeout(d time.Duration) *Builder[Req, Res] {
 	b.meta.Timeout = d
+	if d < 0 {
+		if b.validationErr == nil {
+			b.validationErr = xerr.Validation("timeout must not be negative")
+		}
+		return b
+	}
+	if d == 0 {
+		return b
+	}
 	return b.Use(TimeoutMiddleware[Req, Res](d))
 }
 

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/nexssp/kernel/action"
+	"github.com/nexssp/kernel/xerr"
 )
 
 type standardLockRecorder struct {
@@ -66,6 +67,23 @@ func TestExclusiveContentionReturnsErrLockedWithoutRunningHandler(t *testing.T) 
 	}
 	if len(mutex.unlockKeys) != 0 {
 		t.Fatalf("Unlock keys = %v, want none", mutex.unlockKeys)
+	}
+}
+
+func TestExclusiveEmptyKeyRejectsBeforeLockOrHandler(t *testing.T) {
+	mutex := &standardLockRecorder{acquired: true}
+	runs := 0
+	act := action.New("invoice.settle", func(_ context.Context, _ int) (string, error) {
+		runs++
+		return "settled", nil
+	}).Exclusive(mutex, time.Minute, func(int) string { return "" }).Build()
+
+	_, err := act.Do(context.Background(), 1)
+	if kind := xerr.KindFrom(err); kind != xerr.KindBadRequest {
+		t.Fatalf("Do() error kind = %q, want %q (err: %v)", kind, xerr.KindBadRequest, err)
+	}
+	if runs != 0 || len(mutex.tryKeys) != 0 || len(mutex.unlockKeys) != 0 {
+		t.Fatalf("empty key must not run or touch the lock: runs=%d tryKeys=%v unlockKeys=%v", runs, mutex.tryKeys, mutex.unlockKeys)
 	}
 }
 

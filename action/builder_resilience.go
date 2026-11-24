@@ -27,10 +27,10 @@ type ResilienceConfig struct {
 	Adaptive       *AdaptiveConfig
 }
 
-// ApplyResilience validates cfg before mutating the builder, then installs
-// policies in one deterministic order: concurrency admission, breaker (or
-// Adaptive), retry loop, per-attempt timeout, then any existing inner
-// middleware and the handler. Call it at most once per builder.
+// ApplyResilience validates cfg before mutating the builder. Retry and
+// per-attempt timeout are nested inside middleware already registered on the
+// builder; a configured breaker wraps that chain, and configured concurrency
+// admission is outermost. Call it at most once per builder.
 func (b *Builder[Req, Res]) ApplyResilience(cfg ResilienceConfig) error {
 	if b == nil {
 		return xerr.Validation("resilience: builder is nil")

@@ -110,8 +110,20 @@ func AdaptiveLoadShedding[Req, Res any](stats SystemStats, cfg LoadShedConfig, p
 	}
 }
 
-// TimeoutMiddleware uses standard Middleware.
+// TimeoutMiddleware applies a deadline to the function it wraps. Zero disables
+// it; a negative duration returns a validation error when the action is invoked.
 func TimeoutMiddleware[Req, Res any](d time.Duration) Middleware[Req, Res] {
+	if d < 0 {
+		return func(_ Fn[Req, Res]) Fn[Req, Res] {
+			return func(_ context.Context, _ Req) (Res, error) {
+				var zero Res
+				return zero, xerr.Validation("timeout must not be negative")
+			}
+		}
+	}
+	if d == 0 {
+		return func(next Fn[Req, Res]) Fn[Req, Res] { return next }
+	}
 	return func(next Fn[Req, Res]) Fn[Req, Res] {
 		return func(ctx context.Context, req Req) (res Res, err error) {
 			ctx, cancel := context.WithTimeout(ctx, d)

@@ -8,6 +8,8 @@ import (
 	"context"
 	"sync"
 	"time"
+
+	"github.com/nexssp/kernel/xerr"
 )
 
 // Cache adds a multi-layer cache to the action.
@@ -46,13 +48,14 @@ func (b *Builder[Req, Res]) Cache(ttl time.Duration, keyFn func(Req) string, lay
 	}))
 }
 
-// Once caches the result of the first successful execution and returns it
+// Once caches the result of the first execution and returns it
 // for all subsequent calls. Errors are also cached – the action will not retry.
 // Use only for idempotent, read‑only actions (e.g., static config generation).
 //
-// The first caller determines the cached result; later callers receive the same
-// value or error without re‑executing the handler. Context cancellation is
-// ignored after the first execution.
+// The first execution uses its caller's context and determines the cached
+// result; later callers receive it without re-executing the handler.
+// If the handler panics, the action's panic recovery runs and its Internal error
+// is cached for later calls.
 //
 // Example:
 //
@@ -70,17 +73,19 @@ func (b *Builder[Req, Res]) Once() *Builder[Req, Res] {
 	return b.UseWithDispatcher(func(next Fn[Req, Res], _ HookDispatcher[Req, Res]) Fn[Req, Res] {
 		return func(ctx context.Context, req Req) (Res, error) {
 			once.Do(func() {
+				defer func() {
+					if r := recover(); r != nil {
+						var zero Res
+						cachedRes, cachedErr = zero, xerr.PanicRecovery(r)
+						panic(r)
+					}
+				}()
 				cachedRes, cachedErr = next(ctx, req)
 			})
 			return cachedRes, cachedErr
 		}
 	})
 }
-
-// builder_dedup.go — Request deduplication shorthands on Builder[Req, Res].
-//
-// Both methods infer Req and Res from the builder receiver.
-// Callers write zero type annotations.
 
 // Dedup prevents concurrent identical requests from executing multiple times.
 // All callers with the same key block until the first one completes,

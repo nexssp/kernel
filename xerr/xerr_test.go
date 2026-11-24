@@ -217,6 +217,16 @@ func TestTypedNilAppErrorClassifiersAreSafe(t *testing.T) {
 	}
 }
 
+func TestAllKinds_ReturnsIndependentCopy(t *testing.T) {
+	t.Parallel()
+
+	first := xerr.AllKinds()
+	first[0] = "mutated"
+	if got := xerr.AllKinds()[0]; got != xerr.KindBadRequest {
+		t.Fatalf("mutating AllKinds result changed canonical first kind to %q", got)
+	}
+}
+
 type wrappedTypedNilAppError struct {
 	err error
 }

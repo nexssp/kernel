@@ -41,7 +41,7 @@ func InvokeAny(ctx context.Context, act, req any) (any, error) {
 }
 
 func (a *BuiltAction[Req, Res]) DoAny(ctx context.Context, req any) (any, error) {
-	// ⚡ 1 CPU cycle: direct type match (0 allocs)
+	// Keep typed requests on the direct execution path.
 	if typed, ok := req.(Req); ok {
 		return a.Do(ctx, typed)
 	}
@@ -108,8 +108,8 @@ func Coerce[T any](input any) (T, error) {
 	return target, err
 }
 
-// Assign writes 'source' into the pointer 'target' using zero-allocation fast paths
-// before falling back to JSON serialization. 'target' MUST be a non-nil pointer.
+// Assign writes source into target using direct assignment, conversion, or JSON decoding.
+// target must be a non-nil pointer.
 func Assign(target, source any) error {
 	if source == nil || target == nil {
 		return nil

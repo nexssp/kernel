@@ -389,6 +389,92 @@ func TestOnce(t *testing.T) {
 	}
 }
 
+func TestOnce_PanicCachesErrorAndPreservesPanicHook(t *testing.T) {
+	t.Parallel()
+
+	calls := 0
+	var panicHooks atomic.Int32
+	act := action.New("once.panic", func(_ context.Context, _ string) (string, error) {
+		calls++
+		panic("once handler failed")
+	}).
+		Once().
+		AnyHook(action.AnyHook{
+			OnPanic: func(_ context.Context, _, _ any, _ *action.Meta) {
+				panicHooks.Add(1)
+			},
+		}).
+		Build()
+
+	for i := range 3 {
+		res, err := act.Do(context.Background(), "req")
+		if res != "" {
+			t.Fatalf("call %d: result = %q, want empty string", i, res)
+		}
+		if kind := xerr.KindFrom(err); kind != xerr.KindInternal {
+			t.Fatalf("call %d: error kind = %q, want %q (err: %v)", i, kind, xerr.KindInternal, err)
+		}
+	}
+	if calls != 1 {
+		t.Fatalf("handler ran %d times, want once", calls)
+	}
+	if got := panicHooks.Load(); got != 1 {
+		t.Fatalf("panic hook ran %d times, want once for the original panic", got)
+	}
+}
+
+func TestOnce_UsesFirstCallerContext(t *testing.T) {
+	t.Parallel()
+
+	type onceContextKey struct{}
+	key := onceContextKey{}
+	calls := 0
+	act := action.New("once.context", func(ctx context.Context, _ string) (string, error) {
+		calls++
+		if got := ctx.Value(key); got != "first" {
+			return "", fmt.Errorf("context value = %v, want first", got)
+		}
+		if deadline, ok := ctx.Deadline(); !ok || time.Until(deadline) <= 0 {
+			return "", errors.New("first caller deadline was not preserved")
+		}
+		return "first", nil
+	}).Once().Build()
+
+	firstCtx, cancel := context.WithTimeout(context.WithValue(context.Background(), key, "first"), time.Minute)
+	defer cancel()
+	for _, ctx := range []context.Context{firstCtx, context.WithValue(context.Background(), key, "later")} {
+		got, err := act.Do(ctx, "req")
+		if err != nil || got != "first" {
+			t.Fatalf("Do() = %q, %v; want first, nil", got, err)
+		}
+	}
+	if calls != 1 {
+		t.Fatalf("handler ran %d times, want once", calls)
+	}
+}
+
+func TestOnce_CachesFirstCallCancellation(t *testing.T) {
+	t.Parallel()
+
+	calls := 0
+	act := action.New("once.cancel", func(ctx context.Context, _ string) (string, error) {
+		calls++
+		return "", ctx.Err()
+	}).Once().Build()
+
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	for _, ctx := range []context.Context{canceledCtx, context.Background()} {
+		_, err := act.Do(ctx, "req")
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Do() error = %v, want context.Canceled", err)
+		}
+	}
+	if calls != 1 {
+		t.Fatalf("handler ran %d times, want once", calls)
+	}
+}
+
 func TestOnce_ErrorCaching(t *testing.T) {
 	t.Parallel()
 	failCount := 0
