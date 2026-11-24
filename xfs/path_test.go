@@ -115,8 +115,10 @@ func TestRel_WindowsReservedNames(t *testing.T) {
 		"PRN", "prn", "AUX", "aux", "Aux", "NUL", "nul", "Nul",
 		// Case variants for COM.
 		"COM0", "com0", "COM1", "com1", "Com1", "COM9", "com9",
+		"COM\u00B9", "com\u00B2", "COM\u00B3", "COM\u00B9.txt", "foo/COM\u00B2", "COM\u00B3 ",
 		// Case variants for LPT.
 		"LPT0", "lpt0", "LPT1", "lpt1", "Lpt1", "LPT9", "lpt9",
+		"LPT\u00B9", "lpt\u00B2", "LPT\u00B3", "LPT\u00B9.txt", "foo/LPT\u00B2", "LPT\u00B3 ",
 		// Documented but commonly omitted.
 		"CONIN$", "conin$", "CONOUT$", "conout$",
 		"CLOCK$", "clock$", "Clock$",

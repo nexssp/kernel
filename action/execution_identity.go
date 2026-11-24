@@ -3,6 +3,7 @@ package action
 import (
 	"crypto/sha256"
 	"strconv"
+	"strings"
 
 	"github.com/nexssp/kernel/xerr"
 )
@@ -60,12 +61,34 @@ func (id ExecutionIdentity) BindingEqual(other ExecutionIdentity) bool {
 		id.ContractDigest == other.ContractDigest
 }
 
-// JournalNamespace separates successor generations in a step journal.
+const journalNamespaceEscape = "\x00execution-id:"
+
+// JournalNamespace uniquely identifies an execution generation in a journal.
+// Generation-zero IDs that overlap generated keys are escaped into a reserved
+// form. The returned namespace may contain NUL bytes.
 func (id ExecutionIdentity) JournalNamespace() string {
 	if id.Generation == 0 {
+		// Preserve ordinary keys while escaping IDs that overlap generated keys.
+		if needsJournalNamespaceEscape(id.ExecutionID) {
+			return journalNamespaceEscape + strconv.Itoa(len(id.ExecutionID)) + ":" + id.ExecutionID + "\x00"
+		}
 		return id.ExecutionID
 	}
 	return id.ExecutionID + "\x00generation:" + strconv.FormatUint(id.Generation, 10)
+}
+
+func needsJournalNamespaceEscape(executionID string) bool {
+	if strings.HasPrefix(executionID, journalNamespaceEscape) {
+		return true
+	}
+
+	const generationMarker = "\x00generation:"
+	_, generationText, found := strings.CutLast(executionID, generationMarker)
+	if !found {
+		return false
+	}
+	generation, err := strconv.ParseUint(generationText, 10, 64)
+	return err == nil && generation > 0 && strconv.FormatUint(generation, 10) == generationText
 }
 
 // Validate checks identity invariants before persistence.

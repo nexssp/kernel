@@ -18,7 +18,8 @@ import (
 // safe for concurrent use. RecordStep errors may be ambiguous: an
 // implementation can commit a payload and then return an error, so callers
 // must not treat a failed write as proof that no external side effect or
-// journal record took effect.
+// journal record took effect. Execution IDs are opaque strings and may contain
+// NUL bytes; implementations must preserve them exactly.
 type Journal interface {
 	GetStep(ctx context.Context, executionID, stepName string) (data []byte, ok bool, err error)
 	RecordStep(ctx context.Context, executionID, stepName string, payload []byte) error

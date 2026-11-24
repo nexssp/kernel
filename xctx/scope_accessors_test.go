@@ -164,6 +164,68 @@ func TestWithRoles_Resetting(t *testing.T) {
 	}
 }
 
+func TestHasRole_EmptyRequiredFailsClosed(t *testing.T) {
+	t.Parallel()
+	ctx, _, release := xctx.NewScope(context.Background())
+	defer release()
+	if xctx.HasRole(ctx, "") {
+		t.Fatal("HasRole matched the empty primary role")
+	}
+	if xctx.HasAnyRole(ctx, "") {
+		t.Fatal("HasAnyRole matched an empty required role")
+	}
+	if xctx.SnapshotFrom(ctx).HasRole("") {
+		t.Fatal("snapshot HasRole matched the empty primary role")
+	}
+
+	ctx = xctx.WithRoles(ctx, []string{""})
+	if xctx.HasRole(ctx, "") || xctx.HasAnyRole(ctx, "") || xctx.SnapshotFrom(ctx).HasRole("") {
+		t.Fatal("empty role entry satisfied an empty required role")
+	}
+}
+
+func TestHasPermission_EmptyRequiredFailsClosed(t *testing.T) {
+	t.Parallel()
+	ctx, _, release := xctx.NewScope(context.Background())
+	defer release()
+
+	ctx = xctx.WithPermissions(ctx, []string{""})
+	if xctx.HasPermission(ctx, "") || xctx.SnapshotFrom(ctx).HasPermission("") {
+		t.Fatal("empty required permission matched an empty permission entry")
+	}
+
+	ctx = xctx.WithPermissions(ctx, []string{"*"})
+	if xctx.HasPermission(ctx, "") || xctx.SnapshotFrom(ctx).HasPermission("") {
+		t.Fatal("empty required permission matched wildcard grant")
+	}
+}
+
+func TestHasFeature_EmptyRequiredFailsClosed(t *testing.T) {
+	t.Parallel()
+	ctx, _, release := xctx.NewScope(context.Background())
+	defer release()
+
+	ctx = xctx.WithFeatures(ctx, []string{""})
+	if xctx.HasFeature(ctx, "") || xctx.SnapshotFrom(ctx).HasFeature("") {
+		t.Fatal("empty required feature matched an empty feature entry")
+	}
+
+	ctx = xctx.WithFeatures(ctx, []string{"all"})
+	if xctx.HasFeature(ctx, "") || xctx.SnapshotFrom(ctx).HasFeature("") {
+		t.Fatal("empty required feature matched 'all' grant")
+	}
+
+	ctx = xctx.WithFeatures(ctx, []string{"*"})
+	if xctx.HasFeature(ctx, "") || xctx.SnapshotFrom(ctx).HasFeature("") {
+		t.Fatal("empty required feature matched wildcard grant")
+	}
+
+	ctx = xctx.WithRoles(ctx, []string{"system_admin"})
+	if xctx.HasFeature(ctx, "") || xctx.SnapshotFrom(ctx).HasFeature("") {
+		t.Fatal("empty required feature matched system_admin")
+	}
+}
+
 func TestScopeAccessorsConcurrentMutationAndRead(t *testing.T) {
 	t.Parallel()
 	ctx, _, cleanup := xctx.NewScope(context.Background())

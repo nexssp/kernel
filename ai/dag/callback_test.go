@@ -198,6 +198,39 @@ func TestLayerCallback_ConsumedByOutermostOnly(t *testing.T) {
 	}
 }
 
+func TestLayerCallback_DynamicOutermostConsumesBeforeNestedLayered(t *testing.T) {
+	inner := mustGraph(t, func(b *Builder) *Builder {
+		return b.
+			AddNode("inner-first", "inner_first_out", echo("first")).
+			AddNode("inner-second", "inner_second_out", echo("second")).
+			AddEdge("inner-first", "inner-second")
+	})
+	outer := mustGraph(t, func(b *Builder) *Builder {
+		return b.
+			AddNode("inner", "inner_out", inner.AsAction().Build()).
+			AddConditionalEdge("inner", func(context.Context, ReadState) (string, error) {
+				return "end", nil
+			})
+	})
+
+	var calls int
+	ctx := WithLayerCallback(context.Background(), func(context.Context, int, *State) error {
+		calls++
+		return nil
+	})
+	state := AcquireState()
+	defer state.Release()
+
+	final, err := outer.Execute(ctx, state.AsRead())
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	defer final.Release()
+	if calls != 0 {
+		t.Fatalf("layer callback fired %d times in dynamic execution, want 0", calls)
+	}
+}
+
 func TestSuspend_MatchesErrSuspendedAndCarriesPayload(t *testing.T) {
 	err := Suspend("awaiting approval", map[string]any{"amount": 12000})
 

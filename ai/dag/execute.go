@@ -11,38 +11,35 @@ import (
 
 // Execute runs the DAG.
 //
-// Two execution modes, selected by the compiled graph's shape:
+// Execution mode is selected by the compiled graph's shape:
 //
-//   - Layer mode (default). Nodes are grouped into topological layers
-//     by the compiler. Each layer runs concurrently with errgroup;
-//     layers run sequentially. Resume-from-failure skips any node
-//     whose output key is already present in initialState.
+//   - Layer mode (default) groups nodes into topological layers. Layers run
+//     sequentially, with nodes within each layer running concurrently. On
+//     resume, nodes whose output keys are already in initialState are skipped.
+//   - Dynamic mode is selected when the graph has conditional edges. The engine
+//     follows RouterFunc decisions from entryID until a router returns "" or
+//     "end", or maxSteps is exceeded. Layers are ignored. Outputs in
+//     initialState are skipped on first visit; revisited nodes run again and
+//     replace their output. Routers should be deterministic from persisted
+//     state and stable graph configuration when a resumed run must follow the
+//     same path.
 //
-//   - Dynamic mode (when the DAG has at least one conditional edge).
-//     The engine walks from entryID, one node per step, following
-//     RouterFunc decisions until a router returns "" or "end", or
-//     until maxSteps is exceeded. Layers are ignored. Each Execute starts
-//     at entryID: actions whose outputs are in initialState are skipped on
-//     their first visit. A node revisited during this execution runs again and
-//     replaces its output; routers are reevaluated after each visit. Routers should be
-//     deterministic from persisted state and stable graph configuration
-//     when a resumed run must follow the same path.
+// WithLayerCallback runs after each completed layer in layer mode. A dynamic
+// DAG consumes any attached callback without invoking it, so nested layer-mode
+// DAGs do not fire the outermost callback. Use a Journal (see action.Durable)
+// to checkpoint dynamic DAGs.
 //
-// Layer callback: attach with WithLayerCallback. In layer mode it
-// fires once per completed layer. In dynamic mode it is not fired —
-// there are no layers to checkpoint. Callers that need checkpointing
-// for dynamic DAGs must use a Journal (see action.Durable) instead.
-// The callback is consumed by the outermost DAG that sees it, so
-// nested DAGs never fire it twice.
-//
-// On any error the returned *State is non-nil and owns every node
-// output produced so far. The caller must Release it.
+// On any error the returned non-nil state owns outputs produced so far. The
+// caller must Release it.
 func (d *DAG) Execute(ctx context.Context, initialState ReadState) (*State, error) {
 	if d == nil {
 		return nil, errors.New("graph: nil DAG")
 	}
 
 	if d.conditionalEdges != nil {
+		if LayerCallbackFromCtx(ctx) != nil {
+			ctx = markCallbackConsumed(ctx)
+		}
 		return d.executeDynamic(ctx, initialState)
 	}
 

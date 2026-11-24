@@ -23,6 +23,12 @@ func isReservedName(name string) bool {
 			return name[3] >= '0' && name[3] <= '9'
 		}
 		return false
+	case 5:
+		// Windows reserves only superscript 1, 2, and 3 for COM/LPT names.
+		if strings.EqualFold(name[:3], "com") || strings.EqualFold(name[:3], "lpt") {
+			return name[3:] == "\u00B9" || name[3:] == "\u00B2" || name[3:] == "\u00B3"
+		}
+		return false
 	case 6:
 		return strings.EqualFold(name, "conin$") ||
 			strings.EqualFold(name, "clock$")

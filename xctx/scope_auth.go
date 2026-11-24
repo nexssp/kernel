@@ -5,8 +5,8 @@ import (
 	"slices"
 )
 
-// HasRole reports whether the scope has the given role, either as its
-// primary Role or anywhere in the Roles slice.
+// HasRole reports whether the scope contains the required role. An empty
+// required role never matches.
 func HasRole(ctx context.Context, required string) bool {
 	s := lockScopeForRead(ctx)
 	if s == nil {
@@ -33,6 +33,7 @@ func HasAnyRole(ctx context.Context, allowed ...string) bool {
 }
 
 // HasPermission reports whether the scope grants perm or the wildcard "*".
+// An empty required permission never matches.
 func HasPermission(ctx context.Context, perm string) bool {
 	s := lockScopeForRead(ctx)
 	if s == nil {
@@ -44,7 +45,7 @@ func HasPermission(ctx context.Context, perm string) bool {
 
 // HasFeature reports whether the scope has the given feature flag
 // enabled. system_admin always passes; "all" and "*" are treated as
-// wildcards.
+// wildcards. An empty required feature never matches.
 func HasFeature(ctx context.Context, feature string) bool {
 	s := lockScopeForRead(ctx)
 	if s == nil {
@@ -73,10 +74,16 @@ func (snapshot ScopeSnapshot) HasFeature(feature string) bool {
 }
 
 func hasRole(role string, roles []string, required string) bool {
+	if required == "" {
+		return false
+	}
 	return role == required || slices.Contains(roles, required)
 }
 
 func hasPermission(permissions []string, permission string) bool {
+	if permission == "" {
+		return false
+	}
 	for _, candidate := range permissions {
 		if candidate == permission || candidate == "*" {
 			return true
@@ -86,6 +93,9 @@ func hasPermission(permissions []string, permission string) bool {
 }
 
 func hasFeature(role string, roles, features []string, feature string) bool {
+	if feature == "" {
+		return false
+	}
 	if hasRole(role, roles, "system_admin") {
 		return true
 	}

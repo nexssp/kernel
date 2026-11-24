@@ -2,6 +2,7 @@ package action
 
 import (
 	"errors"
+	"strconv"
 	"testing"
 
 	"github.com/nexssp/kernel/xerr"
@@ -92,6 +93,25 @@ func TestExecutionIdentityBinding(t *testing.T) {
 	}
 	if err := differentGeneration.Validate(); err != nil {
 		t.Fatalf("forced-resume generation should validate: %v", err)
+	}
+}
+
+func TestExecutionIdentityJournalNamespaceAvoidsCollision(t *testing.T) {
+	base := ExecutionIdentity{ExecutionID: "exec-1"}
+	successor := ExecutionIdentity{ExecutionID: "exec-1", Generation: 1}
+	zeroGeneration := ExecutionIdentity{ExecutionID: successor.JournalNamespace()}
+
+	if got, want := base.JournalNamespace(), "exec-1"; got != want {
+		t.Fatalf("ordinary generation-zero namespace = %q, want %q", got, want)
+	}
+	if zeroGeneration.JournalNamespace() == successor.JournalNamespace() {
+		t.Fatalf("generation-zero ID collided with successor namespace %q", successor.JournalNamespace())
+	}
+
+	prefixedID := journalNamespaceEscape + "literal"
+	want := journalNamespaceEscape + strconv.Itoa(len(prefixedID)) + ":" + prefixedID + "\x00"
+	if got := (ExecutionIdentity{ExecutionID: prefixedID}).JournalNamespace(); got != want {
+		t.Fatalf("escaped prefix namespace = %q, want %q", got, want)
 	}
 }
 

@@ -77,21 +77,19 @@ func (d *DAG) AsAction() *action.Builder[ReadState, *State] {
 	}).Tag("graph", "orchestration")
 }
 
-// executeDynamic walks the graph node by node, following conditional
-// edges until a router returns "" or "end", or until maxSteps is
-// exceeded.
+// executeDynamic walks the graph node by node, following conditional edges
+// until a router returns "" or "end", or maxSteps is exceeded.
 //
-// The starting node is d.entryID. Actions whose outputs were in
-// initialState are skipped on their first visit; revisits run the action
-// and replace its output, so routers see the cumulative result of the path.
+// Execution starts at d.entryID. Outputs already in initialState are skipped on
+// first visit; revisited nodes run again and replace their output so routers
+// see the cumulative path state.
 //
-// The step limit is a hard bound: a router that keeps returning the
-// same target terminates with xerr.Timeout rather than looping forever.
-// The default limit is 32 when maxSteps is 0 or negative.
+// The default step limit is 32 when maxSteps is not positive. A router that
+// keeps returning the same target terminates with xerr.Timeout.
 //
-// LayerCallback is not fired: dynamic execution has no layers to
-// checkpoint. ErrSuspended propagates intact, but no state is persisted
-// on the callback's behalf; use action.Durable per node instead.
+// Dynamic execution does not invoke layer callbacks. Execute consumes an
+// attached callback before nested DAGs run. ErrSuspended propagates intact, but
+// no callback checkpoint is persisted; use action.Durable per node instead.
 func (d *DAG) executeDynamic(ctx context.Context, initialState ReadState) (*State, error) {
 	currentState := initialState.Clone()
 
