@@ -263,6 +263,8 @@ func TestStream_HandlerPanicInDo(t *testing.T) {
 	t.Parallel()
 
 	var afterHookRan atomic.Bool
+	var recovered any
+	var callbackOrder []string
 
 	stream := action.NewStream("test.init.panic", func(_ context.Context, _ struct{}) (iter.Seq2[int, error], error) {
 		panic("panic_during_init")
@@ -271,6 +273,25 @@ func TestStream_HandlerPanicInDo(t *testing.T) {
 			if err != nil {
 				afterHookRan.Store(true)
 			}
+			callbackOrder = append(callbackOrder, "typed-after")
+		},
+	})
+	stream.AddAnyHook(action.AnyHook{
+		OnPanic: func(_ context.Context, _, value any, _ *action.Meta) {
+			recovered = value
+			callbackOrder = append(callbackOrder, "panic")
+		},
+		OnError: func(_ context.Context, _ any, err error, _ *action.Meta) {
+			if err == nil {
+				t.Error("OnError received nil for a recovered panic")
+			}
+			callbackOrder = append(callbackOrder, "error")
+		},
+		After: func(_ context.Context, _, _ any, err error, _ *action.Meta) {
+			if err == nil {
+				t.Error("AnyHook.After received nil for a recovered panic")
+			}
+			callbackOrder = append(callbackOrder, "any-after")
 		},
 	})
 
@@ -281,8 +302,15 @@ func TestStream_HandlerPanicInDo(t *testing.T) {
 	if xerr.KindFrom(err) != xerr.KindInternal {
 		t.Fatalf("expected KindInternal, got: %v", err)
 	}
+	if recovered != "panic_during_init" {
+		t.Fatalf("OnPanic received %v, want panic_during_init", recovered)
+	}
 	if !afterHookRan.Load() {
 		t.Fatal("After hook was not executed on init panic")
+	}
+	wantOrder := []string{"panic", "error", "any-after", "typed-after"}
+	if !reflect.DeepEqual(callbackOrder, wantOrder) {
+		t.Fatalf("callback order = %v, want %v", callbackOrder, wantOrder)
 	}
 }
 
@@ -302,5 +330,41 @@ func TestCollectStream_GeneratorPanicCaptured(t *testing.T) {
 	}
 	if xerr.KindFrom(err) != xerr.KindInternal {
 		t.Fatalf("expected KindInternal error, got: %v", err)
+	}
+}
+
+func TestStream_ConsumerPanicDoesNotFireActionOnPanic(t *testing.T) {
+	t.Parallel()
+
+	var panicHookRan atomic.Bool
+	stream := action.NewStream("test.consumer.panic.hook", func(_ context.Context, _ struct{}) (iter.Seq2[int, error], error) {
+		return func(yield func(int, error) bool) {
+			yield(1, nil)
+		}, nil
+	})
+	stream.AddAnyHook(action.AnyHook{
+		OnPanic: func(_ context.Context, _, _ any, _ *action.Meta) {
+			panicHookRan.Store(true)
+		},
+	})
+
+	seq, err := stream.Do(context.Background(), struct{}{})
+	if err != nil {
+		t.Fatalf("Do failed: %v", err)
+	}
+	consumerPanicked := false
+	func() {
+		defer func() {
+			consumerPanicked = recover() == "consumer_origin"
+		}()
+		for range seq {
+			panic("consumer_origin")
+		}
+	}()
+	if !consumerPanicked {
+		t.Fatal("consumer panic was not re-panicked")
+	}
+	if panicHookRan.Load() {
+		t.Fatal("consumer panic must not be reported as an action panic")
 	}
 }

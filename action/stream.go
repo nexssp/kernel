@@ -167,6 +167,7 @@ func (a *StreamAction[Req, T]) Do(ctx context.Context, req Req) (seq iter.Seq2[T
 	defer func() {
 		if r := recover(); r != nil {
 			err = xerr.PanicRecovery(r)
+			firePanicHooks(ctx, a.anyHooks, req, r, meta)
 			fireStreamTerminal(ctx, a.streamHooks, req, err, meta)
 			fireStreamAfterHooks(ctx, a.hooks, a.anyHooks, hooksRan, anyHooksRan, req, nil, err, meta)
 		}
