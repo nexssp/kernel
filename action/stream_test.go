@@ -368,3 +368,282 @@ func TestStream_ConsumerPanicDoesNotFireActionOnPanic(t *testing.T) {
 		t.Fatal("consumer panic must not be reported as an action panic")
 	}
 }
+
+func TestStream_SourceIteratorPanicFiresActionOnPanic(t *testing.T) {
+	t.Parallel()
+
+	var hookPanicValue any
+	var repanickedValue any
+	var afterHookSawError atomic.Bool
+	stream := action.NewStream("test.source.iterator.panic", func(_ context.Context, _ struct{}) (iter.Seq2[int, error], error) {
+		return func(yield func(int, error) bool) {
+			yield(1, nil)
+			panic("source_iterator_crash")
+		}, nil
+	}).Use(action.Hook[struct{}, iter.Seq2[int, error]]{
+		After: func(_ context.Context, _ struct{}, _ iter.Seq2[int, error], err error, _ *action.Meta) {
+			afterHookSawError.Store(err != nil)
+		},
+	})
+	stream.AddAnyHook(action.AnyHook{
+		OnPanic: func(_ context.Context, _, recovered any, _ *action.Meta) {
+			hookPanicValue = recovered
+		},
+	})
+
+	seq, err := stream.Do(context.Background(), struct{}{})
+	if err != nil {
+		t.Fatalf("Do failed before iteration: %v", err)
+	}
+	func() {
+		defer func() { repanickedValue = recover() }()
+		for range seq {
+			continue
+		}
+	}()
+	if hookPanicValue != "source_iterator_crash" {
+		t.Fatalf("OnPanic value = %v, want source_iterator_crash", hookPanicValue)
+	}
+	if repanickedValue != "source_iterator_crash" {
+		t.Fatalf("re-panic value = %v, want source_iterator_crash", repanickedValue)
+	}
+	if !afterHookSawError.Load() {
+		t.Fatal("After hook did not receive the source panic error")
+	}
+}
+
+func TestStream_SyntheticCancelConsumerPanicDoesNotFireActionOnPanic(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var panicHookRan atomic.Bool
+	stream := action.NewStream("test.synthetic.cancel.consumer.panic", func(_ context.Context, _ struct{}) (iter.Seq2[int, error], error) {
+		return func(func(int, error) bool) {}, nil
+	})
+	stream.AddAnyHook(action.AnyHook{
+		OnPanic: func(_ context.Context, _, _ any, _ *action.Meta) {
+			panicHookRan.Store(true)
+		},
+	})
+	seq, err := stream.Do(ctx, struct{}{})
+	if err != nil {
+		t.Fatalf("Do failed: %v", err)
+	}
+	cancel()
+
+	var recovered any
+	func() {
+		defer func() { recovered = recover() }()
+		for _, itemErr := range seq {
+			if itemErr != nil {
+				panic("synthetic_consumer_crash")
+			}
+		}
+	}()
+	if recovered != "synthetic_consumer_crash" {
+		t.Fatalf("synthetic yield panic = %v, want consumer panic", recovered)
+	}
+	if panicHookRan.Load() {
+		t.Fatal("synthetic consumer panic must not be reported as an action panic")
+	}
+}
+
+func TestStream_IteratorRecoveryCannotSwallowConsumerPanic(t *testing.T) {
+	t.Parallel()
+
+	var panicHookRan atomic.Bool
+	var afterHookSawError atomic.Bool
+	var sourceStopped atomic.Bool
+	var sourceRecoveredPanic atomic.Bool
+	stream := action.NewStream("test.iterator.recovers.consumer.panic", func(_ context.Context, _ struct{}) (iter.Seq2[int, error], error) {
+		return func(yield func(int, error) bool) {
+			defer func() {
+				if recover() != nil {
+					sourceRecoveredPanic.Store(true)
+				}
+			}()
+			if !yield(1, nil) {
+				sourceStopped.Store(true)
+			}
+		}, nil
+	}).Use(action.Hook[struct{}, iter.Seq2[int, error]]{
+		After: func(_ context.Context, _ struct{}, _ iter.Seq2[int, error], err error, _ *action.Meta) {
+			afterHookSawError.Store(err != nil)
+		},
+	})
+	stream.AddAnyHook(action.AnyHook{
+		OnPanic: func(_ context.Context, _, _ any, _ *action.Meta) {
+			panicHookRan.Store(true)
+		},
+	})
+	seq, err := stream.Do(context.Background(), struct{}{})
+	if err != nil {
+		t.Fatalf("Do failed: %v", err)
+	}
+
+	var recovered any
+	func() {
+		defer func() { recovered = recover() }()
+		for range seq {
+			panic("consumer_origin_recovered_by_iterator")
+		}
+	}()
+	if recovered != "consumer_origin_recovered_by_iterator" {
+		t.Fatalf("re-panic value = %v, want original consumer panic", recovered)
+	}
+	if !sourceStopped.Load() {
+		t.Fatal("source iterator did not receive the stop signal")
+	}
+	if sourceRecoveredPanic.Load() {
+		t.Fatal("consumer panic escaped into the source iterator's recovery")
+	}
+	if panicHookRan.Load() {
+		t.Fatal("consumer panic must not be reported as an action panic")
+	}
+	if !afterHookSawError.Load() {
+		t.Fatal("After hook did not receive an error for the recovered consumer panic")
+	}
+}
+
+func TestStream_SourcePanicAfterConsumerStopStillFiresActionOnPanic(t *testing.T) {
+	t.Parallel()
+
+	var hookPanicValue any
+	var repanickedValue any
+	var sourceSawStop atomic.Bool
+	var afterHookSawError atomic.Bool
+	stream := action.NewStream("test.source.panic.after.consumer.stop", func(_ context.Context, _ struct{}) (iter.Seq2[int, error], error) {
+		return func(yield func(int, error) bool) {
+			if !yield(1, nil) {
+				sourceSawStop.Store(true)
+				panic("source_after_consumer_stop")
+			}
+		}, nil
+	}).Use(action.Hook[struct{}, iter.Seq2[int, error]]{
+		After: func(_ context.Context, _ struct{}, _ iter.Seq2[int, error], err error, _ *action.Meta) {
+			afterHookSawError.Store(err != nil)
+		},
+	})
+	stream.AddAnyHook(action.AnyHook{
+		OnPanic: func(_ context.Context, _, recovered any, _ *action.Meta) {
+			hookPanicValue = recovered
+		},
+	})
+	seq, err := stream.Do(context.Background(), struct{}{})
+	if err != nil {
+		t.Fatalf("Do failed: %v", err)
+	}
+	func() {
+		defer func() { repanickedValue = recover() }()
+		for range seq {
+			panic("consumer_before_source_panic")
+		}
+	}()
+	if !sourceSawStop.Load() {
+		t.Fatal("source iterator did not receive the stop signal")
+	}
+	if hookPanicValue != "source_after_consumer_stop" {
+		t.Fatalf("OnPanic value = %v, want source_after_consumer_stop", hookPanicValue)
+	}
+	if repanickedValue != "source_after_consumer_stop" {
+		t.Fatalf("re-panic value = %v, want source_after_consumer_stop", repanickedValue)
+	}
+	if !afterHookSawError.Load() {
+		t.Fatal("After hook did not receive the source panic error")
+	}
+}
+
+func TestStream_SourcePanicNilRemainsVisible(t *testing.T) {
+	t.Parallel()
+
+	var panicHookRan atomic.Bool
+	var afterHookSawError atomic.Bool
+	stream := action.NewStream("test.source.panic.nil", func(_ context.Context, _ struct{}) (iter.Seq2[int, error], error) {
+		return func(func(int, error) bool) {
+			panicWithAny(nil)
+		}, nil
+	}).Use(action.Hook[struct{}, iter.Seq2[int, error]]{
+		After: func(_ context.Context, _ struct{}, _ iter.Seq2[int, error], err error, _ *action.Meta) {
+			afterHookSawError.Store(err != nil)
+		},
+	})
+	stream.AddAnyHook(action.AnyHook{
+		OnPanic: func(_ context.Context, _, _ any, _ *action.Meta) {
+			panicHookRan.Store(true)
+		},
+	})
+	seq, err := stream.Do(context.Background(), struct{}{})
+	if err != nil {
+		t.Fatalf("Do failed: %v", err)
+	}
+
+	panicked := false
+	func() {
+		defer func() {
+			panicked = true
+			_ = recover()
+		}()
+		for range seq {
+			continue
+		}
+	}()
+	if !panicked {
+		t.Fatal("source panic(nil) was silently swallowed")
+	}
+	if !panicHookRan.Load() {
+		t.Fatal("OnPanic did not report source panic(nil)")
+	}
+	if !afterHookSawError.Load() {
+		t.Fatal("After hook did not receive an error for source panic(nil)")
+	}
+}
+
+func TestStream_ConsumerPanicNilRemainsVisibleWithoutActionOnPanic(t *testing.T) {
+	t.Parallel()
+
+	var panicHookRan atomic.Bool
+	var afterHookSawError atomic.Bool
+	stream := action.NewStream("test.consumer.panic.nil", func(_ context.Context, _ struct{}) (iter.Seq2[int, error], error) {
+		return func(yield func(int, error) bool) {
+			yield(1, nil)
+		}, nil
+	}).Use(action.Hook[struct{}, iter.Seq2[int, error]]{
+		After: func(_ context.Context, _ struct{}, _ iter.Seq2[int, error], err error, _ *action.Meta) {
+			afterHookSawError.Store(err != nil)
+		},
+	})
+	stream.AddAnyHook(action.AnyHook{
+		OnPanic: func(_ context.Context, _, _ any, _ *action.Meta) {
+			panicHookRan.Store(true)
+		},
+	})
+	seq, err := stream.Do(context.Background(), struct{}{})
+	if err != nil {
+		t.Fatalf("Do failed: %v", err)
+	}
+
+	panicked := false
+	func() {
+		defer func() {
+			panicked = true
+			_ = recover()
+		}()
+		for range seq {
+			panicWithAny(nil)
+		}
+	}()
+	if !panicked {
+		t.Fatal("consumer panic(nil) was silently swallowed")
+	}
+	if panicHookRan.Load() {
+		t.Fatal("consumer panic(nil) must not be reported as an action panic")
+	}
+	if !afterHookSawError.Load() {
+		t.Fatal("After hook did not receive an error for consumer panic(nil)")
+	}
+}
+
+func panicWithAny(value any) {
+	panic(value)
+}

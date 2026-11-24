@@ -213,25 +213,20 @@ func (a *StreamAction[Req, T]) Do(ctx context.Context, req Req) (seq iter.Seq2[T
 
 	wrappedSeq := func(yield func(T, error) bool) {
 		var lastErr error
+		var consumerPanicked bool
+		var consumerPanicValue any
+		var sourcePanicked bool
+		sourceSeq := markStreamSourcePanic(rawSeq, &sourcePanicked)
 		defer func() {
 			r := recover()
-			if r != nil {
-				lastErr = xerr.PanicRecovery(r)
-			} else if lastErr == nil {
-				lastErr = ctx.Err()
-			}
-			fireStreamTerminal(ctx, a.streamHooks, req, lastErr, meta)
-			fireStreamAfterHooks(ctx, a.hooks, a.anyHooks, hooksRan, anyHooksRan, req, rawSeq, lastErr, meta)
-			if r != nil {
-				panic(r)
-			}
+			lastErr = a.finishStreamIteration(ctx, req, rawSeq, hooksRan, anyHooksRan, lastErr, &consumerPanicked, &consumerPanicValue, &sourcePanicked, r)
 		}()
 
-		for item, itemErr := range rawSeq {
+		for item, itemErr := range sourceSeq {
 			if itemErr != nil {
 				lastErr = itemErr
 			}
-			continueStream := yield(item, itemErr)
+			continueStream := callStreamConsumer(yield, item, itemErr, &consumerPanicked, &consumerPanicValue)
 			fireStreamItem(ctx, a.streamHooks, req, item, itemErr, meta)
 			if !continueStream {
 				return
@@ -241,12 +236,74 @@ func (a *StreamAction[Req, T]) Do(ctx context.Context, req Req) (seq iter.Seq2[T
 			if err := ctx.Err(); err != nil {
 				lastErr = err
 				var zero T
-				yield(zero, err)
+				callStreamConsumer(yield, zero, err, &consumerPanicked, &consumerPanicValue)
 				fireStreamItem(ctx, a.streamHooks, req, zero, err, meta)
 			}
 		}
 	}
 	return wrappedSeq, nil
+}
+
+func (a *StreamAction[Req, T]) finishStreamIteration(
+	ctx context.Context,
+	req Req,
+	rawSeq iter.Seq2[T, error],
+	hooksRan, anyHooksRan int,
+	lastErr error,
+	consumerPanicked *bool,
+	consumerPanicValue *any,
+	sourcePanicked *bool,
+	r any,
+) error {
+	sourcePanicRecovered := r == nil && *sourcePanicked
+	consumerPanicRecovered := r == nil && *consumerPanicked && !sourcePanicRecovered
+	if consumerPanicRecovered {
+		r = *consumerPanicValue
+	}
+	hasPanic := r != nil || sourcePanicRecovered || consumerPanicRecovered
+	if hasPanic {
+		lastErr = xerr.PanicRecovery(r)
+		if !consumerPanicRecovered {
+			firePanicHooks(ctx, a.anyHooks, req, r, a.meta)
+		}
+	} else if lastErr == nil {
+		lastErr = ctx.Err()
+	}
+	fireStreamTerminal(ctx, a.streamHooks, req, lastErr, a.meta)
+	fireStreamAfterHooks(ctx, a.hooks, a.anyHooks, hooksRan, anyHooksRan, req, rawSeq, lastErr, a.meta)
+	if hasPanic {
+		panic(r)
+	}
+	return lastErr
+}
+
+func markStreamSourcePanic[T any](seq iter.Seq2[T, error], sourcePanicked *bool) iter.Seq2[T, error] {
+	return func(yield func(T, error) bool) {
+		panicking := true
+		defer func() {
+			if panicking {
+				*sourcePanicked = true
+				panic(recover())
+			}
+		}()
+		seq(yield)
+		panicking = false
+	}
+}
+
+func callStreamConsumer[T any](yield func(T, error) bool, item T, itemErr error, consumerPanicked *bool, consumerPanicValue *any) (continueStream bool) {
+	panicking := true
+	defer func() {
+		if panicking {
+			r := recover()
+			*consumerPanicked = true
+			*consumerPanicValue = r
+			continueStream = false
+		}
+	}()
+	continueStream = yield(item, itemErr)
+	panicking = false
+	return continueStream
 }
 
 func errorIterator[T any](err error) iter.Seq2[T, error] {
