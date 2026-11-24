@@ -69,7 +69,7 @@ The Kernel owns the lifecycle, concurrency safety, and execution semantics of an
 | `xerr` | Categorized errors for validation, authorization, conflicts, not-found cases, transient failures, internal failures, and panic recovery. |
 | `xfile` / `xfs` | Typed file references and resolvers, plus confined and atomic filesystem helpers. |
 | `broadcast` / `ringbuf` | In-process topics and bounded ring buffers for event publication and telemetry. |
-| `timing` / `xsync` | Timing-wheel scheduling and generic pooling primitives. |
+| `timing` | Timing-wheel scheduling. |
 | `xtest/ktest` | Allocation checks, polling/leak helpers, test contexts, action fakes, contract assertions, and fluent action test runs. |
 
 ### Ring buffer memory budgets
