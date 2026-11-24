@@ -56,7 +56,7 @@ func (t *Testable[Req, Res]) CaptureReq(ctx context.Context, input Req) (capture
 	}
 
 	b := New[Req, Res](t.act.meta.Name, wrappedExec)
-	b.middlewares = append([]DispatcherMiddleware[Req, Res](nil), t.builder.middlewares...)
+	b.middlewares = append([]builderMiddleware[Req, Res](nil), t.builder.middlewares...)
 	b.hooks = append([]Hook[Req, Res](nil), t.builder.hooks...)
 	b.anyHooks = append([]AnyHook(nil), t.builder.anyHooks...)
 	b.bindings = append([]Binding(nil), t.builder.bindings...)

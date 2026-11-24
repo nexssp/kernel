@@ -14,7 +14,7 @@ type TxRunner interface {
 }
 
 func (b *Builder[Req, Res]) Transactional(runner TxRunner) *Builder[Req, Res] {
-	return b.Use(func(next Fn[Req, Res]) Fn[Req, Res] {
+	return b.UseOnExecution(func(next Fn[Req, Res]) Fn[Req, Res] {
 		return func(ctx context.Context, req Req) (Res, error) {
 			if runner == nil {
 				return next(ctx, req)

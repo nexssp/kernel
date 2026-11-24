@@ -171,6 +171,12 @@ Retries can execute a handler more than once. `Race` may start multiple candidat
 - If no layers are passed, an internal thread-safe in-memory cache is instantiated. It evicts entries inline during `Set` and lazily during `Get`; it starts no janitor goroutine and requires no `Close()` call.
 - `Once()` memoizes the first execution's result or error indefinitely for static configurations, including cancellation; it runs under the first caller's context.
 
+### Middleware with idempotency
+- `Use` and `UseWithDispatcher` wrap each action invocation outside the idempotency replay check. They run on successful replays too, so put authentication, authorization, rate limits, validation, and admission checks here. The built-in authentication/authorization guards and `RateLimit*` builder methods use this per-invocation path.
+- Per-invocation middleware may reject a request; if it returns a successful cached or fallback response without calling `next`, idempotency cannot validate that request's key or payload. Put response-producing caches and similar short-circuits on the execution-only path.
+- `UseOnExecution` and `UseWithDispatcherOnExecution` place middleware inside idempotency. A successful replay skips them; use these for response caching, transactions, durable memoization, locks, or other work that should happen only when the action actually executes. Do not place authentication or authorization checks on this path.
+- With idempotency enabled, the per-invocation chain wraps the idempotency check, which wraps the execution-only chain. Their order is preserved within each chain. Without idempotency, both kinds run in builder registration order.
+
 ### Idempotency Contracts
 - `.Idempotent()` and `.IdempotentWithConfig(cfg)` enable replay only when a caller supplies an explicit key. Transport adapters should read `cfg.Header()` (default `Idempotency-Key`) and bind it with `xctx.WithIdempotencyKey(ctx, key)`. `RequestID` is correlation-only; neither it nor a payload hash is used as a fallback key. For typed requests, configure `RequestKeyFunc`; the older `KeyFunc` remains available for `[]byte` requests.
 - Builder-created actions default `Namespace` to their final action name; direct `IdempotencyMiddleware` use requires an explicit namespace.

@@ -55,7 +55,7 @@ const (
 // is renewed while the action is running; loss of the lease cancels the action
 // context and returns an unavailable error rather than claiming success.
 func (b *Builder[Req, Res]) ExclusiveFenced(m FencedMutex, ttl time.Duration, keyFn func(Req) string) *Builder[Req, Res] {
-	return b.Use(func(next Fn[Req, Res]) Fn[Req, Res] {
+	return b.UseOnExecution(func(next Fn[Req, Res]) Fn[Req, Res] {
 		return func(ctx context.Context, req Req) (Res, error) {
 			var zero Res
 

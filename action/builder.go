@@ -14,13 +14,18 @@ import (
 	"github.com/nexssp/kernel/xerr"
 )
 
+type builderMiddleware[Req, Res any] struct {
+	middleware       DispatcherMiddleware[Req, Res]
+	afterIdempotency bool
+}
+
 // Builder[Req, Res] is the fluent construction API for an action.
 // All methods return the same builder for chaining.
 // Call Build() once — the result is immutable and safe for concurrent use.
 type Builder[Req, Res any] struct {
 	meta                Meta
 	exec                Fn[Req, Res]
-	middlewares         []DispatcherMiddleware[Req, Res]
+	middlewares         []builderMiddleware[Req, Res]
 	drain               *DrainSupervisor
 	hooks               []Hook[Req, Res]
 	anyHooks            []AnyHook
@@ -160,27 +165,49 @@ func (b *Builder[Req, Res]) SuccessStatus(code int) *Builder[Req, Res] {
 
 // ── Middleware ────────────────────────────────────────────────────────────────
 
+// Use adds middleware to each invocation, including successful idempotency
+// replays. UseOnExecution is for middleware intentionally skipped on replay.
 func (b *Builder[Req, Res]) Use(m Middleware[Req, Res]) *Builder[Req, Res] {
-	b.middlewares = append(b.middlewares, func(next Fn[Req, Res], _ HookDispatcher[Req, Res]) Fn[Req, Res] {
+	return b.UseWithDispatcher(func(next Fn[Req, Res], _ HookDispatcher[Req, Res]) Fn[Req, Res] {
 		return m(next)
 	})
-	return b
 }
 
-// UseFirst inserts a middleware at the outermost position of the
-// chain. Middlewares added with Use wrap earlier ones from the inside,
-// so a wrapper that must observe every inner failure — timeouts,
-// exhausted retries, cancellations — has to be installed with
-// UseFirst. Use for recovery, circuit-breaking, or measurement.
+// UseFirst inserts a middleware at the outermost position of the chain.
+// It runs on every invocation, including successful idempotency replays.
+// Use for recovery, circuit-breaking, or measurement that must observe every
+// inner failure.
 func (b *Builder[Req, Res]) UseFirst(m Middleware[Req, Res]) *Builder[Req, Res] {
-	b.middlewares = slices.Insert(b.middlewares, 0, func(next Fn[Req, Res], _ HookDispatcher[Req, Res]) Fn[Req, Res] {
-		return m(next)
+	b.middlewares = slices.Insert(b.middlewares, 0, builderMiddleware[Req, Res]{
+		middleware: func(next Fn[Req, Res], _ HookDispatcher[Req, Res]) Fn[Req, Res] {
+			return m(next)
+		},
 	})
 	return b
 }
 
+// UseOnExecution adds middleware inside the idempotency replay boundary. When
+// idempotency is enabled, successful replays skip this middleware. Use it for
+// execution memoization or side effects that must not repeat on a replay.
+func (b *Builder[Req, Res]) UseOnExecution(m Middleware[Req, Res]) *Builder[Req, Res] {
+	return b.UseWithDispatcherOnExecution(func(next Fn[Req, Res], _ HookDispatcher[Req, Res]) Fn[Req, Res] {
+		return m(next)
+	})
+}
+
+// UseWithDispatcherOnExecution is UseOnExecution with access to action hooks.
+func (b *Builder[Req, Res]) UseWithDispatcherOnExecution(m DispatcherMiddleware[Req, Res]) *Builder[Req, Res] {
+	b.middlewares = append(b.middlewares, builderMiddleware[Req, Res]{
+		middleware:       m,
+		afterIdempotency: true,
+	})
+	return b
+}
+
+// UseWithDispatcher adds dispatcher-aware middleware to each invocation,
+// including successful idempotency replays.
 func (b *Builder[Req, Res]) UseWithDispatcher(m DispatcherMiddleware[Req, Res]) *Builder[Req, Res] {
-	b.middlewares = append(b.middlewares, m)
+	b.middlewares = append(b.middlewares, builderMiddleware[Req, Res]{middleware: m})
 	return b
 }
 
@@ -277,12 +304,23 @@ func (b *Builder[Req, Res]) Build() *BuiltAction[Req, Res] {
 
 	exec := b.exec
 	if exec != nil {
-		for _, middleware := range slices.Backward(b.middlewares) {
-			exec = middleware(exec, act)
-		}
 		if metaCopy.Idempotency.Enabled {
+			for _, middleware := range slices.Backward(b.middlewares) {
+				if middleware.afterIdempotency {
+					exec = middleware.middleware(exec, act)
+				}
+			}
 			cfg := metaCopy.Idempotency
 			exec = IdempotencyMiddleware[Req, Res](cfg.Store, cfg)(exec)
+			for _, middleware := range slices.Backward(b.middlewares) {
+				if !middleware.afterIdempotency {
+					exec = middleware.middleware(exec, act)
+				}
+			}
+		} else {
+			for _, middleware := range slices.Backward(b.middlewares) {
+				exec = middleware.middleware(exec, act)
+			}
 		}
 	}
 	act.exec = exec

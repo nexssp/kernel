@@ -41,7 +41,7 @@ func (b *Builder[Req, Res]) Cache(ttl time.Duration, keyFn func(Req) string, lay
 	if len(layers) == 0 {
 		layers = []CacheLayer[Res]{newDefaultMemoryKV[Res](ttl)}
 	}
-	return b.UseWithDispatcher(CacheMiddleware(CacheConfig[Req, Res]{
+	return b.UseWithDispatcherOnExecution(CacheMiddleware(CacheConfig[Req, Res]{
 		KeyFunc: keyFn,
 		Layers:  layers,
 		TTL:     ttl,
@@ -70,7 +70,7 @@ func (b *Builder[Req, Res]) Once() *Builder[Req, Res] {
 
 	b.meta.CacheTTL = -1
 
-	return b.UseWithDispatcher(func(next Fn[Req, Res], _ HookDispatcher[Req, Res]) Fn[Req, Res] {
+	return b.UseWithDispatcherOnExecution(func(next Fn[Req, Res], _ HookDispatcher[Req, Res]) Fn[Req, Res] {
 		return func(ctx context.Context, req Req) (Res, error) {
 			once.Do(func() {
 				defer func() {
@@ -112,7 +112,7 @@ func (b *Builder[Req, Res]) DedupWithOptions(
 	options SharedFlightOptions,
 ) *Builder[Req, Res] {
 	b.meta.Deduplicated = true
-	return b.UseWithDispatcher(DeduplicateWithOptions[Req, Res](keyFn, options))
+	return b.UseWithDispatcherOnExecution(DeduplicateWithOptions[Req, Res](keyFn, options))
 }
 
 // Coalesce deduplicates concurrent requests using request coalescing.
@@ -144,5 +144,5 @@ func (b *Builder[Req, Res]) CoalesceWithOptions(
 ) *Builder[Req, Res] {
 	b.meta.Coalesced = true
 	name := b.meta.Name
-	return b.UseWithDispatcher(CoalesceMiddlewareWithOptions[Req, Res](c, name, keyFn, options))
+	return b.UseWithDispatcherOnExecution(CoalesceMiddlewareWithOptions[Req, Res](c, name, keyFn, options))
 }

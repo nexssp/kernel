@@ -102,3 +102,98 @@ func TestIdempotencyRunsBeforeCache(t *testing.T) {
 		t.Fatalf("conflicting call reached cache/handler: counts = %d/%d, want 0/1", handlerCalls, cacheHits)
 	}
 }
+
+func TestIdempotentReplayRunsRateLimit(t *testing.T) {
+	var handlerCalls int
+	// A zero refill rate makes the two-token burst deterministic.
+	act := action.New("idem.rate-limit.replay", func(_ context.Context, _ struct{}) (string, error) {
+		handlerCalls++
+		return "ok", nil
+	}).RateLimit(0, 2).IdempotentWithConfig(action.IdempotencyConfig{
+		Store: action.NewMemoryIdempotencyStore(time.Hour),
+	}).Build()
+	ctx := xctx.WithIdempotencyKey(context.Background(), "rate-limit-replay-key")
+
+	if got, err := act.Do(ctx, struct{}{}); err != nil || got != "ok" {
+		t.Fatalf("first call = %q / %v, want ok / nil", got, err)
+	}
+	got, err := act.Do(ctx, struct{}{})
+	if err != nil || got != "ok" {
+		t.Fatalf("allowed replay = %q / %v, want cached ok / nil", got, err)
+	}
+	if handlerCalls != 1 {
+		t.Fatalf("handler calls after allowed replay = %d, want 1", handlerCalls)
+	}
+
+	_, err = act.Do(ctx, struct{}{})
+	if xerr.KindFrom(err) != xerr.KindTooManyRequests {
+		t.Fatalf("rate-limited replay error = %v, want TooManyRequests", err)
+	}
+	if handlerCalls != 1 {
+		t.Fatalf("handler calls = %d, want 1", handlerCalls)
+	}
+}
+
+func TestIdempotentReplayRunsCustomAuthorizationMiddleware(t *testing.T) {
+	allowed := true
+	var handlerCalls int
+	act := action.New("idem.custom-auth.replay", func(_ context.Context, _ struct{}) (string, error) {
+		handlerCalls++
+		return "ok", nil
+	}).Use(func(next action.Fn[struct{}, string]) action.Fn[struct{}, string] {
+		return func(ctx context.Context, req struct{}) (string, error) {
+			if !allowed {
+				return "", xerr.Forbidden("authorization revoked")
+			}
+			return next(ctx, req)
+		}
+	}).IdempotentWithConfig(action.IdempotencyConfig{
+		Store: action.NewMemoryIdempotencyStore(time.Hour),
+	}).Build()
+	ctx := xctx.WithIdempotencyKey(context.Background(), "custom-auth-replay-key")
+
+	if got, err := act.Do(ctx, struct{}{}); err != nil || got != "ok" {
+		t.Fatalf("first call = %q / %v, want ok / nil", got, err)
+	}
+	got, err := act.Do(ctx, struct{}{})
+	if err != nil || got != "ok" {
+		t.Fatalf("allowed replay = %q / %v, want cached ok / nil", got, err)
+	}
+	if handlerCalls != 1 {
+		t.Fatalf("handler calls after allowed replay = %d, want 1", handlerCalls)
+	}
+
+	allowed = false
+	_, err = act.Do(ctx, struct{}{})
+	if xerr.KindFrom(err) != xerr.KindForbidden {
+		t.Fatalf("revoked replay error = %v, want Forbidden", err)
+	}
+	if handlerCalls != 1 {
+		t.Fatalf("handler calls = %d, want 1", handlerCalls)
+	}
+}
+
+func TestUseOnExecutionSkipsSuccessfulIdempotencyReplay(t *testing.T) {
+	var middlewareCalls, handlerCalls int
+	act := action.New("idem.execution-only.replay", func(_ context.Context, _ struct{}) (string, error) {
+		handlerCalls++
+		return "ok", nil
+	}).UseOnExecution(func(next action.Fn[struct{}, string]) action.Fn[struct{}, string] {
+		return func(ctx context.Context, req struct{}) (string, error) {
+			middlewareCalls++
+			return next(ctx, req)
+		}
+	}).IdempotentWithConfig(action.IdempotencyConfig{
+		Store: action.NewMemoryIdempotencyStore(time.Hour),
+	}).Build()
+	ctx := xctx.WithIdempotencyKey(context.Background(), "execution-only-replay-key")
+
+	for range 2 {
+		if got, err := act.Do(ctx, struct{}{}); err != nil || got != "ok" {
+			t.Fatalf("call = %q / %v, want ok / nil", got, err)
+		}
+	}
+	if middlewareCalls != 1 || handlerCalls != 1 {
+		t.Fatalf("execution middleware/handler calls = %d/%d, want 1/1", middlewareCalls, handlerCalls)
+	}
+}

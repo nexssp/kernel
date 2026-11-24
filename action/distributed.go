@@ -27,7 +27,7 @@ type Mutex interface {
 // If the lock cannot be acquired, ErrLocked is returned immediately.
 // An empty key is rejected rather than bypassing the lock.
 func (b *Builder[Req, Res]) Exclusive(m Mutex, ttl time.Duration, keyFn func(Req) string) *Builder[Req, Res] {
-	return b.Use(func(next Fn[Req, Res]) Fn[Req, Res] {
+	return b.UseOnExecution(func(next Fn[Req, Res]) Fn[Req, Res] {
 		return func(ctx context.Context, req Req) (Res, error) {
 			var zero Res
 			if m == nil {

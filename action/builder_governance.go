@@ -18,7 +18,7 @@ func (b *Builder[Req, Res]) ImmutableWhen(guard func(ctx context.Context, req Re
 	if reason == "" {
 		reason = "modification forbidden: resource is locked in current state"
 	}
-	return b.Use(func(next Fn[Req, Res]) Fn[Req, Res] {
+	return b.UseOnExecution(func(next Fn[Req, Res]) Fn[Req, Res] {
 		return func(ctx context.Context, req Req) (Res, error) {
 			if guard != nil {
 				locked, err := guard(ctx, req)
@@ -41,7 +41,7 @@ type QuotaCheckFunc func(ctx context.Context, tenantID string) (current, limit i
 // RequireCreationLimit enforces plan quotas ONLY during new entity creation (ID == 0).
 // Updates to existing resources bypass this check.
 func (b *Builder[Req, Res]) RequireCreationLimit(resourceName string, checkFn QuotaCheckFunc) *Builder[Req, Res] {
-	return b.Use(func(next Fn[Req, Res]) Fn[Req, Res] {
+	return b.UseOnExecution(func(next Fn[Req, Res]) Fn[Req, Res] {
 		return func(ctx context.Context, req Req) (Res, error) {
 			// Fast bypass if this is an update (ID > 0)
 			if idGetter, ok := any(req).(interface{ GetID() uint }); ok && idGetter.GetID() > 0 {

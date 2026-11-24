@@ -238,10 +238,10 @@ func normalizeJSONReplayResult[Res any](result Res, payload []byte) (Res, error)
 
 // Durable wires the memoization middleware into a builder.
 func (b *Builder[Req, Res]) Durable(journal Journal, stepName string) *Builder[Req, Res] {
-	return b.Use(Durable[Req, Res](journal, stepName))
+	return b.UseOnExecution(Durable[Req, Res](journal, stepName))
 }
 
 // DurableWithOptions wires a durable middleware with explicit execution limits.
 func (b *Builder[Req, Res]) DurableWithOptions(journal Journal, stepName string, options DurableOptions) *Builder[Req, Res] {
-	return b.Use(DurableWithOptions[Req, Res](journal, stepName, options))
+	return b.UseOnExecution(DurableWithOptions[Req, Res](journal, stepName, options))
 }

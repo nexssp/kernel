@@ -56,7 +56,7 @@ func (sm *StateMachineBuilder[Req, Res]) Build() *BuiltAction[Req, Res] {
 	transitions := cloneStateTransitions(sm.transitions)
 
 	// Inject the state-guard middleware
-	b.Use(func(next Fn[Req, Res]) Fn[Req, Res] {
+	b.UseOnExecution(func(next Fn[Req, Res]) Fn[Req, Res] {
 		return func(ctx context.Context, req Req) (Res, error) {
 			originalState := req.GetState()
 

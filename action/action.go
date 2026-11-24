@@ -49,7 +49,7 @@ type BuiltAction[Req, Res any] struct {
 	meta        *Meta
 	exec        Fn[Req, Res]
 	baseExec    Fn[Req, Res]
-	middlewares []DispatcherMiddleware[Req, Res]
+	middlewares []builderMiddleware[Req, Res]
 	drain       *DrainSupervisor
 
 	hooks    []Hook[Req, Res]
