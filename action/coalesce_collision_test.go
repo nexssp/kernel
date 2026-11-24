@@ -2,12 +2,41 @@ package action_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/nexssp/kernel/action"
 	"github.com/nexssp/kernel/xtest"
 )
+
+func TestNilCoalescerFailsClosed(t *testing.T) {
+	var coalescer *action.Coalescer
+	called := 0
+	got, shared, err := coalescer.Do(context.Background(), "key", func(context.Context) (any, error) {
+		called++
+		return "direct", nil
+	})
+	if err == nil || err.Error() != "action: coalescer is required" || got != nil || shared || called != 0 {
+		t.Fatalf("Do = (%v, shared=%v, err=%v), calls=%d; want a nil-Coalescer error without running work", got, shared, err, called)
+	}
+	if got := coalescer.Waiters("key"); got != 0 {
+		t.Fatalf("Waiters on nil Coalescer = %d, want 0", got)
+	}
+
+	keyCalls, handlerCalls := 0, 0
+	act := action.New("nil.coalescer", func(_ context.Context, req string) (string, error) {
+		handlerCalls++
+		return req, nil
+	}).Coalesce(coalescer, func(req string) string {
+		keyCalls++
+		return req
+	}).Build()
+	result, err := act.Do(context.Background(), "request")
+	if err == nil || !strings.Contains(err.Error(), "action: coalescer is required") || result != "" || keyCalls != 0 || handlerCalls != 0 {
+		t.Fatalf("Do = (%q, %v), key calls=%d handler calls=%d; want fail-closed validation", result, err, keyCalls, handlerCalls)
+	}
+}
 
 func TestCoalesceSeparatesActionAndRequestKeyBoundaries(t *testing.T) {
 	coalescer := action.NewCoalescer()

@@ -2,6 +2,7 @@ package action_test
 
 import (
 	"context"
+	"errors"
 	"iter"
 	"reflect"
 	"sync/atomic"
@@ -55,6 +56,36 @@ func TestStream_HappyPath(t *testing.T) {
 	}
 	if !beforeCalled.Load() || !afterCalled.Load() {
 		t.Fatal("expected both Before and After hooks to execute")
+	}
+}
+
+func TestStream_NilSequenceReturnsControlledError(t *testing.T) {
+	stream := action.NewStream("nil.sequence", func(_ context.Context, _ struct{}) (iter.Seq2[int, error], error) {
+		return nil, nil
+	})
+
+	seq, err := stream.Do(context.Background(), struct{}{})
+	if err == nil {
+		t.Fatal("Do error = nil, want controlled nil-sequence error")
+	}
+	if got, want := err.Error(), "action: stream handler returned nil sequence"; got != want {
+		t.Fatalf("Do error = %q, want %q", got, want)
+	}
+	if seq == nil {
+		t.Fatal("Do returned nil error sequence")
+	}
+
+	count := 0
+	var yieldedErr error
+	for item, itemErr := range seq {
+		count++
+		if item != 0 {
+			t.Fatalf("error item = %d, want zero value", item)
+		}
+		yieldedErr = itemErr
+	}
+	if count != 1 || !errors.Is(yieldedErr, err) {
+		t.Fatalf("error sequence yielded %d items with error %v; want one pair with %v", count, yieldedErr, err)
 	}
 }
 

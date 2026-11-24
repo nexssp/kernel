@@ -71,15 +71,17 @@ type AnyStream func(yield func(item any, err error) bool)
 // intentionally separate from AnyAction: a stream is lazy, can fail
 // during iteration, and must not be coerced into a unary response.
 //
-// Hook lifecycle: Before fires when DoStreamAny is called; After and
-// OnError fire when the stream is exhausted, errored, or the consumer
-// stops early via yield(false). OnRetry/OnCacheHit/OnCacheMiss are
+// Hook lifecycle: Before fires when DoStreamAny is called. After fires on
+// exhaustion, error, or early stop. OnError fires for terminal errors,
+// including error items, except errors matching context.Canceled, which use
+// OnCancel; a clean early stop is success. OnRetry/OnCacheHit/OnCacheMiss are
 // reserved for future middleware and are not yet fired by StreamAction.
 type AnyStreamAction interface {
 	Describable
 	TypedPayload
 	GetBindings() []Binding
 	GetAnyHooks() []AnyHook
+	// AddAnyHook is setup-time registration; call before concurrent stream use.
 	AddAnyHook(h ...AnyHook)
 	CloneWithHooks(h ...AnyHook) AnyStreamAction
 	DoStreamAny(ctx context.Context, req any) (AnyStream, error)

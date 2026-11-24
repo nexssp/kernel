@@ -23,6 +23,23 @@ func TestScopeFrom(t *testing.T) {
 	}
 }
 
+func TestWithScope_NilScopeIsNoop(t *testing.T) {
+	t.Parallel()
+
+	type contextKey struct{}
+	ctx := context.WithValue(context.Background(), contextKey{}, "preserved")
+	got := xctx.WithScope(ctx, nil)
+	if got == nil || got.Value(contextKey{}) != "preserved" || xctx.ScopeFrom(got) != nil {
+		t.Fatal("WithScope(ctx, nil) should preserve ctx without binding a scope")
+	}
+
+	var nilCtx context.Context
+	got = xctx.WithScope(nilCtx, nil)
+	if got == nil || xctx.ScopeFrom(got) != nil {
+		t.Fatal("WithScope(nil, nil) should return a non-nil context without a scope")
+	}
+}
+
 func TestNewScopeLifecycleAndPooling(t *testing.T) {
 	t.Parallel()
 	parent := context.Background()

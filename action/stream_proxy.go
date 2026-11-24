@@ -103,6 +103,8 @@ func (p *StreamProxy) GetAnyHooks() []AnyHook {
 	return nil
 }
 
+// AddAnyHook forwards hooks to the current action. Register before concurrent
+// stream use; hook registration is not synchronized with execution.
 func (p *StreamProxy) AddAnyHook(hooks ...AnyHook) {
 	if act := p.Current(); act != nil {
 		act.AddAnyHook(hooks...)

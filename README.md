@@ -386,8 +386,9 @@ act := action.New("user.find", findUser).
 
 | Kind | Emitted When | Relevant Event Fields |
 | :--- | :--- | :--- |
-| `executed` | Action completes successfully | `Request`, `Response`, `Duration` |
+| `success` | Action completes successfully | `Request`, `Response`, `Duration` |
 | `error` | Action fails with an error | `Error`, `Duration` |
+| `timeout` | Action returns `context.DeadlineExceeded` | `Request`, `Duration` |
 | `retry` | Retry middleware initiates another attempt | `Attempt`, `Error`, `Duration` |
 | `cache_hit` | A cache layer serves the response | `Request`, `Response`, `Duration` |
 | `cache_miss` | No cache layer contains the key | `Request`, `Duration` |

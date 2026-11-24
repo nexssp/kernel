@@ -7,7 +7,8 @@ import (
 )
 
 // StreamHook observes one typed stream execution. Lifecycle callbacks run at
-// most once per execution. OnItem is opt-in and runs once per yielded item.
+// most once per execution. OnItem is opt-in and runs after consumer delivery
+// for each item/error pair, including one that causes an early stop.
 type StreamHook[Req, Item any] struct {
 	OnStart   func(context.Context, Req, *Meta)
 	OnItem    func(context.Context, Req, Item, error, *Meta)
@@ -46,7 +47,7 @@ func fireStreamTerminal[Req, Item any](ctx context.Context, hooks []StreamHook[R
 		if isCancel && h.OnCancel != nil {
 			callHook3(meta, "Stream.OnCancel", h.OnCancel, ctx, req, meta)
 		}
-		if err != nil && h.OnError != nil {
+		if err != nil && !isCancel && h.OnError != nil {
 			callHook4(meta, "Stream.OnError", h.OnError, ctx, req, err, meta)
 		}
 		if err == nil && h.OnSuccess != nil {

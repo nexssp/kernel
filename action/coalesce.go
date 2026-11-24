@@ -6,6 +6,7 @@ package action
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -26,6 +27,8 @@ type coalesceKey struct {
 	namespaced bool
 }
 
+var errNilCoalescer = errors.New("action: coalescer is required")
+
 // Coalescer coordinates in-flight request sharing across different actions or callers.
 type Coalescer struct {
 	mu      sync.Mutex
@@ -37,11 +40,15 @@ func NewCoalescer() *Coalescer {
 	return &Coalescer{pending: make(map[coalesceKey]*coalesceEntry)}
 }
 
+// Do coalesces work for key. A nil receiver returns an error.
 func (c *Coalescer) Do(ctx context.Context, key string, fn func(context.Context) (any, error)) (val any, shared bool, err error) {
 	return c.do(ctx, coalesceKey{key: key}, fn)
 }
 
 func (c *Coalescer) do(ctx context.Context, key coalesceKey, fn func(context.Context) (any, error)) (val any, shared bool, err error) {
+	if c == nil {
+		return nil, false, errNilCoalescer
+	}
 	c.mu.Lock()
 	if entry, ok := c.pending[key]; ok {
 		entry.waiters.Add(1)
@@ -97,6 +104,9 @@ func (c *Coalescer) do(ctx context.Context, key coalesceKey, fn func(context.Con
 // Waiters reports the number of callers waiting on the given key.
 // It runs in O(pending size); use it for diagnostics, not hot paths.
 func (c *Coalescer) Waiters(key string) int {
+	if c == nil {
+		return 0
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	var waiters int
@@ -125,6 +135,10 @@ func CoalesceMiddlewareWithOptions[Req, Res any](
 	timeout := options.withDefaults().Timeout
 	return func(next Fn[Req, Res], hooks HookDispatcher[Req, Res]) Fn[Req, Res] {
 		return func(ctx context.Context, req Req) (Res, error) {
+			if coalescer == nil {
+				var zero Res
+				return zero, errNilCoalescer
+			}
 			key := keyFn(req)
 			if key == "" {
 				return next(ctx, req)

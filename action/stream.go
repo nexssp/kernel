@@ -128,6 +128,8 @@ func (a *StreamAction[Req, T]) GetAnyHooks() []AnyHook {
 	return out
 }
 
+// AddAnyHook registers type-erased hooks. Register before concurrent stream
+// use; hook registration is not synchronized with execution.
 func (a *StreamAction[Req, T]) AddAnyHook(h ...AnyHook) {
 	if a == nil || len(h) == 0 {
 		return
@@ -199,6 +201,9 @@ func (a *StreamAction[Req, T]) Do(ctx context.Context, req Req) (seq iter.Seq2[T
 	}
 
 	rawSeq, err := a.handler(ctx, req)
+	if err == nil && rawSeq == nil {
+		err = errors.New("action: stream handler returned nil sequence")
+	}
 	if err != nil {
 		fireStreamTerminal(ctx, a.streamHooks, req, err, meta)
 		fireStreamAfterHooks(ctx, a.hooks, a.anyHooks, hooksRan, anyHooksRan, req, nil, err, meta)
@@ -225,16 +230,18 @@ func (a *StreamAction[Req, T]) Do(ctx context.Context, req Req) (seq iter.Seq2[T
 			if itemErr != nil {
 				lastErr = itemErr
 			}
-			if !yield(item, itemErr) {
+			continueStream := yield(item, itemErr)
+			fireStreamItem(ctx, a.streamHooks, req, item, itemErr, meta)
+			if !continueStream {
 				return
 			}
-			fireStreamItem(ctx, a.streamHooks, req, item, itemErr, meta)
 		}
 		if lastErr == nil {
 			if err := ctx.Err(); err != nil {
 				lastErr = err
 				var zero T
 				yield(zero, err)
+				fireStreamItem(ctx, a.streamHooks, req, zero, err, meta)
 			}
 		}
 	}
@@ -284,7 +291,7 @@ func fireAnyStreamExitHook[Req, T any](
 	if isCancel && h.OnCancel != nil {
 		callHook3(meta, "OnCancel", h.OnCancel, ctx, any(req), meta)
 	}
-	if err != nil && h.OnError != nil {
+	if err != nil && !isCancel && h.OnError != nil {
 		callHook4(meta, "OnError", h.OnError, ctx, any(req), err, meta)
 	}
 	if err == nil && h.OnSuccess != nil {
@@ -310,7 +317,7 @@ func fireTypedStreamExitHook[Req, T any](
 	if isCancel && h.OnCancel != nil {
 		callHook3(meta, "OnCancel", h.OnCancel, ctx, req, meta)
 	}
-	if err != nil && h.OnError != nil {
+	if err != nil && !isCancel && h.OnError != nil {
 		callHook4(meta, "OnError", h.OnError, ctx, req, err, meta)
 	}
 	if err == nil && h.OnSuccess != nil {

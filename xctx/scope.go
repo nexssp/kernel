@@ -115,7 +115,9 @@ func ScopeFrom(ctx context.Context) *RequestScope {
 	return s
 }
 
-// WithScope binds s to ctx directly. Prefer NewScope for pooled scopes.
+// WithScope binds s to ctx directly. A nil scope leaves the context unbound;
+// a nil context is first normalized to context.Background(). Prefer NewScope
+// for pooled scopes.
 //
 // Safe for concurrent use on a fresh (never-bound) scope: two goroutines
 // racing to bind the same fresh scope will agree on a single generation.
@@ -125,6 +127,9 @@ func ScopeFrom(ctx context.Context) *RequestScope {
 func WithScope(ctx context.Context, s *RequestScope) context.Context {
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	if s == nil {
+		return ctx
 	}
 	gen := s.generation.Load()
 	if gen == 0 {
