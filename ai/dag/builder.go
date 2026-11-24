@@ -3,6 +3,7 @@ package dag
 import (
 	"fmt"
 	"maps"
+	"reflect"
 	"slices"
 	"sort"
 
@@ -44,7 +45,7 @@ func (b *Builder) AddNode(id, _ string, act action.AnyAction) *Builder {
 		return b
 	}
 	ex, ok := act.(action.Executable)
-	if !ok || ex == nil {
+	if !ok || isNilExecutable(ex) {
 		b.compileErr = xerr.BadRequest(fmt.Sprintf("graph: action %q does not implement Executable", id))
 		return b
 	}
@@ -53,6 +54,20 @@ func (b *Builder) AddNode(id, _ string, act action.AnyAction) *Builder {
 		b.entryID = id
 	}
 	return b
+}
+
+func isNilExecutable(ex action.Executable) bool {
+	if ex == nil {
+		return true
+	}
+
+	value := reflect.ValueOf(ex)
+	kind := value.Kind()
+	if kind == reflect.Chan || kind == reflect.Func || kind == reflect.Interface ||
+		kind == reflect.Map || kind == reflect.Pointer || kind == reflect.Slice || kind == reflect.UnsafePointer {
+		return value.IsNil()
+	}
+	return false
 }
 
 // AddEdge declares that `to` depends on `from`. Duplicate edges are

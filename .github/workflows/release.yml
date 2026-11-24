@@ -103,7 +103,6 @@ jobs:
         run: |
           set -Eeuo pipefail
           flags=()
-          # A hyphen in the tag (v1.0.0-rc1) marks a SemVer pre-release.
           case "$GITHUB_REF_NAME" in *-*) flags+=(--prerelease) ;; esac
           gh release create "$GITHUB_REF_NAME" \
             --verify-tag \

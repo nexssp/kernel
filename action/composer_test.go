@@ -2,6 +2,7 @@ package action_test
 
 import (
 	"context"
+	"fmt"
 	"reflect"
 	"testing"
 
@@ -120,13 +121,27 @@ func TestHashRouterAnyKeepsSameKeyOnSameMember(t *testing.T) {
 	var memberACalls, memberBCalls int
 	memberA := action.New("member-a", func(_ context.Context, req any) (any, error) {
 		memberACalls++
-		return "a:" + req.(string), nil
+		key, ok := req.(string)
+		if !ok {
+			return nil, fmt.Errorf("member-a request type %T, want string", req)
+		}
+		return "a:" + key, nil
 	}).Build()
 	memberB := action.New("member-b", func(_ context.Context, req any) (any, error) {
 		memberBCalls++
-		return "b:" + req.(string), nil
+		key, ok := req.(string)
+		if !ok {
+			return nil, fmt.Errorf("member-b request type %T, want string", req)
+		}
+		return "b:" + key, nil
 	}).Build()
-	act := action.HashRouterAny("hash", func(req any) string { return req.(string) }, memberA, memberB).Build()
+	act := action.HashRouterAny("hash", func(req any) string {
+		key, ok := req.(string)
+		if !ok {
+			return fmt.Sprintf("unexpected:%T", req)
+		}
+		return key
+	}, memberA, memberB).Build()
 
 	first, err := act.Do(context.Background(), "account-7")
 	if err != nil {

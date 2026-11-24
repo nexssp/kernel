@@ -280,6 +280,14 @@ func TestDAG_InvalidBuilderInputReturnsCompileError(t *testing.T) {
 	}
 }
 
+func TestDAG_RejectsTypedNilExecutable(t *testing.T) {
+	var act *action.BuiltAction[string, string]
+	builder := dag.New("typed-nil").AddNode("nil-action", "", act)
+	if _, err := builder.Compile(); err == nil {
+		t.Fatal("expected typed-nil executable error")
+	}
+}
+
 func TestDAG_DuplicateEdgeReturnsCompileError(t *testing.T) {
 	dummy := action.New("dummy", func(context.Context, *dag.NodeContext) (string, error) { return "ok", nil }).Build()
 	builder := dag.New("duplicate").AddNode("a", "a", dummy).AddNode("b", "b", dummy).AddEdge("a", "b").AddEdge("a", "b")

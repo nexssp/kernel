@@ -1,61 +1,11 @@
 # Nexss Kernel
-<!-- project-status -->
-[![CI](https://github.com/nexssp/kernel/actions/workflows/ci.yml/badge.svg)](https://github.com/nexssp/kernel/actions/workflows/ci.yml)
-[![Latest tag](https://img.shields.io/github/v/tag/nexssp/kernel?sort=semver&label=latest%20tag)](https://github.com/nexssp/kernel/tags)
 [![Go Reference](https://pkg.go.dev/badge/github.com/nexssp/kernel.svg)](https://pkg.go.dev/github.com/nexssp/kernel)
-[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
-<!-- /project-status -->
 
 Runnable examples are maintained in the central [Nexss Ecosystem Examples repository](https://github.com/nexssp/examples/tree/main/kernel).
 
 Nexss Kernel is a lightweight, typed Go execution library for building reusable actions, resilient pipelines, and deterministic DAG workflows. It is independent of concrete transport protocols, persistence implementations, AI vendor SDKs, and specific identity providers.
 
 The Kernel provides core execution semantics, typed generics, context-based security guards, and resilient middleware. Applications and sibling modules supply concrete network adapters, storage drivers, and domain logic.
-
-Kernel does not expose a runtime `Version` function or constant. Go binaries built with module metadata can inspect `runtime/debug.ReadBuildInfo` for the linked module version.
-
-> **Design goal:** Predictable execution semantics, focused interfaces, zero-allocation hot paths, and idiomatic Go.
-
-## Development Commands
-
-This repository uses [Task](https://taskfile.dev) for local workflows and CI. Install it once with:
-
-```bash
-go install github.com/go-task/task/v3/cmd/task@latest
-```
-
-Use `task --list` to view targets. Common commands:
-
-```bash
-task test                 # short test suite
-task test -- ./action     # test one package or path
-task test:race            # race-enabled tests
-task bench                # benchmarks with memory statistics
-task ci                   # the CI gate
-```
-
----
-
-## Architecture
-
-```text
-Application / Domain Package / Transport Adapters
-        │
-        ├── Domain builders (appaction pattern)
-        ├── HTTP / CLI / Worker / NATS / gRPC adapters
-        ├── AI, Tooling & Provider modules
-        └── Database, Cache & Storage implementations
-        │
-        ▼
-Nexss Kernel
-  typed actions · Builder · middleware · hooks · retry
-  cache/idempotency contracts · context guards (RBAC/perms)
-  composition · DAG graphs · categorized errors (xerr)
-```
-
-The Kernel owns the lifecycle, concurrency safety, and execution semantics of an action. Extension modules implement backend drivers or add explicit middleware layers; they do not fork the builder or alter execution semantics.
-
----
 
 ## Core Packages
 
@@ -450,50 +400,6 @@ Every event includes `Time`, `Duration`, `Kind`, `Action`, and available correla
 - `JSONLSink`: Synchronized structured JSON writer with serialized durations. Raw error and recovered panic text are replaced with `[redacted]`.
 - `SlogSink`: Dispatches structured logs including duration through standard library `log/slog`.
 
----
-
-## Architectural Boundaries
-
-The Kernel provides execution semantics and safety contracts; applications supply external integrations:
-
-- **Storage & State:** Cache backends, distributed locks, idempotency stores, and database transactions are supplied via interfaces. The Kernel does not bundle concrete database drivers.
-- **Telemetry Ingestion:** `observe` captures lifecycle events and execution duration locally. Forwarding events to OpenTelemetry collectors, Datadog, or external brokers belongs to application sinks.
-- **Human-in-the-Loop & Workflows:** The Kernel manages suspension (`dag.ErrSuspended`), partial state preservation, and memoized resumption. Applications supply the human interfaces (webhooks, email dispatch, approval dashboards) and durable persistence for state snapshots.
-- **Durable Resume Binding:** `action.ExecutionIdentity` binds replay to source, input, and contract digests. A mismatch is a conflict unless the caller explicitly requests a forced successor generation with a reason.
-- **Security Decisions:** Context guards inspect metadata attached to `context.Context`. Authentication (decoding JWTs, session lookups, certificate validation) is handled at transport boundaries.
-- **Resource Ownership:** Pooled objects (`dag.State`, `xctx.RequestScope`) must be explicitly released by the caller to prevent resource leaks.
-
----
-
-## Performance Model and Verification
-
-The Kernel avoids reflection on execution paths, relies on immutable structures post-build, and compiles middleware chains at initialization time.
-
-Streaming is O(1) in memory: `StreamAction[Req, T]` wraps Go 1.23 `iter.Seq2[T, error]` under action lifecycle management. The typed `Do` and `DoStreamTyped` paths do not allocate per item; the type-erased `DoStreamAny` boundary boxes each item into `any` and can allocate for non-pointer values. A constant per-call overhead is also paid (iterator closure, hook wrappers, panic recovery).
-
-### Benchmark and Quality Verification
-
-Run the repository checks through Task, using the same targets as CI:
-
-```bash
-# Format
-task fmt
-
-# Lint and static analysis
-task lint
-
-# Run the race-enabled test gate
-task test:race
-
-# Benchmark core dispatch and allocation profiles
-task bench
-
-# Run the complete CI gate
-task ci
-```
-
----
-
 ## Examples Reference
 
 Complete, runnable examples are maintained in the central [`nexssp/examples`](https://github.com/nexssp/examples/tree/main/kernel) repository. This repository keeps only [`examples/README.md`](./examples/README.md) as a pointer:
@@ -511,32 +417,3 @@ Complete, runnable examples are maintained in the central [`nexssp/examples`](ht
 - [`11_lazy_etl_stream`](https://github.com/nexssp/examples/tree/main/kernel/11_lazy_etl_stream) – Lazy ETL over typed streams with bounded memory.
 - [`12_stream_action_crossover`](https://github.com/nexssp/examples/tree/main/kernel/12_stream_action_crossover) – Crossing typed actions and streams.
 - [`13_resilient_mod_host`](https://github.com/nexssp/examples/tree/main/kernel/13_resilient_mod_host) – Host-owned resilience and module integration.
-
----
-
-## API Stability
-
-`v1.0.0-rc1` is a release candidate for 1.0. The exported API is considered feature-complete: until `v1.0.0`, only fixes for blocking defects are expected. Please try the candidate and report problems through [GitHub issues](https://github.com/nexssp/kernel/issues).
-
-From `v1.0.0` the module follows [Semantic Versioning](https://semver.org): no breaking changes to exported APIs within `v1.x`. Symbols marked `Deprecated:` keep working for the lifetime of `v1`. Prior to 1.0 (`v0.x`), exported APIs could change between minor releases.
-
-Pre-release versions are never selected automatically by `go get`; opt in explicitly:
-
-```bash
-go get github.com/nexssp/kernel@v1.0.0-rc1
-```
-
-Pin an explicit version rather than tracking `main`.
-
-## Contributing
-
-Read [`CONTRIBUTING.md`](./CONTRIBUTING.md) before opening a pull request. Changes must be typed, covered by tests, and include benchmarks for performance-critical paths.
-
-## Security
-
-Report suspected vulnerabilities privately according to [`SECURITY.md`](./SECURITY.md).
-
-## License
-
-Apache License 2.0. See [`LICENSE`](./LICENSE).
-Copyright © 2018–2026 Marcin Polak and Contributors.
