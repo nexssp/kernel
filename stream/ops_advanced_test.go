@@ -59,6 +59,26 @@ func TestBatchByTimeOp(t *testing.T) {
 	ktest.RequireEqual(t, res[2], []int{5})
 }
 
+func TestThrottleDropsItemsWithinInterval(t *testing.T) {
+	ctx, _ := ktest.Ctx(t)
+	src := ktest.StreamOf("src", 1, 2, 3)
+	act := action.NewStreamOp("throttle", src, stream.Throttle[int](time.Hour))
+
+	res, err := action.CollectStream(ctx, act, struct{}{})
+	ktest.RequireNoError(t, err)
+	ktest.RequireEqual(t, res, []int{1})
+}
+
+func TestDebounceEmitsLatestItemOnCompletion(t *testing.T) {
+	ctx, _ := ktest.Ctx(t)
+	src := ktest.StreamOf("src", 1, 2, 3)
+	act := action.NewStreamOp("debounce", src, stream.Debounce[int](ctx, time.Hour))
+
+	res, err := action.CollectStream(ctx, act, struct{}{})
+	ktest.RequireNoError(t, err)
+	ktest.RequireEqual(t, res, []int{3})
+}
+
 func TestBatchByTimeOp_ContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 

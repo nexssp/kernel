@@ -127,8 +127,9 @@ func (r *SagaResult[Res]) AllSteps() []StepResult {
 
 // SagaStep represents a single operation and its compensating rollback.
 type SagaStep[Req, Res any] struct {
-	Name     string
-	Do       func(context.Context, Req) (Res, error)
+	Name string
+	Do   func(context.Context, Req) (Res, error)
+	// Undo compensates for this step and receives the original request, not the Do result.
 	Undo     func(context.Context, Req) error
 	Optional bool
 }
@@ -188,7 +189,9 @@ func (s *SagaBuilder[Req, Res]) Build() *BuiltSaga[Req, Res] {
 	return &BuiltSaga[Req, Res]{name: s.name, steps: s.steps, compensationTimeout: options.CompensationTimeout}
 }
 
-// Do executes the Saga. If a mandatory step fails, it automatically runs Undo functions in reverse order.
+// Do executes the Saga. If a mandatory step fails, it automatically runs Undo functions for
+// prior successful steps in reverse order. Each Undo receives req, not the step's Do result,
+// and runs under an uncanceled context with an independent compensation timeout.
 // Before each forward step, Do checks ctx. Cancellation observed before a
 // step starts fails that step (even if optional), stops later steps, and
 // triggers rollback of prior successes. The returned error wraps ctx.Err().

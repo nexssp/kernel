@@ -198,7 +198,7 @@ results, err := reviewer.Do(ctx, "package main...")
 - `AdaptiveLoadShedding` evaluates system statistics (CPU percentage and goroutine count) against priority tiers (`PriorityCritical`, `PriorityNormal`, `PriorityLow`), dropping non-essential traffic when thresholds are exceeded.
 
 ### Execution Primitives
-- `FanOut(ctx, act, reqs, maxConcurrency)` executes concurrent items while preserving input order in the returned slice. A non-positive concurrency limit uses `DefaultAsyncMaxConcurrency` (16), and the whole call is bounded by `DefaultAsyncTimeout` (2 minutes) unless the parent context ends sooner; use `FanOutWithOptions` to change either.
+- `FanOut(ctx, act, reqs, maxConcurrency)` executes concurrent items in input order. A nil or empty request slice returns a nil result slice. A non-positive concurrency limit uses `DefaultAsyncMaxConcurrency` (16), and the whole call is bounded by `DefaultAsyncTimeout` (2 minutes) unless the parent context ends sooner; use `FanOutWithOptions` to change either.
 - `Race(ctx, act, reqs)` returns the first successful result and cancels losing attempts. Handlers must cooperate with context cancellation.
 
 ---
@@ -250,7 +250,8 @@ results, err := reviewer.Do(ctx, "package main...")
 `action.NewSaga[Req, Res]` coordinates distributed operations with compensating transactions:
 - `AddStep(name, do, undo)` registers forward work and its reverse compensation.
 - `AddOptionalStep(name, do, undo)` registers steps that may fail without triggering a saga abort.
-- If a mandatory step fails or panics, registered `Undo` functions execute in reverse order (LIFO) under an uncancelled context.
+- If a mandatory step fails or panics, `Undo` functions for prior successful steps execute in reverse order under a context detached from parent cancellation and bounded by an independent compensation timeout.
+- Each `Undo` receives the original request passed to `Do`, not the result of its forward step.
 - `.AsAction()` converts the compiled saga into an executable `*BuiltAction[Req, SagaResult[Res]]`.
 
 ---
@@ -515,7 +516,7 @@ Complete, runnable examples are maintained in the central [`nexssp/examples`](ht
 
 ## API Stability
 
-`v1.0.0-rc1` is a release candidate for 1.0. The exported API is considered feature-complete: until `v1.0.0`, only fixes for blocking defects are expected, and any API change will be called out in the [CHANGELOG](./CHANGELOG.md). Please try the candidate and report problems through [GitHub issues](https://github.com/nexssp/kernel/issues).
+`v1.0.0-rc1` is a release candidate for 1.0. The exported API is considered feature-complete: until `v1.0.0`, only fixes for blocking defects are expected. Please try the candidate and report problems through [GitHub issues](https://github.com/nexssp/kernel/issues).
 
 From `v1.0.0` the module follows [Semantic Versioning](https://semver.org): no breaking changes to exported APIs within `v1.x`. Symbols marked `Deprecated:` keep working for the lifetime of `v1`. Prior to 1.0 (`v0.x`), exported APIs could change between minor releases.
 

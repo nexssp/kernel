@@ -65,7 +65,7 @@ func Async[Req, Res any](ctx context.Context, act *BuiltAction[Req, Res], req Re
 // FanOut executes the action for each request, preserving input order. A
 // positive maxConcurrency is honored; a non-positive value uses
 // DefaultAsyncMaxConcurrency. The overall call uses DefaultAsyncTimeout unless
-// the parent context has an earlier deadline.
+// the parent context has an earlier deadline. Empty input returns a nil slice.
 func FanOut[Req, Res any](
 	ctx context.Context,
 	act *BuiltAction[Req, Res],
@@ -79,6 +79,7 @@ func FanOut[Req, Res any](
 // order. Zero or negative option fields select their defaults. Cancellation
 // and timeout are passed to callbacks through context; started callbacks are
 // joined before return, so callbacks that ignore context can delay completion.
+// Empty input returns a nil slice.
 func FanOutWithOptions[Req, Res any](
 	ctx context.Context,
 	act *BuiltAction[Req, Res],

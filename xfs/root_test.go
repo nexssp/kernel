@@ -275,6 +275,23 @@ func TestRoot_StatAndLstat(t *testing.T) {
 	if fi.Size() != 1 {
 		t.Fatalf("size = %d", fi.Size())
 	}
+	if err := os.Symlink("file.txt", filepath.Join(dir, "link.txt")); err != nil {
+		t.Skipf("symlinks not supported: %v", err)
+	}
+	statInfo, err := r.Stat("link.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !statInfo.Mode().IsRegular() {
+		t.Fatalf("Stat mode = %v, want regular file", statInfo.Mode())
+	}
+	lstatInfo, err := r.Lstat("link.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lstatInfo.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("Lstat mode = %v, want symlink", lstatInfo.Mode())
+	}
 }
 
 func TestRoot_Chmod(t *testing.T) {
