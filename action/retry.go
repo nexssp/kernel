@@ -93,22 +93,30 @@ func RetryWithPredicateMiddleware[Req, Res any](
 					} else {
 						timer.Reset(backoff(attempt + 1))
 					}
-					select {
-					case <-ctx.Done():
+					waitErr := waitForRetry(ctx, timer.C)
+					if waitErr != nil {
 						timer.Stop()
 						select {
 						case <-timer.C:
 						default:
 						}
 						timerPool.Put(timer)
-						return res, ctx.Err()
-					case <-timer.C:
-						timerPool.Put(timer)
+						return res, waitErr
 					}
+					timerPool.Put(timer)
 				}
 			}
 
 			return res, err
 		}
 	}
+}
+
+func waitForRetry(ctx context.Context, timerC <-chan time.Time) error {
+	select {
+	case <-ctx.Done():
+	case <-timerC:
+	}
+	// select may choose the timer when cancellation is also ready.
+	return ctx.Err()
 }

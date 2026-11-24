@@ -90,6 +90,22 @@ func TestCoalesce(t *testing.T) {
 	}
 }
 
+func TestCoalesceNilInterfaceResult(t *testing.T) {
+	t.Parallel()
+
+	act := action.New("coal.nil", func(context.Context, string) (any, error) {
+		return nil, nil
+	}).Coalesce(action.NewCoalescer(), func(r string) string { return r }).Build()
+
+	result, err := act.Do(context.Background(), "nil-key")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != nil {
+		t.Fatalf("expected nil result, got %#v", result)
+	}
+}
+
 func TestDeduplicate_LeaderCancellationDoesNotFailWaiter(t *testing.T) {
 	t.Parallel()
 

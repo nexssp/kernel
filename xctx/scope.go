@@ -57,11 +57,11 @@ func (s *RequestScope) Reset() {
 	s.TenantID = ""
 	s.Role = ""
 	s.ClientIP = ""
-	s.Roles = s.Roles[:0]
-	s.Permissions = s.Permissions[:0]
-	s.Features = s.Features[:0]
+	s.Roles = nil
+	s.Permissions = nil
+	s.Features = nil
 	s.traceMu.Lock()
-	clear(s.TraceEvents)
+	clear(s.TraceEvents[:cap(s.TraceEvents)])
 	if cap(s.TraceEvents) > MaxTraceEvents {
 		s.TraceEvents = nil
 	} else {

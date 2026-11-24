@@ -33,7 +33,9 @@ func TestNewScopeLifecycleAndPooling(t *testing.T) {
 	}
 
 	scope.UserID = "user-777"
-	scope.Roles = append(scope.Roles, "admin")
+	scope.Roles = []string{"admin"}
+	scope.Permissions = []string{"invoice:read"}
+	scope.Features = []string{"audit-log"}
 	xctx.AddTrace(ctx, "started_processing")
 
 	if xctx.UserIDFrom(ctx) != "user-777" {
@@ -45,7 +47,7 @@ func TestNewScopeLifecycleAndPooling(t *testing.T) {
 
 	// Verify reset while this goroutine still owns the scope:
 	scope.Reset()
-	if scope.UserID != "" || len(scope.Roles) != 0 || len(scope.TraceEvents) != 0 {
+	if scope.UserID != "" || scope.Roles != nil || scope.Permissions != nil || scope.Features != nil || len(scope.TraceEvents) != 0 {
 		t.Fatal("expected scope fields to be completely reset")
 	}
 

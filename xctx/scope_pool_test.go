@@ -34,7 +34,7 @@ func TestAddTrace_AfterCleanupStaysOut(t *testing.T) {
 	}
 }
 
-func TestAddTraceConcurrentWithCleanup(t *testing.T) {
+func TestAddTraceConcurrentWithCleanup(_ *testing.T) {
 	const (
 		iterations = 200
 		writers    = 8
@@ -42,7 +42,7 @@ func TestAddTraceConcurrentWithCleanup(t *testing.T) {
 	)
 
 	for range iterations {
-		ctx, scope, cleanup := xctx.NewScope(context.Background())
+		ctx, _, cleanup := xctx.NewScope(context.Background())
 		for range xctx.MaxTraceEvents {
 			xctx.AddTrace(ctx, "seed")
 		}
@@ -63,10 +63,60 @@ func TestAddTraceConcurrentWithCleanup(t *testing.T) {
 		})
 		close(start)
 		workers.Wait()
+		// cleanup returned the scope to sync.Pool; do not inspect its pointer.
+	}
+}
 
-		if len(scope.TraceEvents) != 0 {
-			t.Fatalf("cleanup retained trace events: %d", len(scope.TraceEvents))
+func TestRequestScopeResetClearsReferences(t *testing.T) {
+	t.Parallel()
+
+	traceEvents := []string{
+		"previous-request-event",
+		"retained-event-1",
+		"retained-event-2",
+		"retained-event-3",
+	}
+	scope := &xctx.RequestScope{
+		RequestID:      "request-id",
+		IdempotencyKey: "idempotency-key",
+		TraceID:        "trace-id",
+		SpanID:         "span-id",
+		Endpoint:       "/endpoint",
+		UserID:         "user-id",
+		TenantID:       "tenant-id",
+		Role:           "admin",
+		ClientIP:       "192.0.2.1",
+		Roles:          []string{"admin"},
+		Permissions:    []string{"invoice:read"},
+		Features:       []string{"audit-log"},
+		TraceEvents:    traceEvents[:1],
+	}
+
+	scope.Reset()
+
+	if scope.RequestID != "" || scope.IdempotencyKey != "" || scope.TraceID != "" || scope.SpanID != "" || scope.Endpoint != "" || scope.UserID != "" || scope.TenantID != "" || scope.Role != "" || scope.ClientIP != "" {
+		t.Fatal("expected scalar scope fields to be reset")
+	}
+	if scope.Roles != nil || scope.Permissions != nil || scope.Features != nil {
+		t.Fatal("expected authorization slices to be released")
+	}
+	if len(scope.TraceEvents) != 0 {
+		t.Fatal("expected trace-event slice to be reset")
+	}
+	for i, event := range traceEvents {
+		if event != "" {
+			t.Errorf("expected trace-event backing element %d to be cleared, got %q", i, event)
 		}
+	}
+}
+
+func TestRequestScopeResetDiscardsLargeTraceEventBuffer(t *testing.T) {
+	t.Parallel()
+
+	scope := &xctx.RequestScope{TraceEvents: make([]string, 1, xctx.MaxTraceEvents+1)}
+	scope.Reset()
+	if scope.TraceEvents != nil {
+		t.Fatal("expected oversized trace-event buffer to be discarded")
 	}
 }
 

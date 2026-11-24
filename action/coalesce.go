@@ -157,6 +157,10 @@ func CoalesceMiddlewareWithOptions[Req, Res any](
 				var zero Res
 				return zero, err
 			}
+			if val == nil {
+				var zero Res
+				return zero, nil
+			}
 			res, ok := val.(Res)
 			if !ok {
 				var zero Res
